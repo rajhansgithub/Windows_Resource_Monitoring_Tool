@@ -5,17 +5,32 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:WindowsNetworkMonitor"
         mc:Ignorable="d"
-        Title="NetworkMonitor" Height="40" Width="120"
+    Title="NetworkMonitor" Height="Auto" Width="Auto"
+        SizeToContent="WidthAndHeight"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="#202020"
         Topmost="True"
         ShowInTaskbar="False"
         ResizeMode="NoResize">
-    <Grid>
-        <StackPanel Orientation="Vertical" VerticalAlignment="Center" HorizontalAlignment="Left" Margin="10,0,0,0">
-            <TextBlock x:Name="UploadText" Text="▲ 0.0 KB/s" Foreground="#E0E0E0" FontSize="11" FontFamily="Segoe UI" FontWeight="SemiBold"/>
-            <TextBlock x:Name="DownloadText" Text="▼ 0.0 KB/s" Foreground="#E0E0E0" FontSize="11" FontFamily="Segoe UI" FontWeight="SemiBold"/>
+    <Grid Margin="5">
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+            <!-- Network -->
+            <StackPanel Orientation="Vertical" Margin="5,0,10,0" VerticalAlignment="Center">
+                <TextBlock x:Name="UploadText" Text="▲ 0.0 KB/s" Foreground="#E0E0E0" FontSize="11" FontFamily="Segoe UI" FontWeight="SemiBold"/>
+                <TextBlock x:Name="DownloadText" Text="▼ 0.0 KB/s" Foreground="#E0E0E0" FontSize="11" FontFamily="Segoe UI" FontWeight="SemiBold"/>
+            </StackPanel>
+
+            <!-- CPU -->
+            <StackPanel Orientation="Vertical" Margin="0,0,10,0" VerticalAlignment="Center">
+                <TextBlock x:Name="CpuLoadText" Text="CPU: 0%" Foreground="#E0E0E0" FontSize="11" FontFamily="Segoe UI" FontWeight="SemiBold"/>
+                <TextBlock x:Name="CpuTempText" Text="0°C" Foreground="#E0E0E0" FontSize="11" FontFamily="Segoe UI" FontWeight="SemiBold"/>
+            </StackPanel>
+
+            <!-- GPU -->
+            <StackPanel x:Name="GpuPanel" Orientation="Vertical" VerticalAlignment="Center">
+                <TextBlock Text="GPU: -" Foreground="#E0E0E0" FontSize="11" FontFamily="Segoe UI" FontWeight="SemiBold"/>
+            </StackPanel>
         </StackPanel>
     </Grid>
 </Window>

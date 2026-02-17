@@ -15,6 +15,7 @@ namespace WindowsNetworkMonitor
     public partial class MainWindow : Window
     {
         private readonly NetworkMonitor _networkMonitor;
+        private readonly HardwareMonitor _hardwareMonitor;
         private readonly DispatcherTimer _timer;
         private System.Windows.Forms.NotifyIcon _notifyIcon;
         private System.Windows.Forms.ContextMenuStrip _trayMenu;
@@ -25,6 +26,7 @@ namespace WindowsNetworkMonitor
             InitializeComponent();
             _networkMonitor = new NetworkMonitor();
             _networkMonitor.OnNetworkUpdate += NetworkMonitor_OnNetworkUpdate;
+            _hardwareMonitor = new HardwareMonitor();
 
             _timer = new DispatcherTimer();
             _timer.Interval = TimeSpan.FromMilliseconds(100);
@@ -78,6 +80,10 @@ namespace WindowsNetworkMonitor
             PopulateAdapters();
             _timer.Start();
             UpdatePosition();
+            
+            // Debug sensors
+            _hardwareMonitor.Update();
+            _hardwareMonitor.DebugSensors();
         }
 
         private void PopulateAdapters()
@@ -128,6 +134,8 @@ namespace WindowsNetworkMonitor
             if ((DateTime.Now - _lastNetworkUpdate).TotalMilliseconds >= 1000)
             {
                 _networkMonitor.Update();
+                _hardwareMonitor.Update();
+                UpdateHardwareStats();
                 _lastNetworkUpdate = DateTime.Now;
             }
         }
@@ -145,6 +153,52 @@ namespace WindowsNetworkMonitor
         {
             float mbs = bytesPerSec / (1024f * 1024f);
             return $"{mbs:F2} MB/s";
+        }
+
+        private void UpdateHardwareStats()
+        {
+            // CPU
+            float cpuLoad = _hardwareMonitor.GetCpuUsage();
+            float cpuTemp = _hardwareMonitor.GetCpuTemperature();
+            CpuLoadText.Text = $"CPU: {cpuLoad:F0}%";
+            CpuTempText.Text = $"{cpuTemp:F0}°C";
+
+            // GPU
+            var gpus = _hardwareMonitor.GetGpuStats();
+            
+            // Rebuild if count differs (simplest way to handle dynamic changes)
+            if (GpuPanel.Children.Count != gpus.Count)
+            {
+                GpuPanel.Children.Clear();
+                foreach (var gpu in gpus)
+                {
+                    var tb = new System.Windows.Controls.TextBlock
+                    {
+                        Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xE0, 0xE0, 0xE0)),
+                        FontSize = 11,
+                        FontFamily = new System.Windows.Media.FontFamily("Segoe UI"),
+                        FontWeight = FontWeights.SemiBold,
+                        Margin = new Thickness(0, 0, 0, 0)
+                    };
+                    GpuPanel.Children.Add(tb);
+                }
+            }
+
+            for (int i = 0; i < gpus.Count; i++)
+            {
+                if (GpuPanel.Children[i] is System.Windows.Controls.TextBlock tb)
+                {
+                    // Shorten name if possible or just show it
+                    // User asked to show "GPU 1" or "GPU 2" if multiple?
+                    // Or just the Name. LibreHardwareMonitor gives full name.
+                    // Let's try to be concise: "GPU: N% T°C" if 1, or "Name: ..."
+                    
+                    if (gpus.Count == 1)
+                        tb.Text = $"GPU: {gpus[i].Usage:F0}% {gpus[i].Temperature:F0}°C";
+                    else
+                        tb.Text = $"GPU {i+1}: {gpus[i].Usage:F0}% {gpus[i].Temperature:F0}°C";
+                }
+            }
         }
 
         private void UpdatePosition()
