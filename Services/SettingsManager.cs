@@ -19,6 +19,7 @@ namespace WindowsNetworkMonitor.Services
         public bool ShowCpu { get; set; } = true;
         public bool ShowGpu { get; set; } = true;
         public bool ShowNetwork { get; set; } = true;
+        public bool ShowUsage { get; set; } = true;
     }
 
     public static class SettingsManager

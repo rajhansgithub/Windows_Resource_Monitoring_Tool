@@ -27,8 +27,14 @@
 
             <!-- Network -->
             <StackPanel x:Name="NetworkPanel" Orientation="Vertical" Margin="0,0,10,0" VerticalAlignment="Center">
-                <TextBlock x:Name="UploadText" Text="▲ 0.0 KB/s" Foreground="#E0E0E0" FontSize="11" FontFamily="Segoe UI" FontWeight="SemiBold" Width="90" Typography.NumeralAlignment="Tabular"/>
-                <TextBlock x:Name="DownloadText" Text="▼ 0.0 KB/s" Foreground="#E0E0E0" FontSize="11" FontFamily="Segoe UI" FontWeight="SemiBold" Width="90" Typography.NumeralAlignment="Tabular"/>
+                <TextBlock x:Name="UploadText" Text="▲ 0.0 KB/s" Foreground="#E0E0E0" FontSize="11" FontFamily="Segoe UI" FontWeight="SemiBold" Width="80" Typography.NumeralAlignment="Tabular"/>
+                <TextBlock x:Name="DownloadText" Text="▼ 0.0 KB/s" Foreground="#E0E0E0" FontSize="11" FontFamily="Segoe UI" FontWeight="SemiBold" Width="80" Typography.NumeralAlignment="Tabular"/>
+            </StackPanel>
+
+            <!-- Usage -->
+            <StackPanel x:Name="UsagePanel" Orientation="Vertical" Margin="0,0,10,0" VerticalAlignment="Center">
+                <TextBlock x:Name="UsageUploadText" Text="T: ▲ 0 MB" Foreground="#E0E0E0" FontSize="11" FontFamily="Segoe UI" FontWeight="SemiBold" Width="100" Typography.NumeralAlignment="Tabular"/>
+                <TextBlock x:Name="UsageDownloadText" Text="T: ▼ 0 MB" Foreground="#E0E0E0" FontSize="11" FontFamily="Segoe UI" FontWeight="SemiBold" Width="100" Typography.NumeralAlignment="Tabular"/>
             </StackPanel>
         </StackPanel>
     </Grid>

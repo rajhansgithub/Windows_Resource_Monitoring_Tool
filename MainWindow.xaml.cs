@@ -16,6 +16,7 @@ namespace WindowsNetworkMonitor
     {
         private readonly NetworkMonitor _networkMonitor;
         private readonly HardwareMonitor _hardwareMonitor;
+        private readonly NetworkUsageManager _usageManager;
         private readonly DispatcherTimer _timer;
         private System.Windows.Forms.NotifyIcon _notifyIcon;
         private System.Windows.Forms.ContextMenuStrip _trayMenu;
@@ -27,6 +28,7 @@ namespace WindowsNetworkMonitor
         {
             InitializeComponent();
             _settings = SettingsManager.Load();
+            _usageManager = new NetworkUsageManager();
             _networkMonitor = new NetworkMonitor();
             _networkMonitor.OnNetworkUpdate += NetworkMonitor_OnNetworkUpdate;
             _hardwareMonitor = new HardwareMonitor();
@@ -38,6 +40,9 @@ namespace WindowsNetworkMonitor
             InitializeTrayIcon();
 
             Loaded += MainWindow_Loaded;
+
+            // Ensure we save on exit
+            Application.Current.Exit += (s, e) => _usageManager.ForceSave();
         }
 
         private void InitializeTrayIcon()
@@ -97,13 +102,29 @@ namespace WindowsNetworkMonitor
             networkItem.Checked = _settings.ShowNetwork;
             viewItem.DropDownItems.Add(networkItem);
 
+            var usageItem = new System.Windows.Forms.ToolStripMenuItem("Total Usage", null, (s, e) => {
+                _settings.ShowUsage = !_settings.ShowUsage;
+                SettingsManager.Save(_settings);
+                UpdateVisibility();
+                ((System.Windows.Forms.ToolStripMenuItem)s).Checked = _settings.ShowUsage;
+            });
+            usageItem.Checked = _settings.ShowUsage;
+            viewItem.DropDownItems.Add(usageItem);
+
             _trayMenu.Items.Add(viewItem);
+
+            var reportItem = new System.Windows.Forms.ToolStripMenuItem("Usage Report", null, (s, e) => {
+                var reportWindow = new UsageReportWindow();
+                reportWindow.Show();
+            });
+            _trayMenu.Items.Add(reportItem);
+
+            _trayMenu.Items.Add("-");
 
              var exitItem = new System.Windows.Forms.ToolStripMenuItem("Exit", null, (s, e) => {
                 _notifyIcon.Visible = false;
                 Application.Current.Shutdown();
             });
-            _trayMenu.Items.Add("-");
             _trayMenu.Items.Add(exitItem);
 
             _notifyIcon = new System.Windows.Forms.NotifyIcon();
@@ -218,6 +239,27 @@ namespace WindowsNetworkMonitor
                 _networkMonitor.Update();
                 _hardwareMonitor.Update();
                 UpdateHardwareStats();
+                
+                // Update Usage Text
+                if (_settings.ShowUsage)
+                {
+                    var todayUsage = _usageManager.GetDailyUsage(DateTime.Now);
+                    // T for Today or Total? User said "Total Usage", usually means Today's total or All time. 
+                    // Let's assume Today based on earlier context, but "Total Usage ever recorded" was another request.
+                    // The user said "show the total usage report... where user can switch on off".
+                    // The "Usage Report" window has Total.
+                    // Let's show Today's usage as it's most relevant for a monitor.
+                    // Or maybe All Time?
+                    // "Total usage report" -> The window has tabs.
+                    // Let's show Today's usage. If they want all time they can open the report.
+                    // Actually, "Total usage report" might mean the "Total" tab from the report window.
+                    // Let's stick to Today for now as it changes dynamically.
+                    // Or we can cycle? No keep it simple.
+                    
+                    UsageUploadText.Text = $"T: ▲ {FormatBytes(todayUsage.BytesSent)}";
+                    UsageDownloadText.Text = $"T: ▼ {FormatBytes(todayUsage.BytesReceived)}";
+                }
+
                 _lastNetworkUpdate = DateTime.Now;
             }
         }
@@ -229,6 +271,13 @@ namespace WindowsNetworkMonitor
                 UploadText.Text = $"▲ {FormatSpeed(e.Upload)}";
                 DownloadText.Text = $"▼ {FormatSpeed(e.Download)}";
             });
+
+            // Track usage
+            // The event gives bytes/second. Since we update roughly every 1 second,
+            // we can Approximate that this rate was constant for the last second.
+            // A more precise way would be to measure exact time delta, but for general usage stats this is acceptable.
+            // Using Math.Round to convert float to long
+            _usageManager.AddUsage((long)Math.Round(e.Upload), (long)Math.Round(e.Download));
         }
 
         private string FormatSpeed(float bytesPerSec)
@@ -258,6 +307,19 @@ namespace WindowsNetworkMonitor
             }
 
             return $"{value:F1} {unit}";
+        }
+
+        private string FormatBytes(long bytes)
+        {
+            string[] sizes = { "B", "KB", "MB", "GB", "TB" };
+            double len = bytes;
+            int order = 0;
+            while (len >= 1024 && order < sizes.Length - 1)
+            {
+                order++;
+                len = len / 1024;
+            }
+            return $"{len:0.##} {sizes[order]}";
         }
 
         private void UpdateHardwareStats()
@@ -313,7 +375,21 @@ namespace WindowsNetworkMonitor
                 GpuPanel.Visibility = _settings.ShowGpu ? Visibility.Visible : Visibility.Collapsed;
 
             if (NetworkPanel != null)
+            {
                 NetworkPanel.Visibility = _settings.ShowNetwork ? Visibility.Visible : Visibility.Collapsed;
+                // Remove margin if Usage is visible to group them closely
+                if (_settings.ShowNetwork && _settings.ShowUsage)
+                {
+                    NetworkPanel.Margin = new Thickness(0, 0, 0, 0);
+                }
+                else
+                {
+                    NetworkPanel.Margin = new Thickness(0, 0, 10, 0);
+                }
+            }
+
+            if (UsagePanel != null)
+                UsagePanel.Visibility = _settings.ShowUsage ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private void UpdatePosition()
