@@ -27,8 +27,8 @@
 
             <!-- Network -->
             <StackPanel x:Name="NetworkPanel" Orientation="Vertical" Margin="0,0,10,0" VerticalAlignment="Center">
-                <TextBlock x:Name="UploadText" Text="▲ 0.0 KB/s" Foreground="#E0E0E0" FontSize="11" FontFamily="Segoe UI" FontWeight="SemiBold"/>
-                <TextBlock x:Name="DownloadText" Text="▼ 0.0 KB/s" Foreground="#E0E0E0" FontSize="11" FontFamily="Segoe UI" FontWeight="SemiBold"/>
+                <TextBlock x:Name="UploadText" Text="▲ 0.0 KB/s" Foreground="#E0E0E0" FontSize="11" FontFamily="Segoe UI" FontWeight="SemiBold" Width="90" Typography.NumeralAlignment="Tabular"/>
+                <TextBlock x:Name="DownloadText" Text="▼ 0.0 KB/s" Foreground="#E0E0E0" FontSize="11" FontFamily="Segoe UI" FontWeight="SemiBold" Width="90" Typography.NumeralAlignment="Tabular"/>
             </StackPanel>
         </StackPanel>
     </Grid>
