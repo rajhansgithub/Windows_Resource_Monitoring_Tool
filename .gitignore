@@ -1,4 +1,16 @@
+# Build Results
 bin/
 obj/
+publish/
+Installer/
+
+# IDE/Editor
 .vs/
 *.user
+*.suo
+*.pdb
+
+# Logs
+*.log
+crash_log.txt
+debug_log.txt

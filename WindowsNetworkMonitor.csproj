@@ -7,6 +7,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>ResourceMonitorTool</AssemblyName>
+    <Product>Resource Monitor Tool</Product>
+    <Version>1.0.0</Version>
+    <Authors>Rajhans</Authors>
+    <Description>A lightweight resource monitoring tool for Windows.</Description>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
   <ItemGroup>
