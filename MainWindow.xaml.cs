@@ -57,7 +57,18 @@ namespace WindowsNetworkMonitor
             };
             _trayMenu.Items.Add(autoStartItem);
 
-            var exitItem = new System.Windows.Forms.ToolStripMenuItem("Exit", null, (s, e) => {
+            var speedUnitItem = new System.Windows.Forms.ToolStripMenuItem("Speed Unit");
+            foreach (SpeedUnit unit in Enum.GetValues(typeof(SpeedUnit)))
+            {
+                var unitItem = new System.Windows.Forms.ToolStripMenuItem(unit.ToString(), null, (s, e) => {
+                    SelectSpeedUnit(unit);
+                });
+                unitItem.Checked = _settings.NetworkSpeedUnit == unit;
+                speedUnitItem.DropDownItems.Add(unitItem);
+            }
+            _trayMenu.Items.Add(speedUnitItem);
+
+             var exitItem = new System.Windows.Forms.ToolStripMenuItem("Exit", null, (s, e) => {
                 _notifyIcon.Visible = false;
                 Application.Current.Shutdown();
             });
@@ -70,6 +81,27 @@ namespace WindowsNetworkMonitor
             _notifyIcon.Icon = SystemIcons.Application; 
             _notifyIcon.ContextMenuStrip = _trayMenu;
             _notifyIcon.Visible = true;
+        }
+
+        private void SelectSpeedUnit(SpeedUnit unit)
+        {
+            if (_settings.NetworkSpeedUnit != unit)
+            {
+                _settings.NetworkSpeedUnit = unit;
+                SettingsManager.Save(_settings);
+
+                // Update checkmarks
+                foreach(System.Windows.Forms.ToolStripItem item in _trayMenu.Items)
+                {
+                    if (item is System.Windows.Forms.ToolStripMenuItem menuItem && menuItem.Text == "Speed Unit")
+                    {
+                        foreach (System.Windows.Forms.ToolStripMenuItem subItem in menuItem.DropDownItems)
+                        {
+                            subItem.Checked = subItem.Text == unit.ToString();
+                        }
+                    }
+                }
+            }
         }
 
         protected override void OnSourceInitialized(EventArgs e)
@@ -169,8 +201,31 @@ namespace WindowsNetworkMonitor
 
         private string FormatSpeed(float bytesPerSec)
         {
-            float kbs = bytesPerSec / 1024f;
-            return $"{kbs:F1} KB/s";
+            float value = 0;
+            string unit = "";
+
+            switch (_settings.NetworkSpeedUnit)
+            {
+                case SpeedUnit.Mbps:
+                    value = (bytesPerSec * 8) / 1000000f; // Megabits
+                    unit = "Mbps";
+                    break;
+                case SpeedUnit.MBs:
+                    value = bytesPerSec / 1048576f; // Megabytes (1024*1024)
+                    unit = "MB/s";
+                    break;
+                case SpeedUnit.Kbps:
+                    value = (bytesPerSec * 8) / 1000f; // Kilobits
+                    unit = "Kbps";
+                    break;
+                case SpeedUnit.KBs:
+                default:
+                    value = bytesPerSec / 1024f; // Kilobytes
+                    unit = "KB/s";
+                    break;
+            }
+
+            return $"{value:F1} {unit}";
         }
 
         private void UpdateHardwareStats()

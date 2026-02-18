@@ -4,9 +4,18 @@ using System.Text.Json;
 
 namespace WindowsNetworkMonitor.Services
 {
+    public enum SpeedUnit
+    {
+        Mbps,
+        MBs,
+        Kbps,
+        KBs
+    }
+
     public class AppSettings
     {
         public string PreferredNetworkAdapter { get; set; } = string.Empty;
+        public SpeedUnit NetworkSpeedUnit { get; set; } = SpeedUnit.KBs;
     }
 
     public static class SettingsManager
