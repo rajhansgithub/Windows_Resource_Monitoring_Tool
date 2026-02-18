@@ -16,6 +16,9 @@ namespace WindowsNetworkMonitor.Services
     {
         public string PreferredNetworkAdapter { get; set; } = string.Empty;
         public SpeedUnit NetworkSpeedUnit { get; set; } = SpeedUnit.KBs;
+        public bool ShowCpu { get; set; } = true;
+        public bool ShowGpu { get; set; } = true;
+        public bool ShowNetwork { get; set; } = true;
     }
 
     public static class SettingsManager

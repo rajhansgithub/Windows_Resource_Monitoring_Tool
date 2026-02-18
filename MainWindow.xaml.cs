@@ -68,6 +68,37 @@ namespace WindowsNetworkMonitor
             }
             _trayMenu.Items.Add(speedUnitItem);
 
+            var viewItem = new System.Windows.Forms.ToolStripMenuItem("View");
+            
+            var cpuItem = new System.Windows.Forms.ToolStripMenuItem("CPU", null, (s, e) => {
+                _settings.ShowCpu = !_settings.ShowCpu;
+                SettingsManager.Save(_settings);
+                UpdateVisibility();
+                ((System.Windows.Forms.ToolStripMenuItem)s).Checked = _settings.ShowCpu;
+            });
+            cpuItem.Checked = _settings.ShowCpu;
+            viewItem.DropDownItems.Add(cpuItem);
+
+            var gpuItem = new System.Windows.Forms.ToolStripMenuItem("GPU", null, (s, e) => {
+                _settings.ShowGpu = !_settings.ShowGpu;
+                SettingsManager.Save(_settings);
+                UpdateVisibility();
+                ((System.Windows.Forms.ToolStripMenuItem)s).Checked = _settings.ShowGpu;
+            });
+            gpuItem.Checked = _settings.ShowGpu;
+            viewItem.DropDownItems.Add(gpuItem);
+
+            var networkItem = new System.Windows.Forms.ToolStripMenuItem("Network", null, (s, e) => {
+                _settings.ShowNetwork = !_settings.ShowNetwork;
+                SettingsManager.Save(_settings);
+                UpdateVisibility();
+                ((System.Windows.Forms.ToolStripMenuItem)s).Checked = _settings.ShowNetwork;
+            });
+            networkItem.Checked = _settings.ShowNetwork;
+            viewItem.DropDownItems.Add(networkItem);
+
+            _trayMenu.Items.Add(viewItem);
+
              var exitItem = new System.Windows.Forms.ToolStripMenuItem("Exit", null, (s, e) => {
                 _notifyIcon.Visible = false;
                 Application.Current.Shutdown();
@@ -114,6 +145,7 @@ namespace WindowsNetworkMonitor
         {
             PopulateAdapters();
             _timer.Start();
+            UpdateVisibility();
             UpdatePosition();
             
             // Debug sensors
@@ -270,6 +302,18 @@ namespace WindowsNetworkMonitor
                         tb.Text = $"GPU {i+1}: {gpus[i].Usage:F0}%";
                 }
             }
+        }
+
+        private void UpdateVisibility()
+        {
+            if (CpuPanel != null)
+                CpuPanel.Visibility = _settings.ShowCpu ? Visibility.Visible : Visibility.Collapsed;
+            
+            if (GpuPanel != null)
+                GpuPanel.Visibility = _settings.ShowGpu ? Visibility.Visible : Visibility.Collapsed;
+
+            if (NetworkPanel != null)
+                NetworkPanel.Visibility = _settings.ShowNetwork ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private void UpdatePosition()
