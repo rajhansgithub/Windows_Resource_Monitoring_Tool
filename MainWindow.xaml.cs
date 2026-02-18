@@ -159,9 +159,7 @@ namespace WindowsNetworkMonitor
         {
             // CPU
             float cpuLoad = _hardwareMonitor.GetCpuUsage();
-            float cpuTemp = _hardwareMonitor.GetCpuTemperature();
             CpuLoadText.Text = $"CPU: {cpuLoad:F0}%";
-            CpuTempText.Text = $"{cpuTemp:F0}°C";
 
             // GPU
             var gpus = _hardwareMonitor.GetGpuStats();
@@ -194,9 +192,9 @@ namespace WindowsNetworkMonitor
                     // Let's try to be concise: "GPU: N% T°C" if 1, or "Name: ..."
                     
                     if (gpus.Count == 1)
-                        tb.Text = $"GPU: {gpus[i].Usage:F0}% {gpus[i].Temperature:F0}°C";
+                        tb.Text = $"GPU: {gpus[i].Usage:F0}%";
                     else
-                        tb.Text = $"GPU {i+1}: {gpus[i].Usage:F0}% {gpus[i].Temperature:F0}°C";
+                        tb.Text = $"GPU {i+1}: {gpus[i].Usage:F0}%";
                 }
             }
         }

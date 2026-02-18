@@ -14,7 +14,6 @@ namespace WindowsNetworkMonitor.Services
         {
             public string Name;
             public float Usage;
-            public float Temperature;
         }
 
         public HardwareMonitor()
@@ -80,24 +79,7 @@ namespace WindowsNetworkMonitor.Services
             return load.Value ?? 0;
         }
 
-        public float GetCpuTemperature()
-        {
-            var cpu = _computer.Hardware.FirstOrDefault(h => h.HardwareType == HardwareType.Cpu);
-            if (cpu == null) return 0;
 
-            // Priority: "Package" -> "Average" -> "Core Max" -> Max of any temp
-            var temp = cpu.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Temperature && s.Name.Contains("Package"))
-                       ?? cpu.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Temperature && s.Name == "CPU Average")
-                       ?? cpu.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Temperature && s.Name == "Core Max");
-            
-            if (temp == null)
-            {
-                 var maxTemp = cpu.Sensors.Where(s => s.SensorType == SensorType.Temperature).MaxBy(s => s.Value)?.Value;
-                 return maxTemp ?? 0;
-            }
-
-            return temp.Value ?? 0;
-        }
 
         public List<GpuStats> GetGpuStats()
         {
@@ -112,16 +94,15 @@ namespace WindowsNetworkMonitor.Services
                             ?? 0;
 
                 // GPU Temp priority: "GPU Core" -> "GPU Hot Spot" -> Any Temp
-                var temp = gpu.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Temperature && s.Name == "GPU Core")?.Value
-                           ?? gpu.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Temperature && s.Name == "GPU Hot Spot")?.Value
-                           ?? gpu.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Temperature)?.Value
-                           ?? 0;
+                // var temp = gpu.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Temperature && s.Name == "GPU Core")?.Value
+                //            ?? gpu.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Temperature && s.Name == "GPU Hot Spot")?.Value
+                //            ?? gpu.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Temperature)?.Value
+                //            ?? 0;
 
                 stats.Add(new GpuStats
                 {
                     Name = gpu.Name,
-                    Usage = usage,
-                    Temperature = temp
+                    Usage = usage
                 });
             }
 

@@ -24,7 +24,6 @@
             <!-- CPU -->
             <StackPanel Orientation="Vertical" Margin="0,0,10,0" VerticalAlignment="Center">
                 <TextBlock x:Name="CpuLoadText" Text="CPU: 0%" Foreground="#E0E0E0" FontSize="11" FontFamily="Segoe UI" FontWeight="SemiBold"/>
-                <TextBlock x:Name="CpuTempText" Text="0°C" Foreground="#E0E0E0" FontSize="11" FontFamily="Segoe UI" FontWeight="SemiBold"/>
             </StackPanel>
 
             <!-- GPU -->
