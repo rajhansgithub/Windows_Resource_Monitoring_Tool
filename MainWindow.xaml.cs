@@ -19,11 +19,14 @@ namespace WindowsNetworkMonitor
         private readonly DispatcherTimer _timer;
         private System.Windows.Forms.NotifyIcon _notifyIcon;
         private System.Windows.Forms.ContextMenuStrip _trayMenu;
+
         private DateTime _lastNetworkUpdate = DateTime.MinValue;
+        private AppSettings _settings;
 
         public MainWindow()
         {
             InitializeComponent();
+            _settings = SettingsManager.Load();
             _networkMonitor = new NetworkMonitor();
             _networkMonitor.OnNetworkUpdate += NetworkMonitor_OnNetworkUpdate;
             _hardwareMonitor = new HardwareMonitor();
@@ -104,7 +107,15 @@ namespace WindowsNetworkMonitor
 
                 if (adapters.Count > 0)
                 {
-                    SelectAdapter(adapters.First());
+                    string adapterToSelect = adapters.First();
+
+                    // If we have a stored preference and it's valid, use it
+                    if (!string.IsNullOrEmpty(_settings.PreferredNetworkAdapter) && adapters.Contains(_settings.PreferredNetworkAdapter))
+                    {
+                        adapterToSelect = _settings.PreferredNetworkAdapter;
+                    }
+
+                    SelectAdapter(adapterToSelect);
                 }
             }
         }
@@ -112,6 +123,13 @@ namespace WindowsNetworkMonitor
         private void SelectAdapter(string adapter)
         {
             _networkMonitor.Initialize(adapter);
+            
+            // Save preference
+            if (_settings.PreferredNetworkAdapter != adapter)
+            {
+                _settings.PreferredNetworkAdapter = adapter;
+                SettingsManager.Save(_settings);
+            }
             
             // Update checkmarks
             if (_trayMenu.Items[0] is System.Windows.Forms.ToolStripMenuItem adaptersMenu)
