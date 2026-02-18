@@ -169,8 +169,8 @@ namespace WindowsNetworkMonitor
 
         private string FormatSpeed(float bytesPerSec)
         {
-            float mbs = bytesPerSec / (1024f * 1024f);
-            return $"{mbs:F2} MB/s";
+            float kbs = bytesPerSec / 1024f;
+            return $"{kbs:F1} KB/s";
         }
 
         private void UpdateHardwareStats()
