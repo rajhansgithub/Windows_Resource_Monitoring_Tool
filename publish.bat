@@ -17,13 +17,7 @@ IF %ERRORLEVEL% NEQ 0 (
 )
 
 echo.
-echo Creating Zip Archive...
-powershell -Command "Compress-Archive -Path '..\publish\*' -DestinationPath '..\Releases\ResourceMonitor_v1.0.0.zip' -Force"
-if errorlevel 1 goto failed
-echo Zip created successfully in ..\Releases
-
-echo.
-echo Publish, Installer, and Zip generation completed.
+echo Publish and Installer generation completed.
 pause
 exit /b 0
 
