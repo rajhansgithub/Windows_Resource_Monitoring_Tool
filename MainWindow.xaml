@@ -48,7 +48,7 @@
 
             <!-- Disk -->
             <StackPanel x:Name="DiskPanel" Orientation="Vertical" Margin="0,0,10,0" VerticalAlignment="Center">
-                <Grid Margin="0,0,0,3">
+                <Grid Margin="0,0,0,8">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
@@ -76,7 +76,7 @@
 
             <!-- Network -->
             <StackPanel x:Name="NetworkPanel" Orientation="Vertical" Margin="0,0,10,0" VerticalAlignment="Center">
-                <Grid Margin="0,0,0,3">
+                <Grid Margin="0,0,0,8">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
@@ -104,7 +104,7 @@
 
             <!-- Usage -->
             <StackPanel x:Name="UsagePanel" Orientation="Vertical" Margin="0,0,10,0" VerticalAlignment="Center">
-                <TextBlock x:Name="UsageUploadText" Text="T: ▲ 0 MB" Foreground="#E0E0E0" FontSize="9" FontFamily="Segoe UI" FontWeight="SemiBold" Width="85" Typography.NumeralAlignment="Tabular" Margin="0,0,0,3"/>
+                <TextBlock x:Name="UsageUploadText" Text="T: ▲ 0 MB" Foreground="#E0E0E0" FontSize="9" FontFamily="Segoe UI" FontWeight="SemiBold" Width="85" Typography.NumeralAlignment="Tabular" Margin="0,0,0,8"/>
                 <TextBlock x:Name="UsageDownloadText" Text="T: ▼ 0 MB" Foreground="#E0E0E0" FontSize="9" FontFamily="Segoe UI" FontWeight="SemiBold" Width="85" Typography.NumeralAlignment="Tabular"/>
             </StackPanel>
 
