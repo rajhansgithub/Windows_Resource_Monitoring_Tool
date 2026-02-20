@@ -1,3 +1,5 @@
+<img width="481" height="46" alt="image" src="https://github.com/user-attachments/assets/6bd7cfaf-87c2-47c8-8ae2-9268371ade08" />
+
 # Windows Network Monitor
 
 A lightweight, open-source Windows desktop application designed for real-time system monitoring. It provides an unobtrusive, always-on-top overlay that tracks network speed (Upload/Download), total data usage, CPU load, and GPU utilization. Ideally suited for power users who want minimal distraction but maximum visibility into their system's performance.
