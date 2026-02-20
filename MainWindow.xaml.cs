@@ -359,7 +359,7 @@ namespace WindowsNetworkMonitor
                 if (_settings.ShowTopProcess)
                 {
                     var topIo = _processMonitor.GetTopIoProcess();
-                    TopProcessText.Text = ($"{topIo.Name} ({topIo.IoSpeedMBs:F1} MB/S)").ToUpper();
+                    TopProcessText.Text = $"{topIo.Name.ToUpper()} ({topIo.IoSpeedMBs:F1} MB/s)";
                 }
 
                 _lastNetworkUpdate = DateTime.Now;
@@ -402,20 +402,20 @@ namespace WindowsNetworkMonitor
             {
                 case SpeedUnit.Mbps:
                     value = (bytesPerSec * 8) / 1000000f; // Megabits
-                    unit = "MBPS";
+                    unit = "Mbps";
                     break;
                 case SpeedUnit.MBs:
                     value = bytesPerSec / 1048576f; // Megabytes (1024*1024)
-                    unit = "MB/S";
+                    unit = "MB/s";
                     break;
                 case SpeedUnit.Kbps:
                     value = (bytesPerSec * 8) / 1000f; // Kilobits
-                    unit = "KBPS";
+                    unit = "Kbps";
                     break;
                 case SpeedUnit.KBs:
                 default:
                     value = bytesPerSec / 1024f; // Kilobytes
-                    unit = "KB/S";
+                    unit = "KB/s";
                     break;
             }
 
@@ -445,14 +445,14 @@ namespace WindowsNetworkMonitor
 
             // RAM
             float ramLoad = _hardwareMonitor.GetRamUsage();
-            RamLoadText.Text = $"RAM: {ramLoad:F1}%";
+            RamLoadText.Text = $"RAM: {ramLoad:F0}%";
             AddHistoryData(_ramHistory, ramLoad);
             if (_settings.ShowSparklines) DrawSparkline(RamSparkline, _ramHistory, 100);
 
             // Disk
             var diskUsage = _hardwareMonitor.GetDiskUsage(_settings.PreferredDisk);
-            DiskReadText.Text = $"R: {diskUsage.ReadSpeedMBs:F1} MB/S";
-            DiskWriteText.Text = $"W: {diskUsage.WriteSpeedMBs:F1} MB/S";
+            DiskReadText.Text = $"R: {diskUsage.ReadSpeedMBs:F1} MB/s";
+            DiskWriteText.Text = $"W: {diskUsage.WriteSpeedMBs:F1} MB/s";
             AddHistoryData(_diskReadHistory, diskUsage.ReadSpeedMBs);
             AddHistoryData(_diskWriteHistory, diskUsage.WriteSpeedMBs);
             if (_settings.ShowSparklines)
@@ -520,6 +520,7 @@ namespace WindowsNetworkMonitor
         {
             var textVis = _settings.ShowTextMetrics ? Visibility.Visible : Visibility.Collapsed;
             var sparkVis = _settings.ShowSparklines ? Visibility.Visible : Visibility.Collapsed;
+            var contextVis = (!_settings.ShowTextMetrics && _settings.ShowSparklines) ? Visibility.Visible : Visibility.Collapsed;
 
             // Entire Hardware Block logic (Hide if all 3 are disabled)
             if (HardwareStackPanel != null)
@@ -528,24 +529,29 @@ namespace WindowsNetworkMonitor
             if (CpuPanel != null)
                 CpuPanel.Visibility = _settings.ShowCpu ? Visibility.Visible : Visibility.Collapsed;
             if (CpuLoadText != null) CpuLoadText.Visibility = textVis;
-            if (CpuSparkline != null) CpuSparkline.Visibility = sparkVis;
+            if (CpuContextText != null) CpuContextText.Visibility = contextVis;
+            if (CpuSparklineBorder != null) CpuSparklineBorder.Visibility = sparkVis;
             
             if (GpuPanel != null)
                 GpuPanel.Visibility = _settings.ShowGpu ? Visibility.Visible : Visibility.Collapsed;
             if (GpuTextPanel != null) GpuTextPanel.Visibility = textVis;
-            if (GpuSparkline != null) GpuSparkline.Visibility = sparkVis;
+            if (GpuContextText != null) GpuContextText.Visibility = contextVis;
+            if (GpuSparklineBorder != null) GpuSparklineBorder.Visibility = sparkVis;
 
             if (RamPanel != null)
                 RamPanel.Visibility = _settings.ShowRam ? Visibility.Visible : Visibility.Collapsed;
             if (RamLoadText != null) RamLoadText.Visibility = textVis;
-            if (RamSparkline != null) RamSparkline.Visibility = sparkVis;
+            if (RamContextText != null) RamContextText.Visibility = contextVis;
+            if (RamSparklineBorder != null) RamSparklineBorder.Visibility = sparkVis;
 
             if (DiskPanel != null)
                 DiskPanel.Visibility = _settings.ShowDisk ? Visibility.Visible : Visibility.Collapsed;
             if (DiskReadText != null) DiskReadText.Visibility = textVis;
             if (DiskWriteText != null) DiskWriteText.Visibility = textVis;
-            if (DiskReadSparkline != null) DiskReadSparkline.Visibility = sparkVis;
-            if (DiskWriteSparkline != null) DiskWriteSparkline.Visibility = sparkVis;
+            if (DiskReadContextText != null) DiskReadContextText.Visibility = contextVis;
+            if (DiskWriteContextText != null) DiskWriteContextText.Visibility = contextVis;
+            if (DiskReadSparklineBorder != null) DiskReadSparklineBorder.Visibility = sparkVis;
+            if (DiskWriteSparklineBorder != null) DiskWriteSparklineBorder.Visibility = sparkVis;
 
             if (ProcessPanel != null)
                 ProcessPanel.Visibility = _settings.ShowTopProcess ? Visibility.Visible : Visibility.Collapsed;
@@ -555,8 +561,10 @@ namespace WindowsNetworkMonitor
                 NetworkPanel.Visibility = _settings.ShowNetwork ? Visibility.Visible : Visibility.Collapsed;
                 if (UploadText != null) UploadText.Visibility = textVis;
                 if (DownloadText != null) DownloadText.Visibility = textVis;
-                if (UploadSparkline != null) UploadSparkline.Visibility = sparkVis;
-                if (DownloadSparkline != null) DownloadSparkline.Visibility = sparkVis;
+                if (UploadContextText != null) UploadContextText.Visibility = contextVis;
+                if (DownloadContextText != null) DownloadContextText.Visibility = contextVis;
+                if (UploadSparklineBorder != null) UploadSparklineBorder.Visibility = sparkVis;
+                if (DownloadSparklineBorder != null) DownloadSparklineBorder.Visibility = sparkVis;
             }
 
             if (UsagePanel != null)
