@@ -22,11 +22,8 @@ namespace WindowsNetworkMonitor.Services
             {
                 IsCpuEnabled = true,
                 IsGpuEnabled = true,
-                // IsMemoryEnabled = true, // Not requested but good to have if needed
-                // IsMotherboardEnabled = true,
-                // IsControllerEnabled = true,
-                // IsNetworkEnabled = true,
-                // IsStorageEnabled = true
+                IsMemoryEnabled = true,
+                IsStorageEnabled = true
             };
 
             try
@@ -79,7 +76,53 @@ namespace WindowsNetworkMonitor.Services
             return load.Value ?? 0;
         }
 
+        public float GetRamUsage()
+        {
+            var memory = _computer.Hardware.FirstOrDefault(h => h.HardwareType == HardwareType.Memory);
+            if (memory == null) return 0;
 
+            var load = memory.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Load && s.Name == "Memory");
+            return load?.Value ?? 0;
+        }
+
+        public List<string> GetAvailableDisks()
+        {
+            var disks = new List<string>();
+            var storageDevices = _computer.Hardware.Where(h => h.HardwareType == HardwareType.Storage);
+            
+            foreach (var hardware in storageDevices)
+            {
+                disks.Add(hardware.Name);
+            }
+            return disks;
+        }
+
+        public (float ReadSpeedMBs, float WriteSpeedMBs) GetDiskUsage(string selectedDisk = null)
+        {
+            var storageDevices = _computer.Hardware.Where(h => h.HardwareType == HardwareType.Storage);
+            
+            if (!string.IsNullOrEmpty(selectedDisk) && selectedDisk != "All Disks")
+            {
+                storageDevices = storageDevices.Where(h => h.Name == selectedDisk);
+            }
+
+            float totalRead = 0;
+            float totalWrite = 0;
+
+            foreach (var disk in storageDevices)
+            {
+                // FreeHardwareMonitor Storage usually has Throughput sensors in Bytes/sec
+                var readSensor = disk.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Throughput && s.Name.Contains("Read"));
+                var writeSensor = disk.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Throughput && s.Name.Contains("Write"));
+
+                // Sometimes the name is "Read Rate" or just "Read"
+                totalRead += readSensor?.Value ?? 0;
+                totalWrite += writeSensor?.Value ?? 0;
+            }
+
+            // Return MB/s (Throughput is usually reported in Bytes/s by LibreHardwareMonitor)
+            return (totalRead / (1024 * 1024), totalWrite / (1024 * 1024));
+        }
 
         public List<GpuStats> GetGpuStats()
         {
@@ -92,12 +135,6 @@ namespace WindowsNetworkMonitor.Services
                 var usage = gpu.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Load && s.Name == "GPU Core")?.Value
                             ?? gpu.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Load)?.Value 
                             ?? 0;
-
-                // GPU Temp priority: "GPU Core" -> "GPU Hot Spot" -> Any Temp
-                // var temp = gpu.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Temperature && s.Name == "GPU Core")?.Value
-                //            ?? gpu.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Temperature && s.Name == "GPU Hot Spot")?.Value
-                //            ?? gpu.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Temperature)?.Value
-                //            ?? 0;
 
                 stats.Add(new GpuStats
                 {

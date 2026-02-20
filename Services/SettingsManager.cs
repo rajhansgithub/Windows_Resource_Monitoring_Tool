@@ -15,9 +15,15 @@ namespace WindowsNetworkMonitor.Services
     public class AppSettings
     {
         public string PreferredNetworkAdapter { get; set; } = string.Empty;
+        public string PreferredDisk { get; set; } = string.Empty;
         public SpeedUnit NetworkSpeedUnit { get; set; } = SpeedUnit.KBs;
         public bool ShowCpu { get; set; } = true;
         public bool ShowGpu { get; set; } = true;
+        public bool ShowRam { get; set; } = true;
+        public bool ShowDisk { get; set; } = true;
+        public bool ShowTopProcess { get; set; } = true;
+        public bool ShowSparklines { get; set; } = true;
+        public bool ShowTextMetrics { get; set; } = true;
         public bool ShowNetwork { get; set; } = true;
         public bool ShowUsage { get; set; } = true;
     }
