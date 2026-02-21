@@ -12,7 +12,8 @@
         Background="Transparent"
         Topmost="True"
         ShowInTaskbar="False"
-        ResizeMode="NoResize">
+        ResizeMode="NoResize"
+        Icon="app_icon.png">
     <Grid Margin="5">
         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
             
