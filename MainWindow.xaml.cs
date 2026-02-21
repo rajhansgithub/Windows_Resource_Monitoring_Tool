@@ -20,7 +20,7 @@ namespace WindowsNetworkMonitor
         private readonly NetworkUsageManager _usageManager;
         private readonly DispatcherTimer _timer;
         private System.Windows.Forms.NotifyIcon _notifyIcon;
-        private System.Windows.Forms.ContextMenuStrip _trayMenu;
+        private System.Windows.Controls.ContextMenu _trayMenu;
 
         private DateTime _lastNetworkUpdate = DateTime.MinValue;
         private AppSettings _settings;
@@ -59,142 +59,161 @@ namespace WindowsNetworkMonitor
 
         private void InitializeTrayIcon()
         {
-            _trayMenu = new System.Windows.Forms.ContextMenuStrip();
+            _trayMenu = new System.Windows.Controls.ContextMenu();
             
             // Populate initial Adapters placeholder
-            var adaptersItem = new System.Windows.Forms.ToolStripMenuItem("Adapters");
+            var adaptersItem = new System.Windows.Controls.MenuItem { Header = "Adapters" };
             _trayMenu.Items.Add(adaptersItem);
 
-            var disksItem = new System.Windows.Forms.ToolStripMenuItem("Disks");
+            var disksItem = new System.Windows.Controls.MenuItem { Header = "Disks" };
             _trayMenu.Items.Add(disksItem);
             
-            var autoStartItem = new System.Windows.Forms.ToolStripMenuItem("Run at Startup");
-            autoStartItem.Checked = AutoStartManager.IsAutoStartEnabled();
+            var autoStartItem = new System.Windows.Controls.MenuItem { Header = "Run at Startup", IsCheckable = true, IsChecked = AutoStartManager.IsAutoStartEnabled() };
             autoStartItem.Click += (s, e) => {
-                bool newState = !autoStartItem.Checked;
+                bool newState = !autoStartItem.IsChecked;
                 AutoStartManager.SetAutoStart(newState);
-                autoStartItem.Checked = newState;
+                autoStartItem.IsChecked = newState;
             };
             _trayMenu.Items.Add(autoStartItem);
 
-            var speedUnitItem = new System.Windows.Forms.ToolStripMenuItem("Speed Unit");
+            var speedUnitItem = new System.Windows.Controls.MenuItem { Header = "Speed Unit" };
             foreach (SpeedUnit unit in Enum.GetValues(typeof(SpeedUnit)))
             {
-                var unitItem = new System.Windows.Forms.ToolStripMenuItem(unit.ToString(), null, (s, e) => {
+                var unitItem = new System.Windows.Controls.MenuItem { Header = unit.ToString(), IsCheckable = true };
+                unitItem.Click += (s, e) => {
                     SelectSpeedUnit(unit);
-                });
-                unitItem.Checked = _settings.NetworkSpeedUnit == unit;
-                speedUnitItem.DropDownItems.Add(unitItem);
+                };
+                unitItem.IsChecked = _settings.NetworkSpeedUnit == unit;
+                speedUnitItem.Items.Add(unitItem);
             }
             _trayMenu.Items.Add(speedUnitItem);
 
-            var viewItem = new System.Windows.Forms.ToolStripMenuItem("View");
+            var viewItem = new System.Windows.Controls.MenuItem { Header = "View" };
             
-            var cpuItem = new System.Windows.Forms.ToolStripMenuItem("CPU", null, (s, e) => {
-                _settings.ShowCpu = !_settings.ShowCpu;
+            var cpuItem = new System.Windows.Controls.MenuItem { Header = "CPU", IsCheckable = true, IsChecked = _settings.ShowCpu };
+            cpuItem.Click += (s, e) => {
+                _settings.ShowCpu = cpuItem.IsChecked;
                 SettingsManager.Save(_settings);
                 UpdateVisibility();
-                ((System.Windows.Forms.ToolStripMenuItem)s).Checked = _settings.ShowCpu;
-            });
-            cpuItem.Checked = _settings.ShowCpu;
-            viewItem.DropDownItems.Add(cpuItem);
+            };
+            viewItem.Items.Add(cpuItem);
 
-            var gpuItem = new System.Windows.Forms.ToolStripMenuItem("GPU", null, (s, e) => {
-                _settings.ShowGpu = !_settings.ShowGpu;
+            var gpuItem = new System.Windows.Controls.MenuItem { Header = "GPU", IsCheckable = true, IsChecked = _settings.ShowGpu };
+            gpuItem.Click += (s, e) => {
+                _settings.ShowGpu = gpuItem.IsChecked;
                 SettingsManager.Save(_settings);
                 UpdateVisibility();
-                ((System.Windows.Forms.ToolStripMenuItem)s).Checked = _settings.ShowGpu;
-            });
-            gpuItem.Checked = _settings.ShowGpu;
-            viewItem.DropDownItems.Add(gpuItem);
+            };
+            viewItem.Items.Add(gpuItem);
 
-            var ramItem = new System.Windows.Forms.ToolStripMenuItem("RAM", null, (s, e) => {
-                _settings.ShowRam = !_settings.ShowRam;
+            var ramItem = new System.Windows.Controls.MenuItem { Header = "RAM", IsCheckable = true, IsChecked = _settings.ShowRam };
+            ramItem.Click += (s, e) => {
+                _settings.ShowRam = ramItem.IsChecked;
                 SettingsManager.Save(_settings);
                 UpdateVisibility();
-                ((System.Windows.Forms.ToolStripMenuItem)s).Checked = _settings.ShowRam;
-            });
-            ramItem.Checked = _settings.ShowRam;
-            viewItem.DropDownItems.Add(ramItem);
+            };
+            viewItem.Items.Add(ramItem);
 
-            var diskItem = new System.Windows.Forms.ToolStripMenuItem("Disk", null, (s, e) => {
-                _settings.ShowDisk = !_settings.ShowDisk;
+            var diskItem = new System.Windows.Controls.MenuItem { Header = "Disk", IsCheckable = true, IsChecked = _settings.ShowDisk };
+            diskItem.Click += (s, e) => {
+                _settings.ShowDisk = diskItem.IsChecked;
                 SettingsManager.Save(_settings);
                 UpdateVisibility();
-                ((System.Windows.Forms.ToolStripMenuItem)s).Checked = _settings.ShowDisk;
-            });
-            diskItem.Checked = _settings.ShowDisk;
-            viewItem.DropDownItems.Add(diskItem);
+            };
+            viewItem.Items.Add(diskItem);
 
-            var networkItem = new System.Windows.Forms.ToolStripMenuItem("Network", null, (s, e) => {
-                _settings.ShowNetwork = !_settings.ShowNetwork;
+            var networkItem = new System.Windows.Controls.MenuItem { Header = "Network", IsCheckable = true, IsChecked = _settings.ShowNetwork };
+            networkItem.Click += (s, e) => {
+                _settings.ShowNetwork = networkItem.IsChecked;
                 SettingsManager.Save(_settings);
                 UpdateVisibility();
-                ((System.Windows.Forms.ToolStripMenuItem)s).Checked = _settings.ShowNetwork;
-            });
-            networkItem.Checked = _settings.ShowNetwork;
-            viewItem.DropDownItems.Add(networkItem);
+            };
+            viewItem.Items.Add(networkItem);
 
-            var usageItem = new System.Windows.Forms.ToolStripMenuItem("Total Usage", null, (s, e) => {
-                _settings.ShowUsage = !_settings.ShowUsage;
+            var usageItem = new System.Windows.Controls.MenuItem { Header = "Total Usage", IsCheckable = true, IsChecked = _settings.ShowUsage };
+            usageItem.Click += (s, e) => {
+                _settings.ShowUsage = usageItem.IsChecked;
                 SettingsManager.Save(_settings);
                 UpdateVisibility();
-                ((System.Windows.Forms.ToolStripMenuItem)s).Checked = _settings.ShowUsage;
-            });
-            usageItem.Checked = _settings.ShowUsage;
-            viewItem.DropDownItems.Add(usageItem);
+            };
+            viewItem.Items.Add(usageItem);
 
-            var processItem = new System.Windows.Forms.ToolStripMenuItem("Top Process", null, (s, e) => {
-                _settings.ShowTopProcess = !_settings.ShowTopProcess;
+            var processItem = new System.Windows.Controls.MenuItem { Header = "Top Process", IsCheckable = true, IsChecked = _settings.ShowTopProcess };
+            processItem.Click += (s, e) => {
+                _settings.ShowTopProcess = processItem.IsChecked;
                 SettingsManager.Save(_settings);
                 UpdateVisibility();
-                ((System.Windows.Forms.ToolStripMenuItem)s).Checked = _settings.ShowTopProcess;
-            });
-            processItem.Checked = _settings.ShowTopProcess;
-            viewItem.DropDownItems.Add(processItem);
+            };
+            viewItem.Items.Add(processItem);
 
-            viewItem.DropDownItems.Add(new System.Windows.Forms.ToolStripSeparator());
+            viewItem.Items.Add(new System.Windows.Controls.Separator());
 
-            var sparklinesItem = new System.Windows.Forms.ToolStripMenuItem("Sparklines", null, (s, e) => {
-                _settings.ShowSparklines = !_settings.ShowSparklines;
+            var sparklinesItem = new System.Windows.Controls.MenuItem { Header = "Sparklines", IsCheckable = true, IsChecked = _settings.ShowSparklines };
+            sparklinesItem.Click += (s, e) => {
+                _settings.ShowSparklines = sparklinesItem.IsChecked;
                 SettingsManager.Save(_settings);
                 UpdateVisibility();
-                ((System.Windows.Forms.ToolStripMenuItem)s).Checked = _settings.ShowSparklines;
-            });
-            sparklinesItem.Checked = _settings.ShowSparklines;
-            viewItem.DropDownItems.Add(sparklinesItem);
+            };
+            viewItem.Items.Add(sparklinesItem);
 
-            var textMetricsItem = new System.Windows.Forms.ToolStripMenuItem("Text Data", null, (s, e) => {
-                _settings.ShowTextMetrics = !_settings.ShowTextMetrics;
+            var textMetricsItem = new System.Windows.Controls.MenuItem { Header = "Text Data", IsCheckable = true, IsChecked = _settings.ShowTextMetrics };
+            textMetricsItem.Click += (s, e) => {
+                _settings.ShowTextMetrics = textMetricsItem.IsChecked;
                 SettingsManager.Save(_settings);
                 UpdateVisibility();
-                ((System.Windows.Forms.ToolStripMenuItem)s).Checked = _settings.ShowTextMetrics;
-            });
-            textMetricsItem.Checked = _settings.ShowTextMetrics;
-            viewItem.DropDownItems.Add(textMetricsItem);
+            };
+            viewItem.Items.Add(textMetricsItem);
 
             _trayMenu.Items.Add(viewItem);
 
-            var reportItem = new System.Windows.Forms.ToolStripMenuItem("Usage Report", null, (s, e) => {
+            var reportItem = new System.Windows.Controls.MenuItem { Header = "Usage Report" };
+            reportItem.Click += (s, e) => {
                 var reportWindow = new UsageReportWindow();
                 reportWindow.Show();
-            });
+            };
             _trayMenu.Items.Add(reportItem);
 
-            _trayMenu.Items.Add("-");
+            _trayMenu.Items.Add(new System.Windows.Controls.Separator());
 
-             var exitItem = new System.Windows.Forms.ToolStripMenuItem("Exit", null, (s, e) => {
+            var exitItem = new System.Windows.Controls.MenuItem { Header = "Exit" };
+            exitItem.Click += (s, e) => {
                 _notifyIcon.Visible = false;
                 Application.Current.Shutdown();
-            });
+            };
             _trayMenu.Items.Add(exitItem);
 
             _notifyIcon = new System.Windows.Forms.NotifyIcon();
             _notifyIcon.Text = "Network Monitor";
-            // Uses system icon for now as we don't have a resource
-            _notifyIcon.Icon = SystemIcons.Application; 
-            _notifyIcon.ContextMenuStrip = _trayMenu;
+            
+            try
+            {
+                var iconStream = Application.GetResourceStream(new Uri("pack://application:,,,/app_icon.ico"))?.Stream;
+                if (iconStream != null)
+                {
+                    _notifyIcon.Icon = new System.Drawing.Icon(iconStream);
+                }
+                else
+                {
+                    _notifyIcon.Icon = SystemIcons.Application; 
+                }
+            }
+            catch
+            {
+                _notifyIcon.Icon = SystemIcons.Application;
+            }
+            
+            _notifyIcon.MouseUp += NotifyIcon_MouseUp;
             _notifyIcon.Visible = true;
+        }
+
+        private void NotifyIcon_MouseUp(object? sender, System.Windows.Forms.MouseEventArgs e)
+        {
+            if (e.Button == System.Windows.Forms.MouseButtons.Right)
+            {
+                var helper = new System.Windows.Interop.WindowInteropHelper(this);
+                User32.SetForegroundWindow(helper.Handle);
+                _trayMenu.IsOpen = true;
+            }
         }
 
         private void SelectSpeedUnit(SpeedUnit unit)
@@ -205,13 +224,16 @@ namespace WindowsNetworkMonitor
                 SettingsManager.Save(_settings);
 
                 // Update checkmarks
-                foreach(System.Windows.Forms.ToolStripItem item in _trayMenu.Items)
+                foreach(object itemObj in _trayMenu.Items)
                 {
-                    if (item is System.Windows.Forms.ToolStripMenuItem menuItem && menuItem.Text == "Speed Unit")
+                    if (itemObj is System.Windows.Controls.MenuItem menuItem && menuItem.Header as string == "Speed Unit")
                     {
-                        foreach (System.Windows.Forms.ToolStripMenuItem subItem in menuItem.DropDownItems)
+                        foreach (object subItemObj in menuItem.Items)
                         {
-                            subItem.Checked = subItem.Text == unit.ToString();
+                            if (subItemObj is System.Windows.Controls.MenuItem subItem)
+                            {
+                                subItem.IsChecked = subItem.Header as string == unit.ToString();
+                            }
                         }
                     }
                 }
@@ -241,16 +263,17 @@ namespace WindowsNetworkMonitor
         {
             var adapters = NetworkAdapterManager.GetActiveAdapters();
             // _trayMenu.Items[0] is "Adapters"
-            if (_trayMenu.Items[0] is System.Windows.Forms.ToolStripMenuItem adaptersMenu)
+            if (_trayMenu.Items[0] is System.Windows.Controls.MenuItem adaptersMenu)
             {
-                adaptersMenu.DropDownItems.Clear();
+                adaptersMenu.Items.Clear();
 
                 foreach (var adapter in adapters)
                 {
-                    var item = new System.Windows.Forms.ToolStripMenuItem(adapter, null, (s, args) => {
+                    var item = new System.Windows.Controls.MenuItem { Header = adapter, IsCheckable = true };
+                    item.Click += (s, args) => {
                         SelectAdapter(adapter);
-                    });
-                    adaptersMenu.DropDownItems.Add(item);
+                    };
+                    adaptersMenu.Items.Add(item);
                 }
 
                 if (adapters.Count > 0)
@@ -280,11 +303,14 @@ namespace WindowsNetworkMonitor
             }
             
             // Update checkmarks
-            if (_trayMenu.Items[0] is System.Windows.Forms.ToolStripMenuItem adaptersMenu)
+            if (_trayMenu.Items[0] is System.Windows.Controls.MenuItem adaptersMenu)
             {
-                foreach (System.Windows.Forms.ToolStripMenuItem item in adaptersMenu.DropDownItems)
+                foreach (object itemObj in adaptersMenu.Items)
                 {
-                    item.Checked = item.Text == adapter;
+                    if (itemObj is System.Windows.Controls.MenuItem item)
+                    {
+                        item.IsChecked = item.Header as string == adapter;
+                    }
                 }
             }
         } 
@@ -293,16 +319,17 @@ namespace WindowsNetworkMonitor
         {
             var disks = _hardwareMonitor.GetAvailableDisks();
             
-            if (_trayMenu.Items[1] is System.Windows.Forms.ToolStripMenuItem disksMenu)
+            if (_trayMenu.Items[1] is System.Windows.Controls.MenuItem disksMenu)
             {
-                disksMenu.DropDownItems.Clear();
+                disksMenu.Items.Clear();
 
                 foreach (var disk in disks)
                 {
-                    var item = new System.Windows.Forms.ToolStripMenuItem(disk, null, (s, args) => {
+                    var item = new System.Windows.Controls.MenuItem { Header = disk, IsCheckable = true };
+                    item.Click += (s, args) => {
                         SelectDisk(disk);
-                    });
-                    disksMenu.DropDownItems.Add(item);
+                    };
+                    disksMenu.Items.Add(item);
                 }
 
                 if (disks.Count > 0)
@@ -325,11 +352,14 @@ namespace WindowsNetworkMonitor
                 SettingsManager.Save(_settings);
             }
             
-            if (_trayMenu.Items[1] is System.Windows.Forms.ToolStripMenuItem disksMenu)
+            if (_trayMenu.Items[1] is System.Windows.Controls.MenuItem disksMenu)
             {
-                foreach (System.Windows.Forms.ToolStripMenuItem item in disksMenu.DropDownItems)
+                foreach (object itemObj in disksMenu.Items)
                 {
-                    item.Checked = item.Text == disk;
+                    if (itemObj is System.Windows.Controls.MenuItem item)
+                    {
+                        item.IsChecked = item.Header as string == disk;
+                    }
                 }
             }
         }
