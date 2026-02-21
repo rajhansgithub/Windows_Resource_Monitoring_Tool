@@ -183,7 +183,7 @@ namespace WindowsNetworkMonitor
             _trayMenu.Items.Add(exitItem);
 
             _notifyIcon = new System.Windows.Forms.NotifyIcon();
-            _notifyIcon.Text = "Network Monitor";
+            _notifyIcon.Text = "Windows Resource Monitor";
             
             try
             {
