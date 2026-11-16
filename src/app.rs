@@ -32,7 +32,10 @@ pub const WM_APP_ACTIVATE: u32 = WM_APP + 2;
 pub const HIST: usize = 60;
 
 const T_SAMPLE: usize = 1;
-const T_FAST: usize = 2;
+/// Appbar callback: Windows tells us when a full-screen app opens/closes.
+const WM_APPBAR: u32 = WM_APP + 5;
+/// Settings file changed on disk (from the watcher thread).
+const WM_SETTINGS_FILE: u32 = WM_APP + 6;
 
 pub const C_WARN: Rgba = Rgba::rgb(255, 183, 77);
 pub const C_CRIT: Rgba = Rgba::rgb(255, 82, 82);
@@ -238,6 +241,15 @@ pub struct App {
     shut_down: bool,
     detail_until: Option<Instant>,
     menu_open: bool,
+    /// Background UI Automation watcher for taskbar app-icon positions.
+    icons: Option<crate::icons::Watcher>,
+    /// Set by events: re-read taskbar geometry on the next refresh.
+    need_locate: bool,
+    /// Set by events: re-evaluate full-screen state and z-order.
+    need_check: bool,
+    /// Location-change hook scoped to the taskbar's own thread.
+    move_hook: HWINEVENTHOOK,
+    move_hook_tid: u32,
     /// Fonts + canvas reused by the details panel between repaints.
     pub popup_cache: Option<(popup::Fonts, crate::render::Canvas)>,
 }
@@ -336,7 +348,22 @@ pub fn create(hinst: HINSTANCE) -> Option<()> {
             detail_until: None,
             menu_open: false,
             popup_cache: None,
+            icons: None,
+            need_locate: true,
+            need_check: true,
+            move_hook: std::ptr::null_mut(),
+            move_hook_tid: 0,
         });
+        a.icons = Some(crate::icons::Watcher::start(hwnd as isize));
+        // Register as a (zero-size, space-less) appbar purely to receive
+        // ABN_FULLSCREENAPP when a full-screen app opens or closes.
+        let mut abd: APPBARDATA = std::mem::zeroed();
+        abd.cbSize = std::mem::size_of::<APPBARDATA>() as u32;
+        abd.hWnd = hwnd;
+        abd.uCallbackMessage = WM_APPBAR;
+        SHAppBarMessage(ABM_NEW, &mut abd);
+        crate::settings::watch(hwnd as isize, WM_SETTINGS_FILE);
+
         a.popup = popup::create(hinst, hwnd);
         a.tray.add();
         if first_run {
@@ -376,11 +403,51 @@ pub fn create(hinst: HINSTANCE) -> Option<()> {
 
 unsafe extern "system" fn on_foreground(_: HWINEVENTHOOK, _: u32, _: HWND, _: i32, _: i32, _: u32, _: u32) {
     if let Some(a) = app() {
+        a.need_check = true;
         a.refresh(false);
     }
 }
 
+/// A taskbar window moved/resized/slid (auto-hide). Scoped to Explorer's
+/// taskbar thread, so it fires only for taskbar activity.
+unsafe extern "system" fn on_taskbar_move(_: HWINEVENTHOOK, _: u32, hwnd: HWND, obj: i32, _: i32, _: u32, _: u32) {
+    if obj != OBJID_WINDOW {
+        return;
+    }
+    if let Some(a) = app() {
+        if a.taskbars.iter().any(|t| t.hwnd == hwnd) {
+            a.need_locate = true;
+            a.refresh(false);
+        }
+    }
+}
+
 impl App {
+    /// (Re)attach the taskbar move hook to whatever thread owns the taskbar now.
+    fn hook_taskbar_moves(&mut self) {
+        let Some(tb) = self.taskbars.iter().find(|t| !t.hwnd.is_null()) else { return };
+        let mut pid = 0u32;
+        let tid = unsafe { GetWindowThreadProcessId(tb.hwnd, &mut pid) };
+        if tid == 0 || tid == self.move_hook_tid {
+            return;
+        }
+        unsafe {
+            if !self.move_hook.is_null() {
+                UnhookWinEvent(self.move_hook);
+            }
+            self.move_hook = SetWinEventHook(
+                EVENT_OBJECT_LOCATIONCHANGE,
+                EVENT_OBJECT_LOCATIONCHANGE,
+                std::ptr::null_mut(),
+                Some(on_taskbar_move),
+                pid,
+                tid,
+                WINEVENT_OUTOFCONTEXT,
+            );
+        }
+        self.move_hook_tid = tid;
+    }
+
     fn opts(&self) -> SampleOpts {
         let sh = |m| self.m.s.shown(m);
         SampleOpts {
@@ -445,9 +512,6 @@ impl App {
             self.m.usage.save();
             self.last_save = Instant::now();
         }
-        if self.m.samples % 3 == 0 {
-            self.check_settings_file();
-        }
         if self.m.samples % 5 == 1 {
             self.update_tip();
         }
@@ -495,6 +559,7 @@ impl App {
     }
 
     fn apply_settings(&mut self) {
+        self.need_locate = true;
         self.m.dark = effective_dark(self.m.s.theme);
         let ct = self.m.s.click_through;
         for o in &mut self.overlays {
@@ -513,14 +578,6 @@ impl App {
         unsafe {
             // Coalescable: lets Windows batch our wakeups with others to save power.
             SetCoalescableTimer(self.hwnd, T_SAMPLE, ms, None, (ms / 10).max(32));
-            let mut abd: APPBARDATA = std::mem::zeroed();
-            abd.cbSize = std::mem::size_of::<APPBARDATA>() as u32;
-            let auto_hide = SHAppBarMessage(ABM_GETSTATE, &mut abd) as u32 & ABS_AUTOHIDE != 0;
-            if auto_hide && self.m.s.mode == Mode::Dock && self.display_on {
-                SetCoalescableTimer(self.hwnd, T_FAST, 200, None, 50);
-            } else {
-                KillTimer(self.hwnd, T_FAST);
-            }
         }
     }
 
@@ -544,11 +601,22 @@ impl App {
 
     /// Create/destroy widgets to match the taskbars present and the
     /// "displays" setting, then update visibility/z-order and redraw.
+    ///
+    /// Nothing here polls: the taskbar is re-located only after an event set
+    /// `need_locate`, and full-screen / z-order only after one set `need_check`.
     pub fn refresh(&mut self, redraw: bool) {
-        let mut tbs = taskbar::locate_all();
-        if tbs.is_empty() {
-            tbs.extend(taskbar::fallback());
+        if self.need_locate || self.taskbars.is_empty() {
+            self.need_locate = false;
+            self.need_check = true;
+            let mut tbs = taskbar::locate_all();
+            if tbs.is_empty() {
+                tbs.extend(taskbar::fallback());
+            }
+            self.taskbars = tbs;
+            self.hook_taskbar_moves();
         }
+        let check = std::mem::take(&mut self.need_check);
+        let tbs = self.taskbars.clone();
         let wanted: Vec<Taskbar> = if self.m.s.mode == Mode::Float {
             tbs.iter().find(|t| t.primary).or(tbs.first()).copied().into_iter().collect()
         } else {
@@ -560,7 +628,6 @@ impl App {
             }
             w
         };
-        self.taskbars = tbs;
 
         // Drop widgets whose taskbar went away. Remove first, destroy after,
         // so re-entrant messages during DestroyWindow see a consistent list.
@@ -586,6 +653,15 @@ impl App {
             }
         }
 
+        if let Some(wt) = &self.icons {
+            let targets = wanted
+                .iter()
+                .filter(|t| !t.hwnd.is_null() && t.edge.horizontal() && self.m.s.mode == Mode::Dock)
+                .map(|t| crate::icons::Target { taskbar: t.hwnd as isize, rect: t.rect, limit: t.tray.l })
+                .collect();
+            wt.set_targets(targets);
+        }
+
         let own: Vec<HWND> =
             self.overlays.iter().map(|o| o.hwnd).chain([self.hwnd, self.popup, self.report]).collect();
         let dock = self.m.s.mode == Mode::Dock;
@@ -595,8 +671,10 @@ impl App {
             let Some(tb) = wanted.iter().find(|t| t.hwnd == o.tb.hwnd).copied() else { continue };
             let moved = !tb.same_geometry(&o.tb);
             o.tb = tb;
-            let fullscreen = m.s.hide_fullscreen && taskbar::fullscreen_active(&tb, &own);
-            let want = m.s.visible && !fullscreen && !(dock && tb.retracted) && self.display_on;
+            if check || !o.shown && !o.fullscreen {
+                o.fullscreen = m.s.hide_fullscreen && taskbar::fullscreen_active(&tb, &own);
+            }
+            let want = m.s.visible && !o.fullscreen && !(dock && tb.retracted) && self.display_on;
             if want {
                 if redraw || moved || !o.shown {
                     o.render(m);
@@ -604,10 +682,9 @@ impl App {
             } else if o.hwnd == self.popup_anchor {
                 anchor_hidden = true;
             }
-            if !(want && o.shown && self.menu_open) {
-                // Don't re-assert topmost over our own open menu.
-                o.show(want);
-            }
+            // Topmost is re-asserted only after an event (focus change etc.),
+            // and never over our own open menu.
+            o.show(want, check && !self.menu_open);
         }
 
         if self.popup_open() {
@@ -665,6 +742,12 @@ impl App {
             add(dm, ID_SPARK, "Sparklines", s.sparklines);
             add(dm, ID_LABELS, "Labels", s.labels);
             add(dm, ID_STACKED, "Stacked (2 rows)", s.stacked);
+            let wm = CreatePopupMenu();
+            for (i, (n, v)) in MAX_WIDTHS.iter().enumerate() {
+                radio(wm, ID_MAXW + i, n, s.max_width_pct == *v);
+            }
+            sub(dm, wm, "Max width");
+            add(dm, ID_RECHECK, "Re-check taskbar icons", false);
             sep(dm);
             let tm = CreatePopupMenu();
             for (i, (n, t)) in [("Match Windows", Theme::Auto), ("Dark", Theme::Dark), ("Light", Theme::Light)]
@@ -805,6 +888,12 @@ impl App {
         match id {
             ID_REPORT => return report::open(self),
             ID_TASKMGR => return shell_open("taskmgr.exe", None),
+            ID_RECHECK => {
+                if let Some(w) = &self.icons {
+                    w.kick();
+                }
+                return;
+            }
             ID_AUTOSTART => return crate::autostart::set(!crate::autostart::enabled()),
             ID_EDIT => {
                 self.save_settings();
@@ -874,6 +963,7 @@ impl App {
             }
             _ if (ID_SIZE..ID_SIZE + TEXT_SIZES.len()).contains(&id) => s.text_scale = TEXT_SIZES[id - ID_SIZE].1,
             _ if (ID_BG..ID_BG + BACKGROUNDS.len()).contains(&id) => s.bg_opacity = BACKGROUNDS[id - ID_BG].1,
+            _ if (ID_MAXW..ID_MAXW + MAX_WIDTHS.len()).contains(&id) => s.max_width_pct = MAX_WIDTHS[id - ID_MAXW].1,
             _ => return,
         }
         self.save_settings();
@@ -961,6 +1051,8 @@ impl App {
                 if let Some(d) = d {
                     if d.moved {
                         self.save_settings();
+                        // Offset changed: the room next to the icons changed too.
+                        self.refresh(true);
                     } else if self.popup_open() && self.popup_anchor == hwnd {
                         // Closed by click: don't let hover reopen it until the mouse leaves.
                         self.overlays[i].no_hover = true;
@@ -1001,11 +1093,19 @@ impl App {
             if !self.hook.is_null() {
                 UnhookWinEvent(self.hook);
             }
+
             KillTimer(self.hwnd, T_SAMPLE);
-            KillTimer(self.hwnd, T_FAST);
+            if !self.move_hook.is_null() {
+                UnhookWinEvent(self.move_hook);
+            }
+            let mut abd: APPBARDATA = std::mem::zeroed();
+            abd.cbSize = std::mem::size_of::<APPBARDATA>() as u32;
+            abd.hWnd = self.hwnd;
+            SHAppBarMessage(ABM_REMOVE, &mut abd);
         }
         let ovs = std::mem::take(&mut self.overlays);
         drop(ovs);
+        self.icons = None;
     }
 }
 
@@ -1026,6 +1126,10 @@ const ID_DOCK: usize = 605;
 const ID_FLOAT: usize = 606;
 const ID_RESET_POS: usize = 607;
 const ID_STACKED: usize = 608;
+const ID_MAXW: usize = 900;
+const ID_RECHECK: usize = 609;
+const MAX_WIDTHS: [(&str, u32); 5] =
+    [("Auto (don't cover app icons)", 0), ("20% of taskbar", 20), ("30% of taskbar", 30), ("40% of taskbar", 40), ("50% of taskbar", 50)];
 const ID_REPORT: usize = 700;
 const ID_TASKMGR: usize = 701;
 const ID_AUTOSTART: usize = 702;
@@ -1062,16 +1166,28 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         // Explorer restarted: tray icon is gone and taskbars were recreated.
         a.tray.add();
         a.update_timer();
+        a.need_locate = true;
         a.refresh(true);
         return 0;
     }
     match msg {
         WM_TIMER => {
-            let sampled = w == T_SAMPLE;
-            if sampled {
+            // The only periodic work: read the metrics and redraw them.
+            if w == T_SAMPLE {
                 a.sample();
+                a.refresh(true);
             }
-            a.refresh(sampled);
+            0
+        }
+        WM_APPBAR => {
+            if w as u32 == ABN_FULLSCREENAPP {
+                a.need_check = true;
+                a.refresh(false);
+            }
+            0
+        }
+        WM_SETTINGS_FILE => {
+            a.check_settings_file();
             0
         }
         WM_TRAY => {
@@ -1108,13 +1224,29 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             popup::show(a, true);
             0
         }
+        crate::icons::WM_APP_ICONS => {
+            let mut changed = false;
+            for o in &mut a.overlays {
+                if o.tb.hwnd as usize == w && o.icons != Some(l as i32) {
+                    o.icons = Some(l as i32);
+                    changed = true;
+                }
+            }
+            if changed {
+                a.refresh(true);
+            }
+            0
+        }
         WM_DISPLAYCHANGE | WM_DPICHANGED => {
+            a.need_locate = true;
             a.refresh(true);
             0
         }
         WM_SETTINGCHANGE => {
+            // Theme switch, taskbar moved/resized (work area), auto-hide toggled…
             a.m.dark = effective_dark(a.m.s.theme);
             a.update_timer();
+            a.need_locate = true;
             a.refresh(true);
             0
         }
@@ -1132,7 +1264,10 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
                         }
                     }
                 }
-                PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND => a.refresh(true),
+                PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND => {
+                    a.need_locate = true;
+                    a.refresh(true)
+                }
                 _ => {}
             }
             1

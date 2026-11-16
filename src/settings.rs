@@ -105,6 +105,8 @@ pub struct Settings {
     pub labels: bool,
     /// Two (or three) metrics per column; off = one line, each metric its own column.
     pub stacked: bool,
+    /// Max widget width on the taskbar, % of taskbar width. 0 = auto (stay clear of app icons).
+    pub max_width_pct: u32,
     pub unit: SpeedUnit,
     pub adapter: String,
     pub interval_ms: u32,
@@ -144,6 +146,7 @@ impl Default for Settings {
             sparklines: true,
             labels: true,
             stacked: true,
+            max_width_pct: 0,
             unit: SpeedUnit::AutoBytes,
             adapter: String::new(),
             interval_ms: 1000,
@@ -277,6 +280,9 @@ impl Settings {
                 "sparklines" => self.sparklines = parse_bool(v).unwrap_or(self.sparklines),
                 "labels" => self.labels = parse_bool(v).unwrap_or(self.labels),
                 "stacked" => self.stacked = parse_bool(v).unwrap_or(self.stacked),
+                "max_width_pct" => {
+                    self.max_width_pct = v.parse().map(|x: u32| x.min(90)).unwrap_or(self.max_width_pct)
+                }
                 "speed_unit" => self.unit = SpeedUnit::from_key(v).unwrap_or(self.unit),
                 "adapter" => self.adapter = v.to_string(),
                 "interval_ms" => {
@@ -379,6 +385,7 @@ impl Settings {
         };
         o.push_str(&format!(
             "\nvisible = {}\nsparklines = {}\nlabels = {}\n# 1 = metrics stacked in rows, 0 = one line, each metric its own column\nstacked = {}\n\
+             # widest the widget may get, % of taskbar width; 0 = auto (never cover app icons)\nmax_width_pct = {}\n\
              # auto | autobits | KB/s | MB/s | Kbps | Mbps\nspeed_unit = {}\n\
              # empty = all connected physical adapters; otherwise the adapter name (e.g. Wi-Fi)\nadapter = {}\n\
              interval_ms = {}\n\n\
@@ -392,6 +399,7 @@ impl Settings {
             b(self.sparklines),
             b(self.labels),
             b(self.stacked),
+            self.max_width_pct,
             self.unit.key(),
             self.adapter,
             self.interval_ms,
@@ -438,4 +446,27 @@ mod tests {
         assert_eq!(s.offset("display3", false), 40);
         assert_eq!(s.offset("DISPLAY2", false), 0);
     }
+}
+
+/// Notify `hwnd` with `msg` whenever a file in the data folder is written.
+/// Kernel change notification on a sleeping thread — no polling.
+pub fn watch(hwnd: isize, msg: u32) {
+    use windows_sys::Win32::Storage::FileSystem::*;
+    use windows_sys::Win32::System::Threading::{WaitForSingleObject, INFINITE};
+    let dir = crate::util::wide(&crate::util::data_dir().display().to_string());
+    let _ = std::thread::Builder::new().name("settings-watch".into()).stack_size(64 * 1024).spawn(move || unsafe {
+        let h = FindFirstChangeNotificationW(dir.as_ptr(), 0, FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_FILE_NAME);
+        if h == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+            return;
+        }
+        loop {
+            if WaitForSingleObject(h, INFINITE) != 0 {
+                return;
+            }
+            windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(hwnd as _, msg, 0, 0);
+            if FindNextChangeNotification(h) == 0 {
+                return;
+            }
+        }
+    });
 }

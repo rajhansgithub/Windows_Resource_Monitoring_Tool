@@ -36,7 +36,8 @@ Pick any combination from **right-click → Metrics**. Default: CPU, RAM, GPU, �
 
 - **Auto-docks** next to the tray. Follows the taskbar: bottom, top, left, right, any DPI, small/large taskbar, Explorer restarts.
 - **Multi-monitor**: a widget on every taskbar, or only the ones you pick (right-click → *Displays*). Needs Windows' "Show my taskbar on all displays". Each display keeps its own drag position; mixed DPI is handled per monitor.
-- **Fits the taskbar**: 1, 2 or 3 rows depending on taskbar height; related metrics (▲/▼, CPU/RAM) stay paired; widths never jitter.
+- **Never covers your app icons**: at startup it asks the taskbar (UI Automation) where its buttons end and keeps the widget in the free space. Too many metrics? It compacts step by step — one line → pairs stacked (▲ over ▼, CPU over RAM) → groups share columns → no sparklines — and anything that still doesn't fit moves to the hover panel (shown as “+N”). Opened lots of apps? Right-click → Appearance → *Re-check taskbar icons*.
+- **No background polling**: besides reading the metrics each interval, everything is event-driven — taskbar moves, auto-hide, full-screen apps, theme and settings-file changes all arrive as Windows notifications.
 - **Hides itself** for full-screen games, videos and presentations — only on the monitor that's full-screen — and when an auto-hide taskbar slides away.
 - **Stays on top** of the Windows 11 taskbar (re-asserted on focus change, no polling).
 - **Hover** → details panel: ring gauges for CPU / memory / GPU, live network and disk charts, data usage (today, month, cap), uptime, battery, top 5 processes by CPU, memory and disk I/O.
@@ -71,6 +72,7 @@ Most options are in the right-click menu. Everything is also in `%LOCALAPPDATA%\
 | `speed_unit` | `auto`, `autobits`, `KB/s`, `MB/s`, `Kbps`, `Mbps` |
 | `adapter` | empty = all physical adapters, or a name such as `Wi-Fi` |
 | `interval_ms` | 250–10000 |
+| `max_width_pct` | 0 = auto (stay clear of app icons), or a fixed % of the taskbar width |
 | `stacked` | 1 = metrics stacked in 2 rows, 0 = one line, each metric its own column (menu: Appearance → Stacked) |
 | `mode` | `dock` or `float` |
 | `dock_offset` | gap from the tray on the main taskbar (set by dragging) |

@@ -4,6 +4,7 @@
 mod app;
 mod autostart;
 mod fmt;
+mod icons;
 mod overlay;
 mod popup;
 mod render;
