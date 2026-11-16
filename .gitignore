@@ -1,16 +1,3 @@
-# Build Results
-bin/
-obj/
-publish/
-Installer/
-
-# IDE/Editor
-.vs/
+/target
+/dist
 *.user
-*.suo
-*.pdb
-
-# Logs
-*.log
-crash_log.txt
-debug_log.txt
