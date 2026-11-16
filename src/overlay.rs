@@ -32,6 +32,10 @@ pub struct Overlay {
     pub drag: Option<Drag>,
     /// Set after a click closes the panel; cleared when the mouse leaves.
     pub no_hover: bool,
+    /// Screen x where the taskbar's app buttons end (from UI Automation).
+    pub icons: Option<i32>,
+    /// A full-screen app is on this monitor (updated on events only).
+    pub fullscreen: bool,
 }
 
 /// Which metrics belong together in one column (e.g. ▲ above ▼).
@@ -65,6 +69,40 @@ pub fn pack(rows: &[Metric], rpc: usize) -> Vec<Vec<Metric>> {
         }
     }
     cols
+}
+
+/// (row index, x, y, value_left, value_right, spark rect, draw label)
+type Cell = (usize, i32, i32, i32, i32, Option<Rect>, bool);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Pack {
+    /// One line, every metric its own column.
+    Flat,
+    /// Related metrics stacked (▲ over ▼, CPU over RAM); groups never mix.
+    Groups,
+    /// Fill every column (different groups may share one).
+    Full,
+}
+
+pub fn pack_groups(rows: &[Metric], rpc: usize) -> Vec<Vec<Metric>> {
+    let mut cols: Vec<Vec<Metric>> = Vec::new();
+    for &m in rows {
+        match cols.last_mut() {
+            Some(c) if group(c[0]) == group(m) && c.len() < rpc => c.push(m),
+            _ => cols.push(vec![m]),
+        }
+    }
+    cols
+}
+
+struct Geo {
+    line_h: i32,
+    gap: i32,
+    col_gap: i32,
+    pad: i32,
+    spark_w: i32,
+    spark_h: i32,
+    small_gap: i32,
 }
 
 fn has_spark(m: Metric) -> bool {
@@ -127,6 +165,8 @@ impl Overlay {
             tracking: false,
             drag: None,
             no_hover: false,
+            icons: None,
+            fullscreen: false,
         })
     }
 
@@ -156,11 +196,15 @@ impl Overlay {
         self.reset_widths();
     }
 
-    pub fn show(&mut self, on: bool) {
+    /// `raise`: re-assert topmost (only after events, e.g. focus changed).
+    pub fn show(&mut self, on: bool, raise: bool) {
         unsafe {
             if on {
                 if !self.shown {
                     ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+                }
+                if self.shown && !raise {
+                    return;
                 }
                 // Win11 raises the taskbar over other topmost windows when clicked; re-assert.
                 SetWindowPos(
@@ -177,6 +221,90 @@ impl Overlay {
             }
         }
         self.shown = on;
+    }
+
+    /// Widest the widget may be on the taskbar without covering app icons.
+    fn budget(&self, s: &crate::settings::Settings) -> Option<i32> {
+        let tb = self.tb;
+        if s.mode != Mode::Dock || !tb.edge.horizontal() {
+            return None;
+        }
+        let scale = tb.dpi as f32 / 96.0;
+        let sc = |v: f32| (v * scale).round() as i32;
+        let off = (s.offset(&tb.key(), tb.primary) as f32 * scale) as i32;
+        let right = tb.tray.l - sc(4.0) - off;
+        let b = if s.max_width_pct > 0 {
+            tb.rect.w() * s.max_width_pct as i32 / 100
+        } else {
+            match self.icons {
+                Some(icons) => right - icons - sc(12.0),
+                // Not known yet (or UI Automation unavailable): ~30% of the taskbar.
+                None => tb.rect.w() * 30 / 100,
+            }
+        };
+        Some(b.max(sc(60.0)))
+    }
+
+    /// Horizontal layout for one packing level. Returns (cells, width, height).
+    #[allow(clippy::too_many_arguments)]
+    fn layout_h(
+        &self,
+        rows: &[Metric],
+        p: Pack,
+        rpc: usize,
+        sparks: bool,
+        labels: bool,
+        g: &Geo,
+        pitch_for: &dyn Fn(usize) -> i32,
+        dock: bool,
+        thickness: i32,
+    ) -> (Vec<Cell>, i32, i32) {
+        let font = self.font;
+        let cols = match p {
+            Pack::Flat => pack(rows, 1),
+            Pack::Groups => pack_groups(rows, rpc),
+            Pack::Full => pack(rows, rpc),
+        };
+        let used_rows = cols.iter().map(|c| c.len()).max().unwrap_or(1);
+        let pitch = pitch_for(used_rows);
+        let hh = if dock { thickness.max(g.line_h + 2) } else { used_rows as i32 * pitch + 2 * g.pad };
+        let vw = |r: Metric| self.sticky[r.idx()];
+        let spark_part = |r: Metric| if sparks && has_spark(r) { g.gap + g.spark_w } else { 0 };
+        let mut cells = Vec::with_capacity(rows.len());
+        let mut x = g.pad;
+        let mut idx = 0;
+        for (ci, col) in cols.iter().enumerate() {
+            let val_w = col.iter().map(|&r| vw(r)).max().unwrap_or(0);
+            let sp = col.iter().map(|&r| spark_part(r)).max().unwrap_or(0);
+            let lw = if labels {
+                col.iter().map(|&r| self.canvas.measure(font, short_label(r)).0).max().unwrap_or(0)
+            } else {
+                0
+            };
+            let lab_part = if lw > 0 { lw + g.gap } else { 0 };
+            let y0 = (hh - col.len() as i32 * pitch) / 2 + (pitch - g.line_h) / 2;
+            for (j, &r) in col.iter().enumerate() {
+                let y = y0 + j as i32 * pitch;
+                let vr = x + lab_part + val_w;
+                let spark = (spark_part(r) > 0).then(|| Rect {
+                    l: vr + g.gap,
+                    t: y + (g.line_h - g.spark_h) / 2,
+                    r: vr + g.gap + g.spark_w,
+                    b: y + (g.line_h - g.spark_h) / 2 + g.spark_h,
+                });
+                cells.push((idx, x, y, x + lab_part, vr, spark, lw > 0));
+                idx += 1;
+            }
+            // Related metrics on one line (▲ then ▼) sit closer together.
+            let near = p == Pack::Flat
+                && cols.get(ci + 1).is_some_and(|n| group(n[0]) == group(col[col.len() - 1]));
+            let gp = if near { g.small_gap } else { g.col_gap };
+            x += lab_part + val_w + sp;
+            if ci + 1 < cols.len() {
+                x += gp;
+            }
+        }
+        (cells, x + g.pad, hh)
     }
 
     /// Measure, lay out and draw the widget, then position it.
@@ -199,9 +327,9 @@ impl Overlay {
 
         let thickness = if tb.edge.horizontal() { tb.rect.h() } else { tb.rect.w() };
         let mut font_px = (13.0 * scale * ts).round() as u32;
-        // Rows per column for a horizontal strip: fit 2 lines (or 3 on tall taskbars).
-        let mut rpc = if m.s.stacked { 2usize } else { 1 };
-        if dock && horiz && m.s.stacked {
+        // Most rows a column may hold on this taskbar: 2 (3 on tall taskbars, 1 on tiny ones).
+        let mut rpc = 2usize;
+        if dock && horiz {
             let avail = thickness - sc(4.0);
             let line = |px: u32| (px as f32 * 1.32).ceil() as i32;
             if line(font_px) * 3 <= avail && thickness >= sc(64.0) {
@@ -229,12 +357,15 @@ impl Overlay {
         let spark_h = (line_h - sc(4.0)).max(4);
         // Row pitch: use the taskbar's height for breathing room between rows
         // (up to 1.5x line height) instead of stacking lines edge to edge.
-        let pitch = if dock && horiz {
-            let avail = thickness - 2 * sc(3.0);
-            (avail / rpc as i32).clamp(line_h, (line_h as f32 * 1.5) as i32)
-        } else {
-            line_h + sc(4.0)
+        let pitch_for = |rows_n: usize| {
+            if dock && horiz {
+                let avail = thickness - 2 * sc(3.0);
+                (avail / rows_n.max(1) as i32).clamp(line_h, (line_h as f32 * 1.5) as i32)
+            } else {
+                line_h + sc(4.0)
+            }
         };
+        let pitch = pitch_for(rpc);
 
         let values: Vec<(String, u8, &str)> = rows.iter().map(|&r| m.value(r)).collect();
         let label_w = |c: &[Metric]| -> i32 {
@@ -250,47 +381,64 @@ impl Overlay {
             self.sticky[r.idx()] = self.sticky[r.idx()].max(tw).min(cap);
         }
         let vw = |r: Metric| self.sticky[r.idx()];
-        let spark_part = |r: Metric| if spark_w > 0 && has_spark(r) { gap + spark_w } else { 0 };
 
-        // (row index, x, y, value_left, value_right, spark rect, draw label)
-        let mut cells: Vec<(usize, i32, i32, i32, i32, Option<Rect>, bool)> = Vec::with_capacity(n);
+        let geo = Geo { line_h, gap, col_gap, pad, spark_w, spark_h, small_gap: sc(8.0) };
+        let mut cells: Vec<Cell> = Vec::with_capacity(n);
+        // "+N" marker for metrics that only fit in the hover panel.
+        let mut more: Option<(String, i32, i32)> = None;
+        let more_w = gap + self.canvas.measure(font, "+88").0;
         let (w, h);
         if n == 0 {
             (w, h) = (sc(24.0), if dock && horiz { thickness } else { line_h + 2 * pad });
         } else if horiz {
-            let cols = pack(&rows, rpc);
-            let hh = if dock { thickness.max(line_h + 2) } else { rpc as i32 * pitch + 2 * pad };
-            let mut x = pad;
-            let mut idx = 0;
-            let small_gap = sc(8.0);
-            for (ci, col) in cols.iter().enumerate() {
-                let val_w = col.iter().map(|&r| vw(r)).max().unwrap_or(0);
-                let sp = col.iter().map(|&r| spark_part(r)).max().unwrap_or(0);
-                let lw = label_w(col);
-                let lab_part = if lw > 0 { lw + gap } else { 0 };
-                let y0 = (hh - col.len() as i32 * pitch) / 2 + (pitch - line_h) / 2;
-                for (j, &r) in col.iter().enumerate() {
-                    let y = y0 + j as i32 * pitch;
-                    let vr = x + lab_part + val_w;
-                    let spark = (spark_part(r) > 0).then(|| Rect {
-                        l: vr + gap,
-                        t: y + (line_h - spark_h) / 2,
-                        r: vr + gap + spark_w,
-                        b: y + (line_h - spark_h) / 2 + spark_h,
-                    });
-                    cells.push((idx, x, y, x + lab_part, vr, spark, lw > 0));
-                    idx += 1;
+            // Try progressively more compact layouts until the widget fits the
+            // free space next to the tray (budget), so it never covers app icons.
+            let start = if m.s.stacked && rpc > 1 { Pack::Groups } else { Pack::Flat };
+            let mut levels: Vec<(Pack, bool, bool)> = Vec::new();
+            for (p, sp, lb) in [
+                (Pack::Flat, true, true),
+                (Pack::Groups, true, true),
+                (Pack::Full, true, true),
+                (Pack::Groups, false, true),
+                (Pack::Full, false, true),
+                (Pack::Full, false, false),
+            ] {
+                let p = if rpc == 1 { Pack::Flat } else { p };
+                if p < start || levels.contains(&(p, sp, lb)) {
+                    continue;
                 }
-                // Related metrics on one line (▲ then ▼) sit closer together.
-                let near = rpc == 1
-                    && cols.get(ci + 1).is_some_and(|n| group(n[0]) == group(col[col.len() - 1]));
-                let g = if near { small_gap } else { col_gap };
-                x += lab_part + val_w + sp + g;
-                if ci + 1 == cols.len() {
-                    x -= g;
+                levels.push((p, sp, lb));
+            }
+            let budget = self.budget(&m.s);
+            // Still too wide when fully stacked? Move trailing metrics to the
+            // hover panel (shown as "+N") rather than cover icons or drop labels.
+            let mut vis = rows.len();
+            if let Some(b) = budget {
+                while vis > 2 {
+                    let l = self.layout_h(&rows[..vis], Pack::Full, rpc, false, m.s.labels, &geo, &pitch_for, dock, thickness);
+                    if l.1 + if vis < rows.len() { more_w } else { 0 } <= b {
+                        break;
+                    }
+                    vis -= 1;
                 }
             }
-            (w, h) = (x + pad, hh);
+            let mut chosen = None;
+            for &(p, sp, lb) in &levels {
+                let l = self.layout_h(&rows[..vis], p, rpc, sp && spark_w > 0, lb && m.s.labels, &geo, &pitch_for, dock, thickness);
+                let fits = budget.is_none_or(|b| l.1 + if vis < rows.len() { more_w } else { 0 } <= b);
+                chosen = Some(l);
+                if fits {
+                    break;
+                }
+            }
+            let (c, mut ww, hh) = chosen.unwrap_or_default();
+            cells = c;
+            if vis < rows.len() {
+                let t = format!("+{}", rows.len() - vis);
+                more = Some((t, ww - pad + gap, (hh - line_h) / 2));
+                ww += more_w;
+            }
+            (w, h) = (ww, hh);
         } else {
             // Vertical taskbar: one row per metric, drop parts that don't fit.
             let width = thickness.max(sc(40.0));
@@ -332,6 +480,9 @@ impl Overlay {
         }
         // Soft outline behind text when there's no solid background behind it.
         self.canvas.halo = (opacity < 120).then(|| if m.dark { Rgba(0, 0, 0, 110) } else { Rgba(255, 255, 255, 150) });
+        if let Some((t, x, y)) = &more {
+            self.canvas.text(font, t, *x, *y, fg.mix(Rgba(128, 128, 128, 255), 0.5));
+        }
         for &(i, x, y, vl, vr, spark, with_label) in &cells {
             let r = rows[i];
             let (v, lvl, _) = &values[i];
