@@ -241,6 +241,8 @@ pub struct App {
     shut_down: bool,
     detail_until: Option<Instant>,
     menu_open: bool,
+    /// Item under the mouse/keyboard in the open menu (from WM_MENUSELECT).
+    menu_sel: (HMENU, usize),
     /// Background UI Automation watcher for taskbar app-icon positions.
     icons: Option<crate::icons::Watcher>,
     /// Set by events: re-read taskbar geometry on the next refresh.
@@ -349,6 +351,7 @@ pub fn create(hinst: HINSTANCE) -> Option<()> {
             menu_open: false,
             popup_cache: None,
             icons: None,
+            menu_sel: (std::ptr::null_mut(), 0),
             need_locate: true,
             need_check: true,
             move_hook: std::ptr::null_mut(),
@@ -838,16 +841,15 @@ impl App {
 
             let hwnd = self.hwnd;
             self.menu_open = true;
+            self.menu_sel = (std::ptr::null_mut(), 0);
             SetForegroundWindow(hwnd);
+            // Lets checkbox items toggle without closing the menu.
+            let hook = SetWindowsHookExW(WH_MSGFILTER, Some(menu_filter), std::ptr::null_mut(), windows_sys::Win32::System::Threading::GetCurrentThreadId());
             // `self` must not be used past this point: the menu loop re-enters.
-            let cmd = TrackPopupMenuEx(
-                hm,
-                TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
-                x,
-                y,
-                hwnd,
-                std::ptr::null(),
-            );
+            let cmd = TrackPopupMenuEx(hm, TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, hwnd, std::ptr::null());
+            if !hook.is_null() {
+                UnhookWindowsHookEx(hook);
+            }
             DestroyMenu(hm);
             PostMessageW(hwnd, WM_NULL, 0, 0);
             if let Some(a) = app() {
@@ -856,6 +858,18 @@ impl App {
                     a.command(cmd as usize);
                 }
             }
+        }
+    }
+
+    /// Checkbox items that keep the menu open when clicked; returns new state.
+    fn sticky_state(&self, id: usize) -> Option<bool> {
+        let s = &self.m.s;
+        match id {
+            ID_SPARK => Some(s.sparklines),
+            ID_LABELS => Some(s.labels),
+            ID_STACKED => Some(s.stacked),
+            _ if (ID_METRIC..ID_METRIC + Metric::ALL.len()).contains(&id) => Some(s.show[id - ID_METRIC]),
+            _ => None,
         }
     }
 
@@ -1146,6 +1160,34 @@ const TEXT_SIZES: [(&str, u32); 4] = [("Small", 90), ("Normal", 100), ("Large", 
 const BACKGROUNDS: [(&str, u8); 4] = [("None", 0), ("Subtle", 90), ("Strong", 180), ("Solid", 255)];
 const NIN_KEYSELECT_: u32 = NIN_SELECT | 1;
 
+/// Runs inside the menu's modal loop. A click (or Space/Enter) on a checkbox
+/// item toggles it in place and is swallowed, so the menu stays open.
+unsafe extern "system" fn menu_filter(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if code == MSGF_MENU as i32 && l != 0 {
+        let msg = &*(l as *const MSG);
+        let key = msg.message == WM_KEYDOWN && (msg.wParam == VK_RETURN as usize || msg.wParam == VK_SPACE as usize);
+        if msg.message == WM_LBUTTONUP || key {
+            if let Some(a) = app() {
+                let (hm, id) = a.menu_sel;
+                let over = key || {
+                    let pos = MenuItemFromPoint(std::ptr::null_mut(), hm, msg.pt);
+                    pos >= 0 && GetMenuItemID(hm, pos) as usize == id
+                };
+                if !hm.is_null() && over && a.sticky_state(id).is_some() {
+                    a.command(id);
+                    let on = a.sticky_state(id).unwrap_or(false);
+                    CheckMenuItem(hm, id as u32, MF_BYCOMMAND | if on { MF_CHECKED } else { MF_UNCHECKED });
+                    if !msg.hwnd.is_null() {
+                        InvalidateRect(msg.hwnd, std::ptr::null(), 1);
+                    }
+                    return 1;
+                }
+            }
+        }
+    }
+    CallNextHookEx(std::ptr::null_mut(), code, w, l)
+}
+
 unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match msg {
         WM_MOUSEACTIVATE => MA_NOACTIVATE as isize,
@@ -1235,6 +1277,16 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             if changed {
                 a.refresh(true);
             }
+            0
+        }
+        WM_MENUSELECT => {
+            // Remember the highlighted item for the menu filter (popups have no id).
+            let flags = (w >> 16) as u32 & 0xFFFF;
+            a.menu_sel = if flags & MF_POPUP == 0 && flags != 0xFFFF {
+                (l as HMENU, loword(w) as usize)
+            } else {
+                (std::ptr::null_mut(), 0)
+            };
             0
         }
         WM_DISPLAYCHANGE | WM_DPICHANGED => {

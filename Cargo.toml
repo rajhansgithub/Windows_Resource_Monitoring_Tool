@@ -1,6 +1,6 @@
 [package]
 name = "resmon"
-version = "2.2.0"
+version = "2.2.1"
 edition = "2021"
 description = "Ultra-light taskbar resource monitor for Windows 10/11"
 license = "MIT"
