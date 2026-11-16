@@ -664,6 +664,7 @@ impl App {
             let dm = CreatePopupMenu();
             add(dm, ID_SPARK, "Sparklines", s.sparklines);
             add(dm, ID_LABELS, "Labels", s.labels);
+            add(dm, ID_STACKED, "Stacked (2 rows)", s.stacked);
             sep(dm);
             let tm = CreatePopupMenu();
             for (i, (n, t)) in [("Match Windows", Theme::Auto), ("Dark", Theme::Dark), ("Light", Theme::Light)]
@@ -831,6 +832,7 @@ impl App {
             ID_VISIBLE => s.visible = !s.visible,
             ID_SPARK => s.sparklines = !s.sparklines,
             ID_LABELS => s.labels = !s.labels,
+            ID_STACKED => s.stacked = !s.stacked,
             ID_FULLSCREEN => s.hide_fullscreen = !s.hide_fullscreen,
             ID_CLICKTHRU => s.click_through = !s.click_through,
             ID_DOCK => s.mode = Mode::Dock,
@@ -1023,6 +1025,7 @@ const ID_CLICKTHRU: usize = 604;
 const ID_DOCK: usize = 605;
 const ID_FLOAT: usize = 606;
 const ID_RESET_POS: usize = 607;
+const ID_STACKED: usize = 608;
 const ID_REPORT: usize = 700;
 const ID_TASKMGR: usize = 701;
 const ID_AUTOSTART: usize = 702;

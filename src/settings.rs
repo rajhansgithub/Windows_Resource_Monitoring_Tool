@@ -103,6 +103,8 @@ pub struct Settings {
     pub visible: bool,
     pub sparklines: bool,
     pub labels: bool,
+    /// Two (or three) metrics per column; off = one line, each metric its own column.
+    pub stacked: bool,
     pub unit: SpeedUnit,
     pub adapter: String,
     pub interval_ms: u32,
@@ -141,6 +143,7 @@ impl Default for Settings {
             visible: true,
             sparklines: true,
             labels: true,
+            stacked: true,
             unit: SpeedUnit::AutoBytes,
             adapter: String::new(),
             interval_ms: 1000,
@@ -273,6 +276,7 @@ impl Settings {
                 "visible" => self.visible = parse_bool(v).unwrap_or(self.visible),
                 "sparklines" => self.sparklines = parse_bool(v).unwrap_or(self.sparklines),
                 "labels" => self.labels = parse_bool(v).unwrap_or(self.labels),
+                "stacked" => self.stacked = parse_bool(v).unwrap_or(self.stacked),
                 "speed_unit" => self.unit = SpeedUnit::from_key(v).unwrap_or(self.unit),
                 "adapter" => self.adapter = v.to_string(),
                 "interval_ms" => {
@@ -374,7 +378,7 @@ impl Settings {
             Mode::Float => "float",
         };
         o.push_str(&format!(
-            "\nvisible = {}\nsparklines = {}\nlabels = {}\n\
+            "\nvisible = {}\nsparklines = {}\nlabels = {}\n# 1 = metrics stacked in rows, 0 = one line, each metric its own column\nstacked = {}\n\
              # auto | autobits | KB/s | MB/s | Kbps | Mbps\nspeed_unit = {}\n\
              # empty = all connected physical adapters; otherwise the adapter name (e.g. Wi-Fi)\nadapter = {}\n\
              interval_ms = {}\n\n\
@@ -387,6 +391,7 @@ impl Settings {
             b(self.visible),
             b(self.sparklines),
             b(self.labels),
+            b(self.stacked),
             self.unit.key(),
             self.adapter,
             self.interval_ms,
