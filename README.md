@@ -1,65 +1,100 @@
-<img width="481" height="46" alt="image" src="https://github.com/user-attachments/assets/6bd7cfaf-87c2-47c8-8ae2-9268371ade08" />
+# Resource Monitor
 
-# Windows Resource Monitor 
+Tiny, native taskbar monitor for Windows 10 and 11. Written in Rust on raw Win32.
+No .NET, no driver, no admin rights, no background service.
 
-A lightweight, open-source Windows desktop application designed for real-time system monitoring. It provides an unobtrusive, always-on-top overlay that tracks network speed (Upload/Download), total data usage, CPU load, and GPU utilization. Ideally suited for power users who want minimal distraction but maximum visibility into their system's performance.
+- **~0.5 MB** single exe, no runtime, no installer required
+- **A few MB of RAM**, near-zero CPU (one sample per second, coalesced timers, below-normal priority, EcoQoS)
+- Works on current Windows 11 (24H2/25H2) — no WinRing0 / kernel driver that Defender blocks
 
-## Key Features
+## What it shows
 
-### 🚀 Real-time Monitoring
-- **Network Speed**: Instant visualization of Upload and Download speeds.
-- **Total Usage Tracking**:
-  - Displays today's total data usage directly on the main widget.
-  - Keeps a persistent history of Daily, Monthly, and Yearly data consumption.
-- **Hardware Stats**:
-  - **CPU Usage**: Real-time percentage load.
-  - **GPU Usage**: Monitoring for single or multiple GPUs.
+Docked beside the tray, on the taskbar:
 
-### 📊 Comprehensive Usage Reports
-- **Detailed History**: View your data consumption trends over time.
-- **Report Window**: Dedicated interface to analyze Daily, Monthly, Yearly, and All-Time usage statistics.
+| Metric | Source |
+|---|---|
+| CPU % (matches Task Manager) | PDH `% Processor Utility` |
+| Memory % | `GlobalMemoryStatusEx` |
+| GPU % and GPU memory (NVIDIA / AMD / Intel) | PDH `GPU Engine`, same as Task Manager |
+| Disk read / write / active time | PDH `PhysicalDisk` |
+| Upload / download speed | `GetIfTable2` 64-bit counters |
+| Data used today | exact byte counters, saved per day |
+| Top process | `NtQuerySystemInformation` |
+| Battery | `GetSystemPowerStatus` |
 
-### 🛠️ Customization & Control
-- **System Tray Integration**: Full control via a right-click context menu.
-- **Toggle Visibility**: Show or hide any component (CPU, GPU, Network, Total Usage).
-- **Flexible Units**: Switch between KB/s, MB/s, Kbps, and Mbps.
-- **Adapter Selection**: Choose specific network interfaces to monitor.
-- **Startup Manager**: Built-in option to launch automatically with Windows.
+Pick any combination from **right-click → Metrics**. Default: CPU, RAM, GPU, ▲, ▼, today's download.
 
-## Installation
+## Smart overlay
 
-### From Release
-1.  Go to the [Releases](../../releases) page.
-2.  Download the latest installer or portable executable.
-3.  Run the application. It will minimize to the system tray and display the widget near your taskbar.
+- **Auto-docks** next to the tray. Follows the taskbar: bottom, top, left, right, any DPI, small/large taskbar, Explorer restarts.
+- **Multi-monitor**: a widget on every taskbar, or only the ones you pick (right-click → *Displays*). Needs Windows' "Show my taskbar on all displays". Each display keeps its own drag position; mixed DPI is handled per monitor.
+- **Fits the taskbar**: 1, 2 or 3 rows depending on taskbar height; related metrics (▲/▼, CPU/RAM) stay paired; widths never jitter.
+- **Hides itself** for full-screen games, videos and presentations — only on the monitor that's full-screen — and when an auto-hide taskbar slides away.
+- **Stays on top** of the Windows 11 taskbar (re-asserted on focus change, no polling).
+- **Hover** → details panel: per-metric 60 s charts, memory used/total, disk active time, uptime, data usage, battery, top 5 processes by CPU, memory and disk I/O.
+- **Click** → pin the panel. **Double-click** → Task Manager. **Drag** → move along the taskbar (or anywhere in floating mode).
+- **Theme-aware**: matches light/dark taskbar; values turn amber/red past thresholds (default 75% / 90%).
+- **Sensors your PC lacks are hidden** automatically (no GPU counter → no GPU row; no battery → no battery row).
+- **Display off** → samples every 5 s. Data usage stays exact anyway (cumulative counters).
 
-### Building from Source
+## Data usage
 
-**Prerequisites**:
-- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
-- [Inno Setup 6+](https://jrsoftware.org/isdl.php) (optional, for installer creation)
+- Counted from interface byte counters, so totals are exact regardless of the update interval.
+- Physical adapters only — no double counting through VPN/filter/virtual adapters. Or choose one adapter.
+- **Report** (right-click → *Data usage report*, double-click the tray icon, or `ResourceMonitor.exe --report`):
+  today, yesterday, this/last month, year, all time, last-30-days chart, monthly and yearly tables.
+- **Monthly data cap**: set `data_cap_gb` and `cap_reset_day` in the settings file → progress bar, and the widget turns amber/red as you approach it.
+- Stored in `%LOCALAPPDATA%\ResourceMonitor\usage.csv` (plain CSV, atomic writes, saved every minute and on sleep/shutdown).
 
-**Steps**:
-1.  Clone the repository:
-    ```bash
-    git clone https://github.com/rajhansgithub/Windows_Resource_Monitoring_Tool.git
-    cd Windows_Resource_Monitoring_Tool
-    ```
-2.  Build the project:
-    ```bash
-    .\publish.bat
-    ```
-3.  The executable will be available in the `bin/Release` or `publish` directory.
+## Install
 
-## Usage
+1. Download `ResourceMonitor.exe` (portable) or `Setup_ResourceMonitor.exe` (per-user install, no admin) from [Releases](../../releases).
+2. Run it. Right-click the widget or tray icon → **Start with Windows**.
 
-- **Right-click the System Tray Icon** to:
-  - **View**: Toggle visibility of CPU, GPU, Network, and Total Usage widgets.
-  - **Usage Report**: Open the detailed data usage history window.
-  - **Speed Unit**: Switch between bits and bytes (e.g., Mbps vs MB/s).
-  - **Adapters**: Select the active network interface.
-  - **Run at Startup**: Toggle auto-start behavior.
+Upgrading from the old .NET version: settings and data usage history are imported automatically on first run, and the old autostart entry is removed.
+
+## Settings
+
+Most options are in the right-click menu. Everything is also in `%LOCALAPPDATA%\ResourceMonitor\settings.ini` (menu → *Edit settings file*); edits apply within a few seconds.
+
+| Key | Meaning |
+|---|---|
+| `show.<metric> = 1/0` | cpu, ram, gpu, vram, disk_read, disk_write, disk_active, net_up, net_down, today_up, today_down, top_process, battery |
+| `speed_unit` | `auto`, `autobits`, `KB/s`, `MB/s`, `Kbps`, `Mbps` |
+| `adapter` | empty = all physical adapters, or a name such as `Wi-Fi` |
+| `interval_ms` | 250–10000 |
+| `mode` | `dock` or `float` |
+| `dock_offset` | gap from the tray on the main taskbar (set by dragging) |
+| `displays` | `primary`, `all`, or a list such as `DISPLAY1,DISPLAY3` |
+| `dock_offset.DISPLAY2` | gap from the clock on another monitor's taskbar |
+| `hide_fullscreen`, `click_through` | 1/0 |
+| `text_scale` | 70–200 (%) |
+| `theme` | `auto`, `dark`, `light` |
+| `bg_opacity` | 0 (invisible) – 255 (solid) |
+| `warn_pct`, `crit_pct` | colour thresholds |
+| `data_cap_gb`, `cap_reset_day` | monthly cap (0 = off) and billing day |
+
+## Build
+
+```bash
+cargo build --release
+```
+
+Output: `target\release\ResourceMonitor.exe`. `publish.bat` also builds the installer when Inno Setup (`ISCC`) is on PATH. CI builds both on every push and attaches them to `v*` tags.
+
+## What changed from 1.x
+
+The .NET/WPF app was rewritten from scratch. Fixed along the way:
+
+- Required admin + a kernel driver (LibreHardwareMonitor/WinRing0), now blocked by Windows Defender's vulnerable-driver list → replaced by user-mode APIs.
+- 100 ms timer forcing z-order and position 10×/s → event-driven, 1 sample/s.
+- Data usage summed rounded per-second *speeds* (drifted, and double-counted virtual adapters) → exact byte counters.
+- Overlay covered full-screen games → auto-hides.
+- Tray icon vanished after Explorer restarts → re-created.
+- Prompted to "install" itself on every launch from a different folder → gone; plain portable exe.
+- Overlay position broke with DPI scaling, top/side taskbars, auto-hide → handled.
+- 70 MB self-contained .NET bundle → ~0.5 MB.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).

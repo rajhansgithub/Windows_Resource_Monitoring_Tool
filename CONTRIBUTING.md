@@ -1,4 +1,4 @@
-# Contributing to Windows Network Monitor
+# Contributing to Resource Monitor
 
 Thank you for your interest in contributing! We welcome bug reports, feature requests, and pull requests.
 
@@ -25,10 +25,13 @@ Please open an [Issue](../../issues) and include:
 - Windows Version.
 - Steps to reproduce.
 - Expected vs Actual behavior.
-- Any error messages (check `crash_log.txt` in the application directory if the app crashes).
+- Taskbar setup (position, auto-hide, Win11 alignment, scaling %).
+- Your `%LOCALAPPDATA%\ResourceMonitor\settings.ini` if relevant.
 
 ## Development Setup
 
-- Open the solution `WindowsNetworkMonitor.csproj` in Visual Studio or VS Code.
-- Ensure you have the .NET 8 SDK installed.
-- You can run the app in Debug mode directly from your IDE.
+- Install Rust (stable) from https://rustup.rs with the MSVC toolchain.
+- `cargo run` to start, `cargo test` for unit tests, `cargo build --release` for the final exe.
+- Cross-compiling from Linux: `rustup target add x86_64-pc-windows-gnu`, install `mingw-w64`, then
+  `cargo build --release --target x86_64-pc-windows-gnu` (linker set in `.cargo/config.toml`).
+- Keep it light: no new dependencies without a strong reason; nothing heavy on the per-tick path.
