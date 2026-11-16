@@ -109,8 +109,12 @@ pub struct Settings {
     pub mode: Mode,
     pub float_x: i32,
     pub float_y: i32,
-    /// Dock mode: extra distance (physical px at 96 dpi) from the tray, set by dragging.
+    /// Dock mode: extra distance (px at 96 dpi) from the tray, set by dragging.
     pub dock_offset: i32,
+    /// Same for secondary-monitor taskbars, keyed by display ("DISPLAY2").
+    pub offsets: Vec<(String, i32)>,
+    /// "primary", "all", or a comma list of displays ("DISPLAY1,DISPLAY3").
+    pub displays: String,
     pub hide_fullscreen: bool,
     pub click_through: bool,
     pub text_scale: u32,
@@ -144,6 +148,8 @@ impl Default for Settings {
             float_x: 100,
             float_y: 100,
             dock_offset: 0,
+            offsets: Vec::new(),
+            displays: "primary".into(),
             hide_fullscreen: true,
             click_through: false,
             text_scale: 100,
@@ -156,6 +162,18 @@ impl Default for Settings {
             first_run: true,
         }
     }
+}
+
+/// UTF-8 (with or without BOM), UTF-16 LE (Notepad "Unicode"), or ANSI.
+fn decode(bytes: &[u8]) -> String {
+    if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        return String::from_utf8_lossy(rest).into_owned();
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        let w: Vec<u16> = rest.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        return String::from_utf16_lossy(&w);
+    }
+    String::from_utf8_lossy(bytes).into_owned()
 }
 
 fn b(v: bool) -> &'static str {
@@ -183,16 +201,52 @@ impl Settings {
         self.show[m.idx()]
     }
 
+    pub fn offset(&self, display: &str, primary: bool) -> i32 {
+        if primary {
+            return self.dock_offset;
+        }
+        self.offsets.iter().find(|(k, _)| k.eq_ignore_ascii_case(display)).map_or(0, |(_, v)| *v)
+    }
+
+    pub fn set_offset(&mut self, display: &str, primary: bool, v: i32) {
+        if primary {
+            self.dock_offset = v;
+        } else if let Some(e) = self.offsets.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(display)) {
+            e.1 = v;
+        } else {
+            self.offsets.push((display.to_string(), v));
+        }
+    }
+
+    /// Should the taskbar on `display` get a widget?
+    pub fn wants_display(&self, display: &str, primary: bool) -> bool {
+        match self.displays.to_ascii_lowercase().as_str() {
+            "all" => true,
+            "primary" => primary,
+            list => list.split(',').any(|d| d.trim().eq_ignore_ascii_case(display)),
+        }
+    }
+
     pub fn load() -> Self {
         let mut s = Settings::default();
-        match std::fs::read_to_string(Self::path()) {
-            Ok(txt) => {
+        let path = Self::path();
+        match std::fs::read(&path) {
+            Ok(bytes) => {
                 s.first_run = false;
-                s.apply(&txt);
+                s.apply(&decode(&bytes));
             }
-            Err(_) => s.import_legacy(),
+            Err(_) if !path.exists() => s.import_legacy(),
+            Err(_) => s.first_run = false,
         }
         s
+    }
+
+    /// Reload from disk on top of `self`; None if unreadable (e.g. mid-save).
+    pub fn reload(&self) -> Option<Settings> {
+        let bytes = std::fs::read(Self::path()).ok()?;
+        let mut s = Settings { first_run: false, offsets: Vec::new(), ..self.clone() };
+        s.apply(&decode(&bytes));
+        Some(s)
     }
 
     fn apply(&mut self, txt: &str) {
@@ -203,6 +257,12 @@ impl Settings {
             }
             let Some((k, v)) = line.split_once('=') else { continue };
             let (k, v) = (k.trim(), v.trim());
+            if let Some(d) = k.strip_prefix("dock_offset.") {
+                if let Ok(v) = v.parse::<i32>() {
+                    self.set_offset(d, false, v.max(0));
+                }
+                continue;
+            }
             if let Some(m) = k.strip_prefix("show.") {
                 if let (Some(m), Some(on)) = (Metric::ALL.iter().find(|x| x.key() == m), parse_bool(v)) {
                     self.show[m.idx()] = on;
@@ -223,7 +283,8 @@ impl Settings {
                 }
                 "float_x" => self.float_x = v.parse().unwrap_or(self.float_x),
                 "float_y" => self.float_y = v.parse().unwrap_or(self.float_y),
-                "dock_offset" => self.dock_offset = v.parse().unwrap_or(self.dock_offset),
+                "dock_offset" => self.dock_offset = v.parse().map(|x: i32| x.max(0)).unwrap_or(self.dock_offset),
+                "displays" => self.displays = if v.is_empty() { "primary".into() } else { v.to_string() },
                 "hide_fullscreen" => self.hide_fullscreen = parse_bool(v).unwrap_or(self.hide_fullscreen),
                 "click_through" => self.click_through = parse_bool(v).unwrap_or(self.click_through),
                 "text_scale" => {
@@ -318,6 +379,7 @@ impl Settings {
              # empty = all connected physical adapters; otherwise the adapter name (e.g. Wi-Fi)\nadapter = {}\n\
              interval_ms = {}\n\n\
              # dock = next to the tray, float = anywhere (drag it)\nmode = {}\nfloat_x = {}\nfloat_y = {}\ndock_offset = {}\n\
+             # Taskbars that get a widget: primary | all | DISPLAY1,DISPLAY2,...\ndisplays = {}\n\
              hide_fullscreen = {}\nclick_through = {}\n\n\
              # percent, 70..200\ntext_scale = {}\n# auto | dark | light\ntheme = {}\n# 0 (invisible) .. 255 (solid)\nbg_opacity = {}\n\
              # value colours: amber at warn_pct, red at crit_pct\nwarn_pct = {}\ncrit_pct = {}\n\n\
@@ -332,6 +394,7 @@ impl Settings {
             self.float_x,
             self.float_y,
             self.dock_offset,
+            self.displays,
             b(self.hide_fullscreen),
             b(self.click_through),
             self.text_scale,
@@ -342,6 +405,9 @@ impl Settings {
             self.data_cap_gb,
             self.cap_reset_day,
         ));
+        for (k, v) in &self.offsets {
+            o.push_str(&format!("dock_offset.{} = {}\n", k, v));
+        }
         let _ = crate::util::write_atomic(&Self::path(), o.as_bytes());
     }
 
@@ -361,5 +427,10 @@ mod tests {
         assert_eq!(s.unit, SpeedUnit::Mbps);
         assert_eq!(s.mode, Mode::Float);
         assert_eq!(s.text_scale, 200);
+        s.apply("displays = DISPLAY1, DISPLAY3\ndock_offset.DISPLAY3 = 40\n");
+        assert!(s.wants_display("DISPLAY3", false));
+        assert!(!s.wants_display("DISPLAY2", false));
+        assert_eq!(s.offset("display3", false), 40);
+        assert_eq!(s.offset("DISPLAY2", false), 0);
     }
 }

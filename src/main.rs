@@ -4,6 +4,7 @@
 mod app;
 mod autostart;
 mod fmt;
+mod overlay;
 mod popup;
 mod render;
 mod report;
@@ -30,8 +31,10 @@ fn main() {
         let name = wide("Local\\ResourceMonitor.SingleInstance");
         let mutex = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
         if GetLastError() == ERROR_ALREADY_EXISTS {
-            let h = util::find_window(app::OVERLAY_CLASS);
+            let h = util::find_window(app::MAIN_CLASS);
             if !h.is_null() {
+                // Let the running instance bring its windows to the front.
+                AllowSetForegroundWindow(ASFW_ANY);
                 PostMessageW(h, app::WM_APP_ACTIVATE, report as usize, 0);
             }
             return;

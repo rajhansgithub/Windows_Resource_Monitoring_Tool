@@ -32,7 +32,8 @@ pub fn register(hinst: HINSTANCE) {
 }
 
 fn client_size(scale: f32, cap: bool) -> (i32, i32) {
-    let h = if cap { 600.0 } else { 556.0 };
+    // Content: header + cards + chart + 6 table rows.
+    let h = if cap { 640.0 } else { 596.0 };
     ((640.0 * scale) as i32, (h * scale) as i32)
 }
 
@@ -43,12 +44,12 @@ pub fn open(a: &mut App) {
             SetForegroundWindow(a.report);
             return;
         }
-        let tb = a.tb;
+        let tb = a.primary_taskbar();
         let scale = tb.map_or(1.0, |t| t.dpi as f32 / 96.0);
         let (cw, ch) = client_size(scale, a.s.data_cap_gb > 0.0);
         let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
         let mut rc = RECT { left: 0, top: 0, right: cw, bottom: ch };
-        AdjustWindowRectEx(&mut rc, style, 0, 0);
+        AdjustWindowRectExForDpi(&mut rc, style, 0, 0, tb.map_or(96, |t| t.dpi));
         let (w, h) = (rc.right - rc.left, rc.bottom - rc.top);
         let work = tb.map(|t| t.work).unwrap_or(Rect { l: 0, t: 0, r: 1280, b: 720 });
         let x = work.l + (work.w() - w) / 2;
@@ -87,7 +88,7 @@ fn win_scale(hwnd: HWND) -> f32 {
         d as f32 / 96.0
     }
 }
-use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+use windows_sys::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
 
 fn paint(a: &App, hwnd: HWND) {
     let p = Painter::begin(hwnd);
@@ -254,7 +255,10 @@ fn paint(a: &App, hwnd: HWND) {
     };
     let mut months = Vec::new();
     let (mut yy, mut mm) = (y0, m0);
-    for _ in 0..8 {
+    for _ in 0..12 {
+        if months.len() == 6 {
+            break;
+        }
         let u = st.month(yy, mm);
         if u.total() > 0 || (yy, mm) == (y0, m0) {
             months.push((format!("{} {}", MONTHS[(mm as usize).clamp(1, 12) - 1], yy), u));
@@ -268,7 +272,7 @@ fn paint(a: &App, hwnd: HWND) {
     }
     let mut years: Vec<(String, Usage)> = Vec::new();
     let first_year = st.days.keys().next().map_or(y0, |k| usage::ymd(*k).0);
-    for yr in (first_year..=y0).rev().take(8) {
+    for yr in (first_year..=y0).rev().take(6) {
         years.push((yr.to_string(), st.year(yr)));
     }
     table(pad, "Monthly", &months, y);

@@ -117,8 +117,17 @@ pub fn create(hinst: HINSTANCE, owner: HWND) -> HWND {
     }
 }
 
+fn scale(a: &App) -> f32 {
+    a.anchor().map_or(1.0, |x| x.2)
+}
+
 fn sc(a: &App, v: f32) -> i32 {
-    (v * a.scale).round() as i32
+    (v * scale(a)).round() as i32
+}
+
+/// Clamp that never panics when the box is larger than the range.
+fn fit(v: i32, lo: i32, hi: i32) -> i32 {
+    v.min(hi).max(lo)
 }
 
 fn has_gpu(a: &App) -> bool {
@@ -143,10 +152,11 @@ fn size(a: &App) -> (i32, i32) {
 
 pub fn reposition(a: &mut App) {
     let (w, h) = size(a);
-    let Some(tb) = a.tb else { return };
-    let anchor = if unsafe { IsWindowVisible(a.hwnd) } != 0 { a.pos } else { tb.tray };
+    let Some((anchor, tb, _)) = a.anchor() else { return };
     let g = sc(a, 10.0);
-    let work = tb.work;
+    let center = POINT { x: (anchor.l + anchor.r) / 2, y: (anchor.t + anchor.b) / 2 };
+    let work = crate::taskbar::monitor_info(unsafe { MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST) })
+        .map_or(tb.work, |m| m.1);
     let above = (anchor.r - w, anchor.t - h - g);
     let below = (anchor.r - w, anchor.b + g);
     let left = (anchor.l - w - g, anchor.b - h);
@@ -159,7 +169,7 @@ pub fn reposition(a: &mut App) {
         (_, Edge::Right) => [left, above, below, right],
     };
     let clamp = |(x, y): (i32, i32)| {
-        (x.clamp(work.l + g, (work.r - w - g).max(work.l)), y.clamp(work.t + g, (work.b - h - g).max(work.t)))
+        (fit(x, work.l + g, work.r - w - g), fit(y, work.t + g, work.b - h - g))
     };
     let clear = |(x, y): (i32, i32)| !(x < anchor.r && x + w > anchor.l && y < anchor.b && y + h > anchor.t);
     let (x, y) = order.iter().map(|p| clamp(*p)).find(|p| clear(*p)).unwrap_or_else(|| clamp(order[0]));
@@ -196,7 +206,7 @@ fn paint(a: &mut App, hwnd: HWND) {
     }
     let p = Painter::begin(hwnd);
     let pal = palette(a.dark);
-    let f = Fonts::new(a.scale);
+    let f = Fonts::new(scale(a));
     let s = &a.snap;
     let pad = sc(a, 14.0);
     let right = p.w - pad;

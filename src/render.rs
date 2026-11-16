@@ -135,6 +135,13 @@ impl Canvas {
         self.mask = None;
         self.px = Dib::new(w, h);
         self.mask = Dib::new(w, h);
+        if self.px.is_none() || self.mask.is_none() {
+            self.px = None;
+            self.mask = None;
+            self.w = 0;
+            self.h = 0;
+            return;
+        }
         if let Some(m) = &self.mask {
             unsafe {
                 SetBkMode(m.dc, TRANSPARENT as i32);
@@ -188,6 +195,7 @@ impl Canvas {
 
     /// Anti-aliased rounded rectangle.
     pub fn fill_round(&mut self, r: Rect, rad: f32, c: Rgba) {
+        let rad = rad.min(r.w() as f32 / 2.0).min(r.h() as f32 / 2.0).max(0.0);
         let (w, h) = (self.w, self.h);
         let buf = self.buf();
         for y in r.t.max(0)..r.b.min(h) {

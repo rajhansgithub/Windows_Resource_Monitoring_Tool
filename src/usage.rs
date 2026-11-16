@@ -66,7 +66,7 @@ impl UsageStore {
         let path = crate::util::data_dir().join("usage.csv");
         let mut s = UsageStore { days: BTreeMap::new(), dirty: false, path };
         match std::fs::read_to_string(&s.path) {
-            Ok(txt) => s.parse_csv(&txt),
+            Ok(txt) => s.parse_csv(txt.trim_start_matches('\u{FEFF}')),
             Err(_) => {
                 s.import_legacy();
                 if !s.days.is_empty() {

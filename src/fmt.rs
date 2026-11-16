@@ -63,11 +63,11 @@ pub fn speed(bytes_per_s: f64, unit: SpeedUnit) -> String {
         SpeedUnit::Kbps => format!("{} Kbps", sig3(b * 8.0 / 1e3)),
         SpeedUnit::Mbps => format!("{} Mbps", sig3(b * 8.0 / 1e6)),
         SpeedUnit::AutoBytes => {
-            if b < 1000.0 {
+            if b < 999.5 {
                 format!("{:.0} B/s", b)
-            } else if b < 1000.0 * 1024.0 {
+            } else if b < 999.5 * 1024.0 {
                 format!("{} KB/s", sig3(b / 1024.0))
-            } else if b < 1000.0 * 1048576.0 {
+            } else if b < 999.5 * 1048576.0 {
                 format!("{} MB/s", sig3(b / 1048576.0))
             } else {
                 format!("{} GB/s", sig3(b / 1073741824.0))
@@ -75,11 +75,11 @@ pub fn speed(bytes_per_s: f64, unit: SpeedUnit) -> String {
         }
         SpeedUnit::AutoBits => {
             let bits = b * 8.0;
-            if bits < 1e3 {
+            if bits < 999.5 {
                 format!("{:.0} bps", bits)
-            } else if bits < 1e6 {
+            } else if bits < 999.5e3 {
                 format!("{} Kbps", sig3(bits / 1e3))
-            } else if bits < 1e9 {
+            } else if bits < 999.5e6 {
                 format!("{} Mbps", sig3(bits / 1e6))
             } else {
                 format!("{} Gbps", sig3(bits / 1e9))
@@ -97,7 +97,7 @@ pub fn bytes(n: u64) -> String {
     const U: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
     let mut v = n as f64;
     let mut i = 0;
-    while v >= 1000.0 && i < U.len() - 1 {
+    while v >= 999.5 && i < U.len() - 1 {
         v /= 1024.0;
         i += 1;
     }

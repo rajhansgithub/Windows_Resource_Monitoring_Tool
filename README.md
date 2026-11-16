@@ -27,8 +27,9 @@ Pick any combination from **right-click → Metrics**. Default: CPU, RAM, GPU, �
 ## Smart overlay
 
 - **Auto-docks** next to the tray. Follows the taskbar: bottom, top, left, right, any DPI, small/large taskbar, Explorer restarts.
+- **Multi-monitor**: a widget on every taskbar, or only the ones you pick (right-click → *Displays*). Needs Windows' "Show my taskbar on all displays". Each display keeps its own drag position; mixed DPI is handled per monitor.
 - **Fits the taskbar**: 1, 2 or 3 rows depending on taskbar height; related metrics (▲/▼, CPU/RAM) stay paired; widths never jitter.
-- **Hides itself** for full-screen games, videos and presentations, and when an auto-hide taskbar slides away.
+- **Hides itself** for full-screen games, videos and presentations — only on the monitor that's full-screen — and when an auto-hide taskbar slides away.
 - **Stays on top** of the Windows 11 taskbar (re-asserted on focus change, no polling).
 - **Hover** → details panel: per-metric 60 s charts, memory used/total, disk active time, uptime, data usage, battery, top 5 processes by CPU, memory and disk I/O.
 - **Click** → pin the panel. **Double-click** → Task Manager. **Drag** → move along the taskbar (or anywhere in floating mode).
@@ -63,7 +64,9 @@ Most options are in the right-click menu. Everything is also in `%LOCALAPPDATA%\
 | `adapter` | empty = all physical adapters, or a name such as `Wi-Fi` |
 | `interval_ms` | 250–10000 |
 | `mode` | `dock` or `float` |
-| `dock_offset` | gap from the tray (set by dragging) |
+| `dock_offset` | gap from the tray on the main taskbar (set by dragging) |
+| `displays` | `primary`, `all`, or a list such as `DISPLAY1,DISPLAY3` |
+| `dock_offset.DISPLAY2` | gap from the clock on another monitor's taskbar |
 | `hide_fullscreen`, `click_through` | 1/0 |
 | `text_scale` | 70–200 (%) |
 | `theme` | `auto`, `dark`, `light` |
