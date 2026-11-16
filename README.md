@@ -39,7 +39,7 @@ Pick any combination from **right-click → Metrics**. Default: CPU, RAM, GPU, �
 - **Never covers your app icons**: at startup it asks the taskbar (UI Automation) where its buttons end and keeps the widget in the free space. Too many metrics? It compacts step by step — one line → pairs stacked (▲ over ▼, CPU over RAM) → groups share columns → no sparklines — and anything that still doesn't fit moves to the hover panel (shown as “+N”). Opened lots of apps? Right-click → Appearance → *Re-check taskbar icons*.
 - **No background polling**: besides reading the metrics each interval, everything is event-driven — taskbar moves, auto-hide, full-screen apps, theme and settings-file changes all arrive as Windows notifications.
 - **Hides itself** for full-screen games, videos and presentations — only on the monitor that's full-screen — and when an auto-hide taskbar slides away.
-- **Stays on top** of the Windows 11 taskbar (re-asserted on focus change, no polling).
+- **Stays on top of the taskbar without flicker**: the taskbar owns the widget window, so Windows keeps it directly above the taskbar — clicking the taskbar can never cover it.
 - **Hover** → details panel: ring gauges for CPU / memory / GPU, live network and disk charts, data usage (today, month, cap), uptime, battery, top 5 processes by CPU, memory and disk I/O.
 - **Click** → pin the panel. **Double-click** → Task Manager. **Drag** → move along the taskbar (or anywhere in floating mode).
 - **Theme-aware**: matches light/dark taskbar; values turn amber/red past thresholds (default 75% / 90%).
