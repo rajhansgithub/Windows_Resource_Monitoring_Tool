@@ -238,6 +238,8 @@ pub struct App {
     shut_down: bool,
     detail_until: Option<Instant>,
     menu_open: bool,
+    /// Fonts + canvas reused by the details panel between repaints.
+    pub popup_cache: Option<(popup::Fonts, crate::render::Canvas)>,
 }
 
 impl Deref for App {
@@ -333,6 +335,7 @@ pub fn create(hinst: HINSTANCE) -> Option<()> {
             shut_down: false,
             detail_until: None,
             menu_open: false,
+            popup_cache: None,
         });
         a.popup = popup::create(hinst, hwnd);
         a.tray.add();

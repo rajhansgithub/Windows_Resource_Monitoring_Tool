@@ -2,7 +2,7 @@
 
 use crate::app::{accent, App, C_CRIT, C_WARN};
 use crate::fmt;
-use crate::render::{create_font, ui_face, Painter, Rgba};
+use crate::render::{create_font, ui_face, Canvas, Rgba};
 use crate::settings::Metric;
 use crate::taskbar::Edge;
 use crate::usage;
@@ -17,26 +17,36 @@ const CLASS: &str = "ResourceMonitor.Popup";
 pub struct Pal {
     pub bg: Rgba,
     pub card: Rgba,
+    pub chip: Rgba,
+    pub border: Rgba,
+    pub track: Rgba,
     pub fg: Rgba,
     pub dim: Rgba,
     pub line: Rgba,
 }
 
+/// See docs/ui-reference: near-black base, raised cards, hairline borders.
 pub fn palette(dark: bool) -> Pal {
     if dark {
         Pal {
-            bg: Rgba::rgb(32, 32, 32),
-            card: Rgba::rgb(43, 43, 43),
+            bg: Rgba::rgb(28, 28, 28),
+            card: Rgba::rgb(38, 38, 38),
+            chip: Rgba::rgb(50, 50, 50),
+            border: Rgba::rgb(52, 52, 52),
+            track: Rgba::rgb(58, 58, 58),
             fg: Rgba::rgb(242, 242, 242),
-            dim: Rgba::rgb(160, 160, 160),
+            dim: Rgba::rgb(150, 150, 150),
             line: Rgba::rgb(58, 58, 58),
         }
     } else {
         Pal {
-            bg: Rgba::rgb(249, 249, 249),
+            bg: Rgba::rgb(243, 243, 243),
             card: Rgba::rgb(255, 255, 255),
+            chip: Rgba::rgb(235, 235, 235),
+            border: Rgba::rgb(222, 222, 222),
+            track: Rgba::rgb(228, 228, 228),
             fg: Rgba::rgb(26, 26, 26),
-            dim: Rgba::rgb(96, 96, 96),
+            dim: Rgba::rgb(100, 100, 100),
             line: Rgba::rgb(224, 224, 224),
         }
     }
@@ -55,18 +65,32 @@ pub struct Fonts {
     pub small: HFONT,
     pub normal: HFONT,
     pub bold: HFONT,
+    pub mid: HFONT,
     pub big: HFONT,
+    pub caps: HFONT,
+    pub scale: f32,
 }
 
 impl Fonts {
+    /// ClearType fonts for opaque GDI painting.
     pub fn new(scale: f32) -> Fonts {
+        Self::make(scale, false)
+    }
+    /// Grayscale-AA fonts for the software canvas.
+    pub fn gray(scale: f32) -> Fonts {
+        Self::make(scale, true)
+    }
+    fn make(scale: f32, gray: bool) -> Fonts {
         let px = |v: f32| (v * scale).round() as i32;
         let f = ui_face();
         Fonts {
-            small: create_font(px(11.0), 400, f, false),
-            normal: create_font(px(12.5), 400, f, false),
-            bold: create_font(px(12.5), 600, f, false),
-            big: create_font(px(17.0), 600, f, false),
+            small: create_font(px(11.0), 400, f, gray),
+            normal: create_font(px(12.5), 400, f, gray),
+            bold: create_font(px(12.5), 600, f, gray),
+            mid: create_font(px(15.0), 600, f, gray),
+            big: create_font(px(20.0), 600, f, gray),
+            caps: create_font(px(10.0), 600, f, gray),
+            scale,
         }
     }
 }
@@ -74,7 +98,7 @@ impl Fonts {
 impl Drop for Fonts {
     fn drop(&mut self) {
         unsafe {
-            for f in [self.small, self.normal, self.bold, self.big] {
+            for f in [self.small, self.normal, self.bold, self.mid, self.big, self.caps] {
                 DeleteObject(f);
             }
         }
@@ -130,24 +154,26 @@ fn fit(v: i32, lo: i32, hi: i32) -> i32 {
     v.min(hi).max(lo)
 }
 
-fn has_gpu(a: &App) -> bool {
-    a.snap.gpu.is_some()
-}
+// Section heights (px at 96 dpi). `size` and `paint` share these.
+const PAD: f32 = 12.0;
+const GAP: f32 = 8.0;
+const W: f32 = 392.0;
+const HEADER: f32 = 28.0;
+const RINGS: f32 = 134.0;
+const NET: f32 = 84.0;
+const DISK: f32 = 62.0;
+const USAGE: f32 = 70.0;
+const CAP: f32 = 24.0;
+const PROC_ROW: f32 = 17.0;
+const PROCS: f32 = 30.0 + 5.0 * PROC_ROW;
+const FOOTER: f32 = 22.0;
 
 fn size(a: &App) -> (i32, i32) {
-    let mut h = 14.0 + 22.0; // pad + header
-    let rows = 4 + has_gpu(a) as i32; // cpu, ram, (gpu), disk, net
-    h += rows as f32 * 46.0;
-    h += 12.0 + 20.0 + 2.0 * 19.0; // usage header + today + month
+    let mut h = PAD + HEADER + GAP + RINGS + GAP + NET + GAP + DISK + GAP + USAGE + GAP + PROCS + GAP + FOOTER;
     if a.s.data_cap_gb > 0.0 {
-        h += 26.0;
+        h += CAP;
     }
-    if a.snap.battery.is_some() {
-        h += 22.0;
-    }
-    h += 14.0 + 20.0 + 5.0 * 18.0; // processes
-    h += 10.0 + 18.0 + 12.0; // footer + pad
-    (sc(a, 380.0), sc(a, h))
+    (sc(a, W), sc(a, h))
 }
 
 pub fn reposition(a: &mut App) {
@@ -196,195 +222,248 @@ pub fn hide(a: &mut App) {
     }
 }
 
+/// Card with hairline border.
+fn card(c: &mut Canvas, r: Rect, rad: f32, pal: &Pal) {
+    c.fill_round(r, rad, pal.border);
+    c.fill_round(Rect { l: r.l + 1, t: r.t + 1, r: r.r - 1, b: r.b - 1 }, rad - 1.0, pal.card);
+}
+
+/// Pill-shaped chip; returns its width.
+fn chip(c: &mut Canvas, f: HFONT, text: &str, right: i32, y: i32, h: i32, pal: &Pal) -> i32 {
+    let (tw, th) = c.measure(f, text);
+    let w = tw + h;
+    let r = Rect { l: right - w, t: y, r: right, b: y + h };
+    c.fill_round(r, h as f32 / 2.0, pal.chip);
+    c.text(f, text, r.l + h / 2, y + (h - th) / 2, pal.dim);
+    w
+}
+
 fn paint(a: &mut App, hwnd: HWND) {
-    // Size can change (GPU appears, battery…): keep window in sync.
+    // Size can change (GPU appears, cap set…): keep window in sync.
     let (w, h) = size(a);
     if let Some(r) = window_rect(hwnd) {
         if r.w() != w || r.h() != h {
             reposition(a);
         }
     }
-    let p = Painter::begin(hwnd);
+    let scale = scale(a);
+    let mut ps: PAINTSTRUCT = unsafe { std::mem::zeroed() };
+    let dc = unsafe { BeginPaint(hwnd, &mut ps) };
+    let mut rc: RECT = unsafe { std::mem::zeroed() };
+    unsafe { GetClientRect(hwnd, &mut rc) };
+    let (cw, ch) = (rc.right.max(1), rc.bottom.max(1));
+
+    // Fonts and canvas are cached across the once-per-second repaints.
+    let mut cache = a.popup_cache.take().filter(|(f, _)| f.scale == scale);
+    let (f, mut c) = cache.take().unwrap_or_else(|| (Fonts::gray(scale), Canvas::new()));
+    c.resize(cw, ch);
+    draw(a, &mut c, &f, scale);
+    c.blit(dc, 0, 0);
+    a.popup_cache = Some((f, c));
+    unsafe { EndPaint(hwnd, &ps) };
+}
+
+fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32) {
+    let sc = |v: f32| (v * scale).round() as i32;
     let pal = palette(a.dark);
-    let f = Fonts::new(scale(a));
     let s = &a.snap;
-    let pad = sc(a, 14.0);
-    let right = p.w - pad;
-    p.fill(Rect { l: 0, t: 0, r: p.w, b: p.h }, pal.bg);
+    let pad = sc(PAD);
+    let gap = sc(GAP);
+    let right = c.w - pad;
+    let rad = 10.0 * scale;
+    c.clear(pal.bg);
 
+    // ---- header: title + chips
     let mut y = pad;
-    p.text(f.bold, "System", pad, y, pal.fg);
-    p.text_right(
-        f.small,
-        &format!("Up {}  \u{00B7}  {} processes", fmt::duration(s.uptime_secs), s.proc_count),
-        right,
-        y + sc(a, 2.0),
-        pal.dim,
-    );
-    y += sc(a, 22.0);
-
-    let level_color = |v: f32| {
-        if v >= a.s.crit_pct {
-            C_CRIT
-        } else if v >= a.s.warn_pct {
-            C_WARN
-        } else {
-            pal.fg
+    c.text(f.mid, "System", pad, y + sc(2.0), pal.fg);
+    let chip_h = sc(22.0);
+    let mut x = right;
+    x -= chip(c, f.small, &format!("{} processes", s.proc_count), x, y, chip_h, &pal) + sc(6.0);
+    x -= chip(c, f.small, &format!("Up {}", fmt::duration(s.uptime_secs)), x, y, chip_h, &pal) + sc(6.0);
+    if let Some(b) = s.battery {
+        let mut t = format!("Battery {}%", b.percent);
+        if b.charging {
+            t.push_str(" \u{2191}");
+        } else if let (Some(sec), false) = (b.secs_left, b.on_ac) {
+            t.push_str(&format!(" \u{00B7} {}", fmt::duration(sec as u64)));
         }
-    };
-    let chart_w = sc(a, 120.0);
-    let row_h = sc(a, 46.0);
-    let row = |label: &str, value: &str, vc: Rgba, series: &[(Metric, Vec<f32>)], y: &mut i32| {
-        p.round(Rect { l: pad, t: *y, r: right, b: *y + row_h - sc(a, 6.0) }, sc(a, 8.0), pal.card);
-        let ix = pad + sc(a, 10.0);
-        p.text(f.small, label, ix, *y + sc(a, 4.0), pal.dim);
-        p.text_fit(f.big, value, ix, *y + sc(a, 17.0), right - chart_w - ix - sc(a, 16.0), vc);
-        let cr = Rect {
-            l: right - chart_w - sc(a, 8.0),
-            t: *y + sc(a, 6.0),
-            r: right - sc(a, 8.0),
-            b: *y + row_h - sc(a, 12.0),
-        };
-        for (m, d) in series {
-            p.chart(cr, d, accent(*m, a.dark), pal.card);
-        }
-        *y += row_h;
-    };
-
-    row("CPU", &format!("{:.0}%", s.cpu), level_color(s.cpu), &[(Metric::Cpu, a.series(Metric::Cpu, 60))], &mut y);
-    row(
-        &format!("Memory  \u{00B7}  {:.0}%", s.ram_pct),
-        &format!("{} / {}", fmt::bytes(s.ram_used), fmt::bytes(s.ram_total)),
-        level_color(s.ram_pct),
-        &[(Metric::Ram, a.series(Metric::Ram, 60))],
-        &mut y,
-    );
-    if let Some(g) = s.gpu {
-        let v = match s.vram_used {
-            Some(m) => format!("{:.0}%  \u{00B7}  {} VRAM", g, fmt::bytes(m)),
-            None => format!("{:.0}%", g),
-        };
-        row("GPU", &v, level_color(g), &[(Metric::Gpu, a.series(Metric::Gpu, 60))], &mut y);
+        chip(c, f.small, &t, x, y, chip_h, &pal);
     }
-    let disk_label = match s.disk_active {
-        Some(act) => format!("Disk  \u{00B7}  {:.0}% active", act),
-        None => "Disk".into(),
+    y += sc(HEADER) + gap;
+
+    let level = |v: f32| {
+        if v >= a.s.crit_pct {
+            Some(C_CRIT)
+        } else if v >= a.s.warn_pct {
+            Some(C_WARN)
+        } else {
+            None
+        }
     };
-    row(
-        &disk_label,
-        &format!("R {}   W {}", fmt::rate(s.disk_read), fmt::rate(s.disk_write)),
-        pal.fg,
-        &[(Metric::DiskRead, a.series(Metric::DiskRead, 60))],
-        &mut y,
-    );
-    let adapter = if a.s.adapter.is_empty() { "all adapters".to_string() } else { a.s.adapter.clone() };
-    // Shared scale so up/down are comparable.
-    let (up, down) = {
+
+    // ---- ring gauges
+    struct Gauge {
+        label: &'static str,
+        pct: f32,
+        sub: String,
+        m: Metric,
+    }
+    let mut gauges = vec![
+        Gauge {
+            label: "CPU",
+            pct: s.cpu,
+            sub: s.top_cpu.first().map_or(String::new(), |p| format!("{} {:.0}%", p.name, p.cpu)),
+            m: Metric::Cpu,
+        },
+        Gauge {
+            label: "MEMORY",
+            pct: s.ram_pct,
+            sub: format!("{} / {}", fmt::bytes(s.ram_used), fmt::bytes(s.ram_total)),
+            m: Metric::Ram,
+        },
+    ];
+    if let Some(g) = s.gpu {
+        gauges.push(Gauge { label: "GPU", pct: g, sub: s.vram_used.map_or(String::new(), |v| format!("{} VRAM", fmt::bytes(v))), m: Metric::Gpu });
+    } else if let Some(d) = s.disk_active {
+        gauges.push(Gauge { label: "DISK", pct: d, sub: "active time".into(), m: Metric::DiskActive });
+    }
+    let n = gauges.len() as i32;
+    let gw = (right - pad - gap * (n - 1)) / n;
+    let gh = sc(RINGS);
+    for (i, g) in gauges.iter().enumerate() {
+        let x = pad + i as i32 * (gw + gap);
+        let r = Rect { l: x, t: y, r: x + gw, b: y + gh };
+        card(c, r, rad, &pal);
+        let col = level(g.pct).unwrap_or(accent(g.m, a.dark));
+        let (cx, cy) = ((x + gw / 2) as f32, (y + sc(48.0)) as f32);
+        let rr = 36.0 * scale;
+        let th = 7.0 * scale;
+        c.ring(cx, cy, rr, th, 1.0, pal.track);
+        c.ring(cx, cy, rr, th, g.pct / 100.0, col);
+        let v = format!("{:.0}%", g.pct);
+        let (_, vh) = c.measure(f.mid, &v);
+        c.text_center(f.mid, &v, cx as i32, cy as i32 - vh / 2, pal.fg);
+        c.text_center(f.caps, g.label, cx as i32, y + sc(92.0), pal.dim);
+        let sub = c.ellipsize(f.small, &g.sub, gw - sc(16.0));
+        c.text_center(f.small, &sub, cx as i32, y + sc(108.0), pal.fg);
+    }
+    y += gh + gap;
+
+    // ---- network
+    let chart_w = sc(150.0);
+    let nh = sc(NET);
+    card(c, Rect { l: pad, t: y, r: right, b: y + nh }, rad, &pal);
+    let ix = pad + sc(14.0);
+    let adapter = if a.s.adapter.is_empty() { "ALL ADAPTERS".to_string() } else { a.s.adapter.to_uppercase() };
+    c.text(f.caps, &format!("NETWORK  \u{00B7}  {}", adapter), ix, y + sc(10.0), pal.dim);
+    let down_c = accent(Metric::Down, a.dark);
+    let up_c = accent(Metric::Up, a.dark);
+    c.text(f.big, &format!("\u{25BC} {}", fmt::speed(s.net_down, a.s.unit)), ix, y + sc(26.0), down_c);
+    c.text(f.normal, &format!("\u{25B2} {}", fmt::speed(s.net_up, a.s.unit)), ix, y + sc(56.0), up_c);
+    {
+        // Shared scale so up/down are comparable.
         let hu = &a.hist[Metric::Up.idx()];
         let hd = &a.hist[Metric::Down.idx()];
         let max = hu.iter().chain(hd.iter()).copied().fold(64.0 * 1024.0, f32::max);
-        (hu.iter().map(|v| v / max).collect::<Vec<_>>(), hd.iter().map(|v| v / max).collect::<Vec<_>>())
+        let down: Vec<f32> = hd.iter().map(|v| v / max).collect();
+        let up: Vec<f32> = hu.iter().map(|v| v / max).collect();
+        let cr = Rect { l: right - chart_w - sc(12.0), t: y + sc(12.0), r: right - sc(12.0), b: y + nh - sc(12.0) };
+        c.spark(cr, &down, down_c);
+        c.spark(cr, &up, up_c);
+    }
+    y += nh + gap;
+
+    // ---- disk
+    let dh = sc(DISK);
+    card(c, Rect { l: pad, t: y, r: right, b: y + dh }, rad, &pal);
+    let dl = match s.disk_active {
+        Some(v) => format!("DISK  \u{00B7}  {:.0}% ACTIVE", v),
+        None => "DISK".into(),
     };
-    row(
-        &format!("Network  \u{00B7}  {}", adapter),
-        &format!("\u{25B2} {}   \u{25BC} {}", fmt::speed(s.net_up, a.s.unit), fmt::speed(s.net_down, a.s.unit)),
+    c.text(f.caps, &dl, ix, y + sc(10.0), pal.dim);
+    c.text(
+        f.mid,
+        &format!("R {}   W {}", fmt::rate(s.disk_read), fmt::rate(s.disk_write)),
+        ix,
+        y + sc(28.0),
         pal.fg,
-        &[(Metric::Down, down), (Metric::Up, up)],
-        &mut y,
     );
+    let dcol = accent(Metric::DiskRead, a.dark);
+    let cr = Rect { l: right - chart_w - sc(12.0), t: y + sc(12.0), r: right - sc(12.0), b: y + dh - sc(12.0) };
+    let rd = a.series(Metric::DiskRead, 60);
+    c.spark(cr, &rd, dcol);
+    y += dh + gap;
 
     // ---- data usage
-    y += sc(a, 4.0);
-    p.text(f.bold, "Data usage", pad, y, pal.fg);
-    y += sc(a, 20.0);
+    let cap = a.cycle_usage();
+    let uh = sc(USAGE) + if cap.is_some() { sc(CAP) } else { 0 };
+    card(c, Rect { l: pad, t: y, r: right, b: y + uh }, rad, &pal);
+    c.text(f.caps, "DATA USAGE", ix, y + sc(10.0), pal.dim);
     let now = usage::today();
     let (yy, mm, _) = usage::ymd(now);
-    let line = |label: &str, u: usage::Usage, y: i32| {
-        p.text(f.normal, label, pad, y, pal.dim);
-        let x0 = pad + sc(a, 100.0);
-        p.text(f.normal, &format!("\u{25B2} {}", fmt::bytes(u.sent)), x0, y, accent(Metric::Up, a.dark));
-        p.text(f.normal, &format!("\u{25BC} {}", fmt::bytes(u.recv)), x0 + sc(a, 95.0), y, accent(Metric::Down, a.dark));
-        p.text_right(f.bold, &fmt::bytes(u.total()), right, y, pal.fg);
-    };
-    line("Today", a.usage.get(now), y);
-    y += sc(a, 19.0);
-    line("This month", a.usage.month(yy, mm), y);
-    y += sc(a, 19.0);
-    if let Some((used, pct)) = a.cycle_usage() {
-        y += sc(a, 4.0);
-        let bar = Rect { l: pad, t: y + sc(a, 4.0), r: right - sc(a, 120.0), b: y + sc(a, 10.0) };
-        p.round(bar, sc(a, 6.0), pal.line);
-        let fw = ((bar.w() as f64) * (pct / 100.0).min(1.0)) as i32;
-        let c = if pct >= a.s.crit_pct as f64 {
-            C_CRIT
-        } else if pct >= a.s.warn_pct as f64 {
-            C_WARN
-        } else {
-            accent(Metric::Down, a.dark)
-        };
+    let today = a.usage.get(now);
+    let month = a.usage.month(yy, mm);
+    let col2 = pad + (right - pad) / 2 + sc(6.0);
+    c.text(f.small, "Today", ix, y + sc(26.0), pal.dim);
+    c.text(f.mid, &fmt::bytes(today.total()), ix, y + sc(40.0), pal.fg);
+    c.text(f.small, "This month", col2, y + sc(26.0), pal.dim);
+    c.text(f.mid, &fmt::bytes(month.total()), col2, y + sc(40.0), pal.fg);
+    let split = |u: usage::Usage| format!("\u{25B2} {}  \u{25BC} {}", fmt::bytes(u.sent), fmt::bytes(u.recv));
+    let tw = c.measure(f.mid, &fmt::bytes(today.total())).0;
+    c.text(f.small, &split(today), ix + tw + sc(8.0), y + sc(44.0), pal.dim);
+    let mw = c.measure(f.mid, &fmt::bytes(month.total())).0;
+    let ms = c.ellipsize(f.small, &split(month), right - sc(12.0) - (col2 + mw + sc(8.0)));
+    c.text(f.small, &ms, col2 + mw + sc(8.0), y + sc(44.0), pal.dim);
+    if let Some((used, pct)) = cap {
+        let by = y + sc(USAGE);
+        let label = format!("{} of {:.0} GB  ({:.0}%)", fmt::bytes(used), a.s.data_cap_gb, pct);
+        let lw = c.measure(f.small, &label).0;
+        let bar = Rect { l: ix, t: by, r: right - sc(14.0) - lw - sc(10.0), b: by + sc(8.0) };
+        c.fill_round(bar, 4.0 * scale, pal.track);
+        let fw = (bar.w() as f64 * (pct / 100.0).min(1.0)) as i32;
+        let col = level(pct as f32).unwrap_or(accent(Metric::Down, a.dark));
         if fw > 0 {
-            p.round(Rect { r: bar.l + fw, ..bar }, sc(a, 6.0), c);
+            c.fill_round(Rect { r: bar.l + fw.max(bar.h()), ..bar }, 4.0 * scale, col);
         }
-        p.text_right(
-            f.small,
-            &format!("{} of {:.0} GB ({:.0}%)", fmt::bytes(used), a.s.data_cap_gb, pct),
-            right,
-            y,
-            pal.dim,
-        );
-        y += sc(a, 22.0);
+        c.text(f.small, &label, right - sc(14.0) - lw, by - sc(4.0), pal.dim);
     }
-    if let Some(b) = s.battery {
-        y += sc(a, 3.0);
-        let mut t = format!("{}%", b.percent);
-        if b.charging {
-            t.push_str("  \u{00B7}  charging");
-        } else if b.on_ac {
-            t.push_str("  \u{00B7}  plugged in");
-        }
-        if let (Some(sec), false) = (b.secs_left, b.on_ac) {
-            t.push_str(&format!("  \u{00B7}  {} left", fmt::duration(sec as u64)));
-        }
-        p.text(f.normal, "Battery", pad, y, pal.dim);
-        p.text(f.normal, &t, pad + sc(a, 100.0), y, pal.fg);
-        y += sc(a, 19.0);
-    }
+    y += uh + gap;
 
     // ---- processes
-    y += sc(a, 10.0);
-    let col_w = (right - pad) / 3;
+    let ph = sc(PROCS);
+    card(c, Rect { l: pad, t: y, r: right, b: y + ph }, rad, &pal);
+    let inner_l = ix;
+    let inner_r = right - sc(14.0);
+    let col_w = (inner_r - inner_l) / 3;
     let cols: [(&str, Vec<(String, String)>); 3] = [
-        ("Top CPU", s.top_cpu.iter().map(|p| (p.name.clone(), format!("{:.1}%", p.cpu))).collect()),
-        ("Top memory", s.top_mem.iter().map(|p| (p.name.clone(), fmt::bytes(p.mem))).collect()),
-        ("Top disk I/O", s.top_io.iter().map(|p| (p.name.clone(), fmt::rate(p.io_bps))).collect()),
+        ("TOP CPU", s.top_cpu.iter().map(|p| (p.name.clone(), format!("{:.1}%", p.cpu))).collect()),
+        ("TOP MEMORY", s.top_mem.iter().map(|p| (p.name.clone(), fmt::bytes(p.mem))).collect()),
+        ("TOP DISK I/O", s.top_io.iter().map(|p| (p.name.clone(), fmt::rate(p.io_bps))).collect()),
     ];
     for (i, (title, list)) in cols.iter().enumerate() {
-        let x = pad + i as i32 * col_w;
-        let xr = x + col_w - sc(a, 10.0);
-        p.text(f.bold, title, x, y, pal.fg);
+        let x = inner_l + i as i32 * col_w;
+        let xr = x + col_w - sc(12.0);
+        c.text(f.caps, title, x, y + sc(10.0), pal.dim);
         if list.is_empty() {
-            p.text(f.small, "\u{2013}", x, y + sc(a, 20.0), pal.dim);
+            c.text(f.small, "\u{2013}", x, y + sc(28.0), pal.dim);
         }
         for (j, (name, val)) in list.iter().take(5).enumerate() {
-            let ry = y + sc(a, 20.0) + j as i32 * sc(a, 18.0);
-            let vw = p.measure(f.small, val).0;
-            p.text_fit(f.small, name, x, ry, xr - x - vw - sc(a, 6.0), pal.dim);
-            p.text_right(f.small, val, xr, ry, pal.fg);
+            let ry = y + sc(28.0) + j as i32 * sc(PROC_ROW);
+            let vw = c.measure(f.small, val).0;
+            let nm = c.ellipsize(f.small, name, xr - x - vw - sc(6.0));
+            c.text(f.small, &nm, x, ry, pal.fg);
+            c.text_right(f.small, val, xr, ry, pal.dim);
         }
     }
-    y += sc(a, 20.0) + 5 * sc(a, 18.0) + sc(a, 10.0);
-    p.fill(Rect { l: pad, t: y - sc(a, 4.0), r: right, b: y - sc(a, 3.0) }, pal.line);
-    p.text(
-        f.small,
-        if a.popup_pinned {
-            "Click to close  \u{00B7}  Double-click widget: Task Manager"
-        } else {
-            "Click: pin  \u{00B7}  Double-click: Task Manager  \u{00B7}  Right-click: menu"
-        },
-        pad,
-        y + sc(a, 2.0),
-        pal.dim,
-    );
+    y += ph + gap;
+
+    // ---- footer
+    let hint = if a.popup_pinned {
+        "Click to close  \u{00B7}  Double-click widget: Task Manager"
+    } else {
+        "Click: pin  \u{00B7}  Double-click: Task Manager  \u{00B7}  Right-click: menu"
+    };
+    c.text_center(f.small, hint, c.w / 2, y + sc(2.0), pal.dim);
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
