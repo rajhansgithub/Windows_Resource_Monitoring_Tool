@@ -5,6 +5,12 @@ on:
     branches: ["**"]
     tags: ["v*"]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create (e.g. v2.0.0). Empty = build only."
+        required: false
+        default: ""
 
 permissions:
   contents: write # create GitHub Releases on v* tags
@@ -32,9 +38,13 @@ jobs:
             target/release/ResourceMonitor.exe
             dist/Setup_ResourceMonitor.exe
       - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: Resource Monitor ${{ inputs.tag || github.ref_name }}
+          generate_release_notes: true
           files: |
             target/release/ResourceMonitor.exe
             dist/Setup_ResourceMonitor.exe
