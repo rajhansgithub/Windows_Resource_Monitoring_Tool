@@ -117,13 +117,15 @@ impl Drop for Dib {
 pub struct Canvas {
     pub w: i32,
     pub h: i32,
+    /// Outline colour drawn behind text (None = plain text).
+    pub halo: Option<Rgba>,
     px: Option<Dib>,
     mask: Option<Dib>,
 }
 
 impl Canvas {
     pub fn new() -> Self {
-        Canvas { w: 0, h: 0, px: None, mask: None }
+        Canvas { w: 0, h: 0, halo: None, px: None, mask: None }
     }
 
     pub fn resize(&mut self, w: i32, h: i32) {
@@ -222,10 +224,11 @@ impl Canvas {
         let Some(m) = &self.mask else { return 0 };
         let (tw, th) = measure_dc(m.dc, font, s);
         let (w, h) = (self.w, self.h);
-        let l = (x - 1).max(0);
-        let t = y.max(0);
-        let r = (x + tw + 2).min(w);
-        let b = (y + th).min(h);
+        // Cleared area has a margin so the halo pass can read 1px around glyphs.
+        let l = (x - 3).max(0);
+        let t = (y - 2).max(0);
+        let r = (x + tw + 4).min(w);
+        let b = (y + th + 2).min(h);
         if l >= r || t >= b {
             return tw;
         }
@@ -242,14 +245,40 @@ impl Canvas {
             SelectObject(mdc, old);
             GdiFlush();
         }
-        let buf = self.buf();
+        let cov_at = |xx: i32, yy: i32| -> u32 {
+            if xx < l || xx >= r || yy < t || yy >= b {
+                return 0;
+            }
+            let m = unsafe { *mbits.add((yy * w + xx) as usize) };
+            ((m >> 16) & 0xff).max((m >> 8) & 0xff).max(m & 0xff)
+        };
+        let halo = self.halo;
+        let buf = match &self.px {
+            Some(d) => unsafe { std::slice::from_raw_parts_mut(d.bits, (w * h) as usize) },
+            None => return tw,
+        };
+        // Soft 1px outline: keeps thin glyphs legible on translucent / Mica taskbars.
+        if let Some(hc) = halo {
+            for yy in t..b {
+                for xx in l..r {
+                    let mut cv = cov_at(xx, yy);
+                    for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                        cv = cv.max(cov_at(xx + dx, yy + dy));
+                    }
+                    for (dx, dy) in [(-1, -1), (1, -1), (-1, 1), (1, 1)] {
+                        cv = cv.max(cov_at(xx + dx, yy + dy) * 3 / 5);
+                    }
+                    if cv != 0 {
+                        Self::blend_px(&mut buf[(yy * w + xx) as usize], hc, cv);
+                    }
+                }
+            }
+        }
         for yy in t..b {
             for xx in l..r {
-                let i = (yy * w + xx) as usize;
-                let m = unsafe { *mbits.add(i) };
-                let cov = ((m >> 16) & 0xff).max((m >> 8) & 0xff).max(m & 0xff);
+                let cov = cov_at(xx, yy);
                 if cov != 0 {
-                    Self::blend_px(&mut buf[i], c, cov);
+                    Self::blend_px(&mut buf[(yy * w + xx) as usize], c, cov);
                 }
             }
         }
