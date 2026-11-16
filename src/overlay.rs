@@ -20,6 +20,8 @@ pub struct Drag {
 
 pub struct Overlay {
     pub hwnd: HWND,
+    /// Taskbar that owns this widget (dock mode), or null (floating).
+    pub owner: HWND,
     pub tb: Taskbar,
     canvas: Canvas,
     font: HFONT,
@@ -126,10 +128,18 @@ pub fn register(hinst: HINSTANCE, wndproc: WNDPROC) {
 }
 
 impl Overlay {
-    pub fn new(tb: Taskbar, click_through: bool) -> Option<Overlay> {
+    /// `owned`: dock mode. The taskbar becomes the widget's owner window, so
+    /// Windows keeps the widget directly above the taskbar in the same z-order
+    /// step — clicking the taskbar can't cover it, so no flicker and no
+    /// topmost re-asserting. Floating widgets are plain topmost windows.
+    pub fn new(tb: Taskbar, click_through: bool, owned: bool) -> Option<Overlay> {
         let cls = wide(CLASS);
         let title = wide("Resource Monitor");
-        let mut ex = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE;
+        let owner = if owned { tb.hwnd } else { std::ptr::null_mut() };
+        let mut ex = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+        if owner.is_null() {
+            ex |= WS_EX_TOPMOST;
+        }
         if click_through {
             ex |= WS_EX_TRANSPARENT;
         }
@@ -143,7 +153,7 @@ impl Overlay {
                 0,
                 1,
                 1,
-                std::ptr::null_mut(),
+                owner,
                 std::ptr::null_mut(),
                 windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(std::ptr::null()),
                 std::ptr::null(),
@@ -154,6 +164,7 @@ impl Overlay {
         canvas.resize(1, 1);
         (!hwnd.is_null()).then(|| Overlay {
             hwnd,
+            owner,
             tb,
             canvas,
             font: std::ptr::null_mut(),
@@ -203,10 +214,12 @@ impl Overlay {
                 if !self.shown {
                     ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
                 }
-                if self.shown && !raise {
+                // Owned by the taskbar: Windows already keeps us above it.
+                if !self.owner.is_null() || (self.shown && !raise) {
+                    self.shown = true;
                     return;
                 }
-                // Win11 raises the taskbar over other topmost windows when clicked; re-assert.
+                // Floating: keep above other always-on-top windows.
                 SetWindowPos(
                     self.hwnd,
                     HWND_TOPMOST,

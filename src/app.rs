@@ -637,7 +637,9 @@ impl App {
         let mut gone = Vec::new();
         let mut i = 0;
         while i < self.overlays.len() {
-            if wanted.iter().any(|t| t.hwnd == self.overlays[i].tb.hwnd) {
+            let o = &self.overlays[i];
+            let owner_ok = (self.m.s.mode == Mode::Dock && !o.tb.hwnd.is_null()) == !o.owner.is_null();
+            if owner_ok && wanted.iter().any(|t| t.hwnd == o.tb.hwnd) {
                 i += 1;
             } else {
                 gone.push(self.overlays.remove(i));
@@ -650,7 +652,8 @@ impl App {
 
         for tb in &wanted {
             if !self.overlays.iter().any(|o| o.tb.hwnd == tb.hwnd) {
-                if let Some(o) = Overlay::new(*tb, self.m.s.click_through) {
+                let owned = self.m.s.mode == Mode::Dock && !tb.hwnd.is_null();
+                if let Some(o) = Overlay::new(*tb, self.m.s.click_through, owned) {
                     self.overlays.push(o);
                 }
             }
