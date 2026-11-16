@@ -304,6 +304,79 @@ impl Canvas {
         }
     }
 
+    /// Anti-aliased ring arc from 12 o'clock, clockwise, `frac` 0..1, round caps.
+    pub fn ring(&mut self, cx: f32, cy: f32, r: f32, thick: f32, frac: f32, c: Rgba) {
+        let frac = frac.clamp(0.0, 1.0);
+        if frac <= 0.0 {
+            return;
+        }
+        let (w, h) = (self.w, self.h);
+        let half = thick / 2.0;
+        let mid = r - half;
+        let tau = std::f32::consts::TAU;
+        let end = frac * tau;
+        let caps = [(cx, cy - mid), (cx + mid * end.sin(), cy - mid * end.cos())];
+        let buf = self.buf();
+        let (x0, x1) = (((cx - r - 1.0).floor() as i32).max(0), ((cx + r + 2.0).ceil() as i32).min(w));
+        let (y0, y1) = (((cy - r - 1.0).floor() as i32).max(0), ((cy + r + 2.0).ceil() as i32).min(h));
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                let (dx, dy) = (px - cx, py - cy);
+                let d = (dx * dx + dy * dy).sqrt();
+                let radial = (half - (d - mid).abs() + 0.5).clamp(0.0, 1.0);
+                if radial <= 0.0 {
+                    continue;
+                }
+                let mut cov = 0.0f32;
+                if frac >= 1.0 {
+                    cov = radial;
+                } else {
+                    let mut a = dx.atan2(-dy);
+                    if a < 0.0 {
+                        a += tau;
+                    }
+                    if a <= end {
+                        cov = radial;
+                    }
+                    for (qx, qy) in caps {
+                        let cd = ((px - qx).powi(2) + (py - qy).powi(2)).sqrt();
+                        cov = cov.max((half - cd + 0.5).clamp(0.0, 1.0));
+                    }
+                }
+                if cov > 0.0 {
+                    Self::blend_px(&mut buf[(y * w + x) as usize], c, (cov * 255.0) as u32);
+                }
+            }
+        }
+    }
+
+    pub fn text_center(&mut self, font: HFONT, s: &str, cx: i32, y: i32, c: Rgba) {
+        let (tw, _) = self.measure(font, s);
+        self.text(font, s, cx - tw / 2, y, c);
+    }
+
+    /// Shorten with "…" to fit `max_w`.
+    pub fn ellipsize(&self, font: HFONT, s: &str, max_w: i32) -> String {
+        if self.measure(font, s).0 <= max_w {
+            return s.to_string();
+        }
+        let mut v: String = s.to_string();
+        while !v.is_empty() && self.measure(font, &format!("{}\u{2026}", v)).0 > max_w {
+            v.pop();
+        }
+        format!("{}\u{2026}", v)
+    }
+
+    /// Copy to an ordinary (opaque) window DC.
+    pub fn blit(&self, dc: HDC, x: i32, y: i32) {
+        let Some(d) = &self.px else { return };
+        unsafe {
+            GdiFlush();
+            BitBlt(dc, x, y, self.w, self.h, d.dc, 0, 0, SRCCOPY);
+        }
+    }
+
     /// Push to a layered window at screen position (x, y).
     pub fn present(&self, hwnd: HWND, x: i32, y: i32) {
         let Some(d) = &self.px else { return };
@@ -410,60 +483,8 @@ impl Painter {
         self.text(font, s, right - w, y, c);
     }
 
-    /// Text clipped with ellipsis to max width.
-    pub fn text_fit(&self, font: HFONT, s: &str, x: i32, y: i32, max_w: i32, c: Rgba) {
-        let mut ws: Vec<u16> = s.encode_utf16().collect();
-        unsafe {
-            let old = SelectObject(self.dc, font);
-            SetTextColor(self.dc, c.colorref());
-            let mut rc = RECT { left: x, top: y, right: x + max_w, bottom: y + 200 };
-            DrawTextW(
-                self.dc,
-                ws.as_mut_ptr(),
-                ws.len() as i32,
-                &mut rc,
-                DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
-            );
-            SelectObject(self.dc, old);
-        }
-    }
-
     pub fn measure(&self, font: HFONT, s: &str) -> (i32, i32) {
         measure_dc(self.dc, font, s)
-    }
-
-    /// Line chart with soft fill. data oldest→newest 0..1.
-    pub fn chart(&self, r: Rect, data: &[f32], c: Rgba, bg: Rgba) {
-        if data.len() < 2 || r.is_empty() {
-            return;
-        }
-        let fill = bg.mix(c, 0.28);
-        let n = data.len();
-        unsafe {
-            let mut pts: Vec<POINT> = Vec::with_capacity(n + 2);
-            for (i, v) in data.iter().enumerate() {
-                let x = r.l + (r.w() - 1) * i as i32 / (n - 1) as i32;
-                let y = r.b - 1 - ((r.h() - 2) as f32 * v.clamp(0.0, 1.0)).round() as i32;
-                pts.push(POINT { x, y });
-            }
-            let line: Vec<POINT> = pts.clone();
-            pts.push(POINT { x: r.r - 1, y: r.b });
-            pts.push(POINT { x: r.l, y: r.b });
-            let br = CreateSolidBrush(fill.colorref());
-            let np = CreatePen(PS_NULL, 0, 0);
-            let ob = SelectObject(self.dc, br);
-            let op = SelectObject(self.dc, np);
-            Polygon(self.dc, pts.as_ptr(), pts.len() as i32);
-            SelectObject(self.dc, op);
-            DeleteObject(np);
-            let pen = CreatePen(PS_SOLID, 1, c.colorref());
-            let op = SelectObject(self.dc, pen);
-            Polyline(self.dc, line.as_ptr(), line.len() as i32);
-            SelectObject(self.dc, op);
-            SelectObject(self.dc, ob);
-            DeleteObject(pen);
-            DeleteObject(br);
-        }
     }
 }
 

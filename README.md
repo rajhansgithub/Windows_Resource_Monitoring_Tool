@@ -7,6 +7,14 @@ No .NET, no driver, no admin rights, no background service.
 - **A few MB of RAM**, near-zero CPU (one sample per second, coalesced timers, below-normal priority, EcoQoS)
 - Works on current Windows 11 (24H2/25H2) — no WinRing0 / kernel driver that Defender blocks
 
+<p align="center">
+  <img src="docs/screenshots/taskbar-widget.png" alt="Taskbar widget" width="100%"><br>
+  <img src="docs/screenshots/details-panel.png" alt="Details panel on hover" width="49%">
+  <img src="docs/screenshots/data-usage-report.png" alt="Data usage report" width="49%">
+</p>
+
+<sub>Screenshots taken from the real app (dark theme). Panel design notes: <a href="docs/ui-reference">docs/ui-reference</a>.</sub>
+
 ## What it shows
 
 Docked beside the tray, on the taskbar:
@@ -31,7 +39,7 @@ Pick any combination from **right-click → Metrics**. Default: CPU, RAM, GPU, �
 - **Fits the taskbar**: 1, 2 or 3 rows depending on taskbar height; related metrics (▲/▼, CPU/RAM) stay paired; widths never jitter.
 - **Hides itself** for full-screen games, videos and presentations — only on the monitor that's full-screen — and when an auto-hide taskbar slides away.
 - **Stays on top** of the Windows 11 taskbar (re-asserted on focus change, no polling).
-- **Hover** → details panel: per-metric 60 s charts, memory used/total, disk active time, uptime, data usage, battery, top 5 processes by CPU, memory and disk I/O.
+- **Hover** → details panel: ring gauges for CPU / memory / GPU, live network and disk charts, data usage (today, month, cap), uptime, battery, top 5 processes by CPU, memory and disk I/O.
 - **Click** → pin the panel. **Double-click** → Task Manager. **Drag** → move along the taskbar (or anywhere in floating mode).
 - **Theme-aware**: matches light/dark taskbar; values turn amber/red past thresholds (default 75% / 90%).
 - **Sensors your PC lacks are hidden** automatically (no GPU counter → no GPU row; no battery → no battery row).
