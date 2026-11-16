@@ -200,8 +200,8 @@ impl Overlay {
         let thickness = if tb.edge.horizontal() { tb.rect.h() } else { tb.rect.w() };
         let mut font_px = (13.0 * scale * ts).round() as u32;
         // Rows per column for a horizontal strip: fit 2 lines (or 3 on tall taskbars).
-        let mut rpc = 2usize;
-        if dock && horiz {
+        let mut rpc = if m.s.stacked { 2usize } else { 1 };
+        if dock && horiz && m.s.stacked {
             let avail = thickness - sc(4.0);
             let line = |px: u32| (px as f32 * 1.32).ceil() as i32;
             if line(font_px) * 3 <= avail && thickness >= sc(64.0) {
@@ -262,7 +262,8 @@ impl Overlay {
             let hh = if dock { thickness.max(line_h + 2) } else { rpc as i32 * pitch + 2 * pad };
             let mut x = pad;
             let mut idx = 0;
-            for col in &cols {
+            let small_gap = sc(8.0);
+            for (ci, col) in cols.iter().enumerate() {
                 let val_w = col.iter().map(|&r| vw(r)).max().unwrap_or(0);
                 let sp = col.iter().map(|&r| spark_part(r)).max().unwrap_or(0);
                 let lw = label_w(col);
@@ -280,9 +281,16 @@ impl Overlay {
                     cells.push((idx, x, y, x + lab_part, vr, spark, lw > 0));
                     idx += 1;
                 }
-                x += lab_part + val_w + sp + col_gap;
+                // Related metrics on one line (▲ then ▼) sit closer together.
+                let near = rpc == 1
+                    && cols.get(ci + 1).is_some_and(|n| group(n[0]) == group(col[col.len() - 1]));
+                let g = if near { small_gap } else { col_gap };
+                x += lab_part + val_w + sp + g;
+                if ci + 1 == cols.len() {
+                    x -= g;
+                }
             }
-            (w, h) = (x - col_gap + pad, hh);
+            (w, h) = (x + pad, hh);
         } else {
             // Vertical taskbar: one row per metric, drop parts that don't fit.
             let width = thickness.max(sc(40.0));

@@ -71,6 +71,7 @@ Most options are in the right-click menu. Everything is also in `%LOCALAPPDATA%\
 | `speed_unit` | `auto`, `autobits`, `KB/s`, `MB/s`, `Kbps`, `Mbps` |
 | `adapter` | empty = all physical adapters, or a name such as `Wi-Fi` |
 | `interval_ms` | 250–10000 |
+| `stacked` | 1 = metrics stacked in 2 rows, 0 = one line, each metric its own column (menu: Appearance → Stacked) |
 | `mode` | `dock` or `float` |
 | `dock_offset` | gap from the tray on the main taskbar (set by dragging) |
 | `displays` | `primary`, `all`, or a list such as `DISPLAY1,DISPLAY3` |
