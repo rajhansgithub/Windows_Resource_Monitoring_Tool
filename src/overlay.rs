@@ -198,7 +198,7 @@ impl Overlay {
         let sc = |v: f32| (v * scale).round() as i32;
 
         let thickness = if tb.edge.horizontal() { tb.rect.h() } else { tb.rect.w() };
-        let mut font_px = (12.0 * scale * ts).round() as u32;
+        let mut font_px = (13.0 * scale * ts).round() as u32;
         // Rows per column for a horizontal strip: fit 2 lines (or 3 on tall taskbars).
         let mut rpc = 2usize;
         if dock && horiz {
@@ -222,11 +222,19 @@ impl Overlay {
 
         let (_, line_h) = self.canvas.measure(font, "Ag");
         let line_h = if line_h == 0 { (font_px as f32 * 1.32) as i32 } else { line_h - sc(1.0) }.max(1);
-        let gap = sc(5.0);
-        let col_gap = sc(12.0);
+        let gap = sc(6.0);
+        let col_gap = sc(14.0);
         let pad = sc(6.0);
         let spark_w = if m.s.sparklines { sc(30.0) } else { 0 };
-        let spark_h = (line_h - sc(5.0)).max(4);
+        let spark_h = (line_h - sc(4.0)).max(4);
+        // Row pitch: use the taskbar's height for breathing room between rows
+        // (up to 1.5x line height) instead of stacking lines edge to edge.
+        let pitch = if dock && horiz {
+            let avail = thickness - 2 * sc(3.0);
+            (avail / rpc as i32).clamp(line_h, (line_h as f32 * 1.5) as i32)
+        } else {
+            line_h + sc(4.0)
+        };
 
         let values: Vec<(String, u8, &str)> = rows.iter().map(|&r| m.value(r)).collect();
         let label_w = |c: &[Metric]| -> i32 {
@@ -244,14 +252,14 @@ impl Overlay {
         let vw = |r: Metric| self.sticky[r.idx()];
         let spark_part = |r: Metric| if spark_w > 0 && has_spark(r) { gap + spark_w } else { 0 };
 
-        // (row index, x, y, value_right, spark rect, draw label)
-        let mut cells: Vec<(usize, i32, i32, i32, Option<Rect>, bool)> = Vec::with_capacity(n);
+        // (row index, x, y, value_left, value_right, spark rect, draw label)
+        let mut cells: Vec<(usize, i32, i32, i32, i32, Option<Rect>, bool)> = Vec::with_capacity(n);
         let (w, h);
         if n == 0 {
             (w, h) = (sc(24.0), if dock && horiz { thickness } else { line_h + 2 * pad });
         } else if horiz {
             let cols = pack(&rows, rpc);
-            let hh = if dock { thickness.max(line_h + 2) } else { rpc as i32 * line_h + 2 * pad };
+            let hh = if dock { thickness.max(line_h + 2) } else { rpc as i32 * pitch + 2 * pad };
             let mut x = pad;
             let mut idx = 0;
             for col in &cols {
@@ -259,9 +267,9 @@ impl Overlay {
                 let sp = col.iter().map(|&r| spark_part(r)).max().unwrap_or(0);
                 let lw = label_w(col);
                 let lab_part = if lw > 0 { lw + gap } else { 0 };
-                let y0 = (hh - col.len() as i32 * line_h) / 2;
+                let y0 = (hh - col.len() as i32 * pitch) / 2 + (pitch - line_h) / 2;
                 for (j, &r) in col.iter().enumerate() {
-                    let y = y0 + j as i32 * line_h;
+                    let y = y0 + j as i32 * pitch;
                     let vr = x + lab_part + val_w;
                     let spark = (spark_part(r) > 0).then(|| Rect {
                         l: vr + gap,
@@ -269,7 +277,7 @@ impl Overlay {
                         r: vr + gap + spark_w,
                         b: y + (line_h - spark_h) / 2 + spark_h,
                     });
-                    cells.push((idx, x, y, vr, spark, lw > 0));
+                    cells.push((idx, x, y, x + lab_part, vr, spark, lw > 0));
                     idx += 1;
                 }
                 x += lab_part + val_w + sp + col_gap;
@@ -296,8 +304,9 @@ impl Overlay {
                     r: vr + gap + spark_w,
                     b: y + (line_h - spark_h) / 2 + spark_h,
                 });
-                cells.push((i, x, y, vr, spark, with_label));
-                y += line_h;
+                let vl = x + if with_label { lab_part } else { 0 };
+                cells.push((i, x, y, vl, vr, spark, with_label));
+                y += pitch;
             }
             (w, h) = (width, y + pad);
         }
@@ -313,12 +322,15 @@ impl Overlay {
             let inset = if dock && horiz { sc(4.0) } else { 0 };
             self.canvas.fill_round(Rect { l: 0, t: inset, r: w, b: h - inset }, sc(6.0) as f32, bg);
         }
-        for &(i, x, y, vr, spark, with_label) in &cells {
+        // Soft outline behind text when there's no solid background behind it.
+        self.canvas.halo = (opacity < 120).then(|| if m.dark { Rgba(0, 0, 0, 110) } else { Rgba(255, 255, 255, 150) });
+        for &(i, x, y, vl, vr, spark, with_label) in &cells {
             let r = rows[i];
             let (v, lvl, _) = &values[i];
             let ac = accent(r, m.dark);
             if with_label {
-                self.canvas.text(font, short_label(r), x, y, ac);
+                // Lightened accent: keeps the colour cue but reads like text.
+                self.canvas.text(font, short_label(r), x, y, ac.mix(fg, 0.3));
             }
             let vc = match lvl {
                 2 => C_CRIT,
@@ -333,7 +345,11 @@ impl Overlay {
                 }
                 v.push('\u{2026}');
             }
-            self.canvas.text_right(font, &v, vr, y, vc);
+            if r == Metric::TopProc {
+                self.canvas.text(font, &v, vl, y, vc);
+            } else {
+                self.canvas.text_right(font, &v, vr, y, vc);
+            }
             if let Some(sr) = spark {
                 let data = m.series(r, 30);
                 self.canvas.fill_rect(sr, ac.with_a(if m.dark { 22 } else { 30 }));
