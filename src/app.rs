@@ -37,6 +37,8 @@ const T_SAMPLE: usize = 1;
 const T_RESTART: usize = 3;
 /// One-shot, debounced re-check after window/taskbar events.
 const T_CHECK: usize = 4;
+/// One-shot: close an unpinned panel after the mouse left widget and panel.
+const T_HOVER_HIDE: usize = 5;
 /// Appbar callback: Windows tells us when a full-screen app opens/closes.
 const WM_APPBAR: u32 = WM_APP + 5;
 /// Settings file changed on disk (from the watcher thread).
@@ -335,6 +337,8 @@ pub struct App {
     pub hwnd: HWND,
     pub popup: HWND,
     pub report: HWND,
+    /// The Settings window (one instance), null when closed.
+    pub settings_win: HWND,
     pub m: Model,
     settings_mtime: Option<SystemTime>,
     sensors: Sensors,
@@ -352,7 +356,7 @@ pub struct App {
     hook: HWINEVENTHOOK,
     shut_down: bool,
     detail_until: Option<Instant>,
-    menu_open: bool,
+    pub menu_open: bool,
     /// Item under the mouse/keyboard in the open menu (from WM_MENUSELECT).
     menu_sel: (HMENU, usize),
     /// Update window and what it shows.
@@ -376,6 +380,17 @@ pub struct App {
     fg_hook_tid: u32,
     /// Fonts + canvas reused by the details panel between repaints.
     pub popup_cache: Option<(popup::Fonts, crate::render::Canvas)>,
+    /// Clickable / hoverable regions of the details panel from its last paint
+    /// (client coordinates, later entries sit on top of earlier ones).
+    pub popup_hits: Vec<(Rect, popup::PopupHit)>,
+    /// Chart time range of the details panel, in seconds (= samples at 1 s).
+    pub popup_range: usize,
+    /// Mouse position over the details panel (client coordinates).
+    pub popup_hover: Option<(i32, i32)>,
+    /// Panel uses the native acrylic backdrop (Windows 11).
+    pub popup_acrylic: bool,
+    /// A WM_MOUSELEAVE for the details panel is pending.
+    pub popup_tracking: bool,
 }
 
 impl Deref for App {
@@ -421,6 +436,7 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         popup::register(hinst);
         crate::update_ui::register(hinst);
         report::register(hinst);
+        crate::settings_ui::register(hinst);
 
         // Hidden top-level window (not message-only: those miss broadcasts
         // such as TaskbarCreated, WM_SETTINGCHANGE and WM_DISPLAYCHANGE).
@@ -449,6 +465,7 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
             hwnd,
             popup: std::ptr::null_mut(),
             report: std::ptr::null_mut(),
+            settings_win: std::ptr::null_mut(),
             m: Model {
                 s,
                 snap: Snapshot::default(),
@@ -474,6 +491,11 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
             detail_until: None,
             menu_open: false,
             popup_cache: None,
+            popup_hits: Vec::new(),
+            popup_range: 60,
+            popup_hover: None,
+            popup_acrylic: false,
+            popup_tracking: false,
             icons: None,
             alerts: AlertState::default(),
             upd: std::ptr::null_mut(),
@@ -652,6 +674,21 @@ impl App {
             );
         }
         self.fg_hook_tid = tid;
+    }
+
+    /// Close an unpinned panel shortly, unless the mouse is then over the
+    /// panel or a widget (lets you move from the widget into the panel).
+    pub fn hide_popup_soon(&mut self) {
+        unsafe { SetTimer(self.hwnd, T_HOVER_HIDE, 300, None) };
+    }
+
+    fn mouse_over_ours(&self) -> bool {
+        unsafe {
+            let mut pt = POINT { x: 0, y: 0 };
+            GetCursorPos(&mut pt);
+            let h = WindowFromPoint(pt);
+            !h.is_null() && (h == self.popup || self.overlays.iter().any(|o| o.hwnd == h))
+        }
     }
 
     /// Re-check full-screen state / z-order shortly. Bursts of events (window
@@ -851,6 +888,12 @@ impl App {
     pub fn save_settings(&mut self) {
         self.m.s.save();
         self.settings_mtime = Settings::mtime();
+    }
+
+    /// Network adapters currently present (refreshed on each call).
+    pub fn adapter_list(&mut self) -> Vec<AdapterInfo> {
+        self.adapters = self.sensors.adapters();
+        self.adapters.clone()
     }
 
     /// Replace all settings (e.g. from the Settings window), save and apply.
@@ -1075,6 +1118,7 @@ impl App {
             AppendMenuW(hm, MF_STRING | MF_GRAYED, 0, title.as_ptr());
             sep(hm);
             add(hm, ID_VISIBLE, "Show widget", s.visible);
+            add(hm, ID_SETTINGS, "Settings\u{2026}", false);
 
             let mm = CreatePopupMenu();
             for (i, m) in Metric::ALL.iter().enumerate() {
@@ -1269,6 +1313,7 @@ impl App {
 
     fn command(&mut self, id: usize) {
         match id {
+            ID_SETTINGS => return crate::settings_ui::open(self),
             ID_REPORT => return report::open(self),
             ID_TASKMGR => return shell_open("taskmgr.exe", None),
             ID_UPDATE_NOW => {
@@ -1436,7 +1481,8 @@ impl App {
                 self.overlays[i].tracking = false;
                 self.overlays[i].no_hover = false;
                 if !self.popup_pinned {
-                    popup::hide(self);
+                    // Give the mouse a moment to reach the panel before closing it.
+                    self.hide_popup_soon();
                 }
             }
             WM_LBUTTONDOWN => {
@@ -1551,6 +1597,7 @@ const ID_AUTOSTART: usize = 702;
 const ID_EDIT: usize = 703;
 const ID_DATA: usize = 704;
 const ID_EXIT: usize = 705;
+const ID_SETTINGS: usize = 706;
 const ID_DISP_PRIMARY: usize = 800;
 const ID_DISP_ALL: usize = 801;
 const ID_DISP: usize = 810;
@@ -1614,6 +1661,13 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         return 0;
     }
     match msg {
+        WM_TIMER if w == T_HOVER_HIDE => {
+            KillTimer(hwnd, T_HOVER_HIDE);
+            if !a.popup_pinned && !a.mouse_over_ours() {
+                popup::hide(a);
+            }
+            0
+        }
         WM_TIMER if w == T_CHECK => {
             KillTimer(hwnd, T_CHECK);
             a.refresh(false);

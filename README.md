@@ -43,7 +43,8 @@ Pick any combination from **right-click → Metrics**. Default: CPU, RAM, GPU, �
 - **GPU temperature & fan** straight from the display driver (the same source as Task Manager), and **system drive space**.
 - **Alerts**: CPU/RAM staying high, drive almost full, battery low, data cap at 90%/100%.
 - **Stays on top of the taskbar without flicker**: the taskbar owns the widget window, so Windows keeps it directly above the taskbar — clicking the taskbar can never cover it.
-- **Hover** → details panel: ring gauges for CPU / memory / GPU, live network and disk charts, data usage (today, month, cap), uptime, battery, top 5 processes by CPU, memory and disk I/O.
+- **Hover** → details panel on a Windows 11 Acrylic backdrop: ring gauges for CPU / memory / GPU (with temperature & fan), network and disk charts over **1 min / 5 min / 1 hour** with exact values on hover, system drive space, data usage, uptime, battery, top 5 processes by CPU, memory and disk I/O.
+- **Panel actions**: click CPU/memory/GPU → Task Manager, disk → Resource Monitor, network → Windows data usage, data usage → report. Right-click a process → *End task* or *Open file location*.
 - **Click** → pin the panel. **Double-click** → Task Manager. **Drag** → move along the taskbar (or anywhere in floating mode).
 - **Theme-aware, usage-coloured**: matches light/dark taskbar; colours ramp smoothly with usage — muted when idle, more saturated as load rises, amber at `warn_pct` (75%) and red at `crit_pct` (90%).
 - **Sensors your PC lacks are hidden** automatically (no GPU counter → no GPU row; no battery → no battery row).
@@ -71,7 +72,7 @@ Upgrading from the old .NET version: settings and data usage history are importe
 
 ## Settings
 
-Most options are in the right-click menu. Everything is also in `%LOCALAPPDATA%\ResourceMonitor\settings.ini` (menu → *Edit settings file*); edits apply within a few seconds.
+Right-click → **Settings…** opens a native settings window (General, Metrics with drag-free reordering, Colours with the Windows colour picker, Alerts, Data). Most options are also in the right-click menu. Everything is also in `%LOCALAPPDATA%\ResourceMonitor\settings.ini` (menu → *Edit settings file*); edits apply within a few seconds.
 
 | Key | Meaning |
 |---|---|
