@@ -517,6 +517,18 @@ impl Painter {
         measure_dc(self.dc, font, s).0
     }
 
+    /// Word-wrapped text inside `r`.
+    pub fn text_wrap(&self, font: HFONT, s: &str, r: Rect, c: Rgba) {
+        let mut ws: Vec<u16> = s.encode_utf16().collect();
+        unsafe {
+            let old = SelectObject(self.dc, font);
+            SetTextColor(self.dc, c.colorref());
+            let mut rc: RECT = r.into();
+            DrawTextW(self.dc, ws.as_mut_ptr(), ws.len() as i32, &mut rc, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+            SelectObject(self.dc, old);
+        }
+    }
+
     pub fn text_right(&self, font: HFONT, s: &str, right: i32, y: i32, c: Rgba) {
         let w = measure_dc(self.dc, font, s).0;
         self.text(font, s, right - w, y, c);

@@ -32,6 +32,8 @@ pub const WM_APP_ACTIVATE: u32 = WM_APP + 2;
 pub const HIST: usize = 60;
 
 const T_SAMPLE: usize = 1;
+/// One-shot: restart into the freshly installed version.
+const T_RESTART: usize = 3;
 /// Appbar callback: Windows tells us when a full-screen app opens/closes.
 const WM_APPBAR: u32 = WM_APP + 5;
 /// Settings file changed on disk (from the watcher thread).
@@ -294,6 +296,10 @@ pub struct App {
     menu_open: bool,
     /// Item under the mouse/keyboard in the open menu (from WM_MENUSELECT).
     menu_sel: (HMENU, usize),
+    /// Update window and what it shows.
+    pub upd: HWND,
+    pub upd_text: String,
+    pub upd_pct: Option<f32>,
     /// Background UI Automation watcher for taskbar app-icon positions.
     icons: Option<crate::icons::Watcher>,
     /// Set by events: re-read taskbar geometry on the next refresh.
@@ -348,6 +354,7 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         RegisterClassExW(&wc);
         crate::overlay::register(hinst, Some(overlay_proc));
         popup::register(hinst);
+        crate::update_ui::register(hinst);
         report::register(hinst);
 
         // Hidden top-level window (not message-only: those miss broadcasts
@@ -402,6 +409,9 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
             menu_open: false,
             popup_cache: None,
             icons: None,
+            upd: std::ptr::null_mut(),
+            upd_text: String::new(),
+            upd_pct: None,
             menu_sel: (std::ptr::null_mut(), 0),
             need_locate: true,
             need_check: true,
@@ -420,12 +430,6 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
 
         a.popup = popup::create(hinst, hwnd);
         a.tray.add();
-        if after_update {
-            a.tray.balloon(
-                concat!("Updated to v", env!("CARGO_PKG_VERSION")),
-                "Resource Monitor installed the latest version and restarted.",
-            );
-        }
         if a.m.s.auto_update && !after_update {
             // Once per start, in the background. No repeated checks.
             crate::update::check(hwnd as isize, false);
@@ -461,6 +465,14 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         a.sample();
         a.update_timer();
         a.refresh(true);
+        if after_update {
+            crate::update_ui::show(
+                a,
+                concat!("Updated successfully. You're now on v", env!("CARGO_PKG_VERSION"), "."),
+                Some(100.0),
+                false,
+            );
+        }
     }
     Some(())
 }
@@ -991,7 +1003,10 @@ impl App {
         match id {
             ID_REPORT => return report::open(self),
             ID_TASKMGR => return shell_open("taskmgr.exe", None),
-            ID_UPDATE_NOW => return crate::update::check(self.hwnd as isize, true),
+            ID_UPDATE_NOW => {
+                crate::update_ui::show(self, "Checking GitHub for a newer version\u{2026}", Some(0.0), true);
+                return crate::update::check(self.hwnd as isize, true);
+            }
             ID_RECHECK => {
                 if let Some(w) = &self.icons {
                     w.kick();
@@ -1320,6 +1335,14 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         return 0;
     }
     match msg {
+        WM_TIMER if w == T_RESTART => {
+            KillTimer(hwnd, T_RESTART);
+            if let Ok(exe) = std::env::current_exe() {
+                shell_open(&exe.display().to_string(), Some("--after-update"));
+            }
+            DestroyWindow(hwnd);
+            0
+        }
         WM_TIMER => {
             // The only periodic work: read the metrics and redraw them.
             if w == T_SAMPLE {
@@ -1373,50 +1396,50 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             popup::show(a, true);
             0
         }
+        crate::update::WM_APP_UPDATE_STAGE => {
+            let pct = l as f32 / 10.0;
+            let text = match w {
+                crate::update::STAGE_DOWNLOAD => format!("A new version was found. Downloading\u{2026} {:.0}%", pct),
+                crate::update::STAGE_VERIFY => "Verifying the download\u{2026}".to_string(),
+                _ => "Installing\u{2026}".to_string(),
+            };
+            // Shown for automatic updates too, without stealing focus.
+            crate::update_ui::show(a, &text, Some(pct), false);
+            0
+        }
         crate::update::WM_APP_UPDATE => {
             let ver = crate::update::take_version(l);
             let asked = w & crate::update::MANUAL_FLAG != 0;
-            // Answers to "Check for updates now" use a message box: toast
-            // balloons can be hidden by Do Not Disturb / notification settings.
-            let tell = |title: &str, text: &str| {
-                if asked {
-                    message(hwnd, title, text);
-                } else if let Some(a) = app() {
-                    a.tray.balloon(title, text);
-                }
-            };
             match w & 0xFF {
                 crate::update::INSTALLED => {
-                    tell(
-                        &format!("Updated to {}", ver),
-                        "Resource Monitor installed the new version and will restart now.",
-                    );
-                    // New exe is in place: save, start it, and exit. It waits for us to go.
-                    if let Some(a) = app() {
-                        a.m.usage.save();
-                        a.save_settings();
-                    }
-                    if let Ok(exe) = std::env::current_exe() {
-                        shell_open(&exe.display().to_string(), Some("--after-update"));
-                    }
-                    DestroyWindow(hwnd);
+                    crate::update_ui::show(a, &format!("Updated to {}. Restarting\u{2026}", ver), Some(100.0), false);
+                    a.m.usage.save();
+                    a.save_settings();
+                    // Let the user see it, then restart into the new version.
+                    SetTimer(hwnd, T_RESTART, 1500, None);
                 }
                 crate::update::MANUAL => {
-                    tell(
-                        &format!("Update {} available", ver),
-                        "This folder can't be written to, so the app can't update itself.\nThe download page will open.",
+                    crate::update_ui::show(
+                        a,
+                        &format!("Version {} is available, but this folder can't be written to, so the app can't update itself. Opening the download page\u{2026}", ver),
+                        None,
+                        asked,
                     );
                     shell_open(&crate::update::releases_page(), None);
                 }
-                crate::update::MANUAL_QUIET => tell(
-                    &format!("Update {} available", ver),
-                    "Right-click \u{2192} Check for updates now to download it.",
+                crate::update::MANUAL_QUIET => crate::update_ui::show(
+                    a,
+                    &format!("Version {} is available. Right-click \u{2192} Check for updates now to get it.", ver),
+                    None,
+                    false,
                 ),
-                crate::update::UP_TO_DATE => tell(
-                    "No updates available",
-                    concat!("You're on the latest version (v", env!("CARGO_PKG_VERSION"), ")."),
+                crate::update::UP_TO_DATE => crate::update_ui::show(
+                    a,
+                    concat!("No updates available. You're on the latest version (v", env!("CARGO_PKG_VERSION"), ")."),
+                    Some(100.0),
+                    asked,
                 ),
-                _ => tell("Couldn't check for updates", "Couldn't reach GitHub. Check your connection and try again."),
+                _ => crate::update_ui::show(a, &format!("Couldn't check for updates. {}", ver), None, asked),
             }
             0
         }

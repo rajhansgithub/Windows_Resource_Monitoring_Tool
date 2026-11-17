@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "resmon"
-version = "2.6.2"
+version = "2.7.0"
 dependencies = [
  "embed-resource",
  "windows",
