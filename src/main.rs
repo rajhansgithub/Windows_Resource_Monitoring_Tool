@@ -14,6 +14,7 @@ mod settings;
 mod taskbar;
 mod tray;
 mod update;
+mod update_ui;
 mod usage;
 mod util;
 
