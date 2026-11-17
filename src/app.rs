@@ -35,6 +35,8 @@ pub const HIST: usize = 3600;
 const T_SAMPLE: usize = 1;
 /// One-shot: restart into the freshly installed version.
 const T_RESTART: usize = 3;
+/// One-shot, debounced re-check after window/taskbar events.
+const T_CHECK: usize = 4;
 /// Appbar callback: Windows tells us when a full-screen app opens/closes.
 const WM_APPBAR: u32 = WM_APP + 5;
 /// Settings file changed on disk (from the watcher thread).
@@ -355,6 +357,11 @@ pub struct App {
     /// Location-change hook scoped to the taskbar's own thread.
     move_hook: HWINEVENTHOOK,
     move_hook_tid: u32,
+    /// Taskbar windows created/destroyed/shown/hidden.
+    life_hook: HWINEVENTHOOK,
+    /// Foreground app's window moves (full-screen toggles).
+    fg_hook: HWINEVENTHOOK,
+    fg_hook_tid: u32,
     /// Fonts + canvas reused by the details panel between repaints.
     pub popup_cache: Option<(popup::Fonts, crate::render::Canvas)>,
 }
@@ -464,6 +471,9 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
             need_check: true,
             move_hook: std::ptr::null_mut(),
             move_hook_tid: 0,
+            life_hook: std::ptr::null_mut(),
+            fg_hook: std::ptr::null_mut(),
+            fg_hook_tid: 0,
         });
         a.icons = Some(crate::icons::Watcher::start(hwnd as isize));
         // Register as a (zero-size, space-less) appbar purely to receive
@@ -526,27 +536,48 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
 
 unsafe extern "system" fn on_foreground(_: HWINEVENTHOOK, _: u32, _: HWND, _: i32, _: i32, _: u32, _: u32) {
     if let Some(a) = app() {
-        a.need_check = true;
-        a.refresh(false);
+        a.hook_foreground();
+        a.schedule_check();
     }
 }
 
-/// A taskbar window moved/resized/slid (auto-hide). Scoped to Explorer's
-/// taskbar thread, so it fires only for taskbar activity.
-unsafe extern "system" fn on_taskbar_move(_: HWINEVENTHOOK, _: u32, hwnd: HWND, obj: i32, _: i32, _: u32, _: u32) {
-    if obj != OBJID_WINDOW {
+/// The foreground app's own window moved/resized — e.g. a browser or player
+/// going full-screen (F11, full-screen video) without a focus change.
+unsafe extern "system" fn on_foreground_move(_: HWINEVENTHOOK, _: u32, hwnd: HWND, obj: i32, child: i32, _: u32, _: u32) {
+    if obj != OBJID_WINDOW || child != 0 {
+        return;
+    }
+    let fg = GetForegroundWindow();
+    if fg.is_null() || (hwnd != fg && hwnd != GetAncestor(fg, GA_ROOT)) {
         return;
     }
     if let Some(a) = app() {
-        if a.taskbars.iter().any(|t| t.hwnd == hwnd) {
-            a.need_locate = true;
-            a.refresh(false);
+        a.schedule_check();
+    }
+}
+
+/// Taskbar windows created/destroyed/shown/hidden/moved (auto-hide slide,
+/// second-monitor taskbar recreated after sleep or a display change…).
+/// Scoped to Explorer's taskbar thread, so it fires only for taskbar activity.
+unsafe extern "system" fn on_taskbar_event(_: HWINEVENTHOOK, ev: u32, hwnd: HWND, obj: i32, child: i32, _: u32, _: u32) {
+    if obj != OBJID_WINDOW || child != 0 || hwnd.is_null() {
+        return;
+    }
+    let Some(a) = app() else { return };
+    let ours = a.taskbars.iter().any(|t| t.hwnd == hwnd);
+    let relevant = match ev {
+        EVENT_OBJECT_CREATE | EVENT_OBJECT_SHOW => {
+            ours || matches!(class_name(hwnd).as_str(), "Shell_TrayWnd" | "Shell_SecondaryTrayWnd")
         }
+        _ => ours,
+    };
+    if relevant {
+        a.schedule_locate();
     }
 }
 
 impl App {
-    /// (Re)attach the taskbar move hook to whatever thread owns the taskbar now.
+    /// (Re)attach the taskbar hooks to whatever thread owns the taskbar now.
     fn hook_taskbar_moves(&mut self) {
         let Some(tb) = self.taskbars.iter().find(|t| !t.hwnd.is_null()) else { return };
         let mut pid = 0u32;
@@ -555,20 +586,72 @@ impl App {
             return;
         }
         unsafe {
-            if !self.move_hook.is_null() {
-                UnhookWinEvent(self.move_hook);
+            for h in [self.move_hook, self.life_hook] {
+                if !h.is_null() {
+                    UnhookWinEvent(h);
+                }
             }
             self.move_hook = SetWinEventHook(
                 EVENT_OBJECT_LOCATIONCHANGE,
                 EVENT_OBJECT_LOCATIONCHANGE,
                 std::ptr::null_mut(),
-                Some(on_taskbar_move),
+                Some(on_taskbar_event),
+                pid,
+                tid,
+                WINEVENT_OUTOFCONTEXT,
+            );
+            self.life_hook = SetWinEventHook(
+                EVENT_OBJECT_CREATE,
+                EVENT_OBJECT_HIDE,
+                std::ptr::null_mut(),
+                Some(on_taskbar_event),
                 pid,
                 tid,
                 WINEVENT_OUTOFCONTEXT,
             );
         }
         self.move_hook_tid = tid;
+    }
+
+    /// Follow the foreground app's window moves (scoped to its thread).
+    fn hook_foreground(&mut self) {
+        let fg = unsafe { GetForegroundWindow() };
+        if fg.is_null() {
+            return;
+        }
+        let mut pid = 0u32;
+        let tid = unsafe { GetWindowThreadProcessId(fg, &mut pid) };
+        if tid == 0 || tid == self.fg_hook_tid || pid == std::process::id() {
+            return;
+        }
+        unsafe {
+            if !self.fg_hook.is_null() {
+                UnhookWinEvent(self.fg_hook);
+            }
+            self.fg_hook = SetWinEventHook(
+                EVENT_OBJECT_LOCATIONCHANGE,
+                EVENT_OBJECT_LOCATIONCHANGE,
+                std::ptr::null_mut(),
+                Some(on_foreground_move),
+                pid,
+                tid,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+            );
+        }
+        self.fg_hook_tid = tid;
+    }
+
+    /// Re-check full-screen state / z-order shortly. Bursts of events (window
+    /// animations, Alt-Tab) collapse into one check, so nothing blinks.
+    pub fn schedule_check(&mut self) {
+        self.need_check = true;
+        unsafe { SetTimer(self.hwnd, T_CHECK, 250, None) };
+    }
+
+    /// Re-read taskbar geometry shortly (coalesced).
+    pub fn schedule_locate(&mut self) {
+        self.need_locate = true;
+        unsafe { SetTimer(self.hwnd, T_CHECK, 150, None) };
     }
 
     fn opts(&self) -> SampleOpts {
@@ -738,6 +821,15 @@ impl App {
     /// Nothing here polls: the taskbar is re-located only after an event set
     /// `need_locate`, and full-screen / z-order only after one set `need_check`.
     pub fn refresh(&mut self, redraw: bool) {
+        // A taskbar Windows recreated takes our owned widget down with it.
+        let dead = self.overlays.iter().any(|o| unsafe {
+            IsWindow(o.hwnd) == 0 || (!o.tb.hwnd.is_null() && IsWindow(o.tb.hwnd) == 0)
+        });
+        if dead {
+            crate::util::diag("taskbar or widget window was destroyed by Windows; recreating");
+            self.overlays.retain(|o| unsafe { IsWindow(o.hwnd) != 0 && (o.tb.hwnd.is_null() || IsWindow(o.tb.hwnd) != 0) });
+            self.need_locate = true;
+        }
         if self.need_locate || self.taskbars.is_empty() {
             self.need_locate = false;
             self.need_check = true;
@@ -813,9 +905,36 @@ impl App {
             let moved = !tb.same_geometry(&o.tb);
             o.tb = tb;
             if check || !o.shown && !o.fullscreen {
-                o.fullscreen = m.s.hide_fullscreen && taskbar::fullscreen_active(&tb, &own);
+                let (fs, why) = if m.s.hide_fullscreen {
+                    taskbar::fullscreen_active(&tb, &own)
+                } else {
+                    (false, String::new())
+                };
+                if fs != o.fullscreen {
+                    crate::util::diag(&format!(
+                        "{}: {} \u{2014} {}",
+                        tb.label(),
+                        if fs { "hidden for full-screen app" } else { "full-screen ended, shown" },
+                        why
+                    ));
+                }
+                o.fullscreen = fs;
             }
             let want = m.s.visible && !o.fullscreen && !(dock && tb.retracted) && self.display_on;
+            if want != o.shown {
+                let why = if !m.s.visible {
+                    "hidden in menu"
+                } else if o.fullscreen {
+                    "full-screen app"
+                } else if dock && tb.retracted {
+                    "auto-hide taskbar retracted"
+                } else if !self.display_on {
+                    "display off"
+                } else {
+                    "visible"
+                };
+                crate::util::diag(&format!("{}: {} ({})", tb.label(), if want { "show" } else { "hide" }, why));
+            }
             if want {
                 if redraw || moved || !o.shown {
                     o.render(m);
@@ -1284,8 +1403,10 @@ impl App {
             }
 
             KillTimer(self.hwnd, T_SAMPLE);
-            if !self.move_hook.is_null() {
-                UnhookWinEvent(self.move_hook);
+            for h in [self.move_hook, self.life_hook, self.fg_hook] {
+                if !h.is_null() {
+                    UnhookWinEvent(h);
+                }
             }
             let mut abd: APPBARDATA = std::mem::zeroed();
             abd.cbSize = std::mem::size_of::<APPBARDATA>() as u32;
@@ -1392,6 +1513,11 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         return 0;
     }
     match msg {
+        WM_TIMER if w == T_CHECK => {
+            KillTimer(hwnd, T_CHECK);
+            a.refresh(false);
+            0
+        }
         WM_TIMER if w == T_RESTART => {
             KillTimer(hwnd, T_RESTART);
             if let Ok(exe) = std::env::current_exe() {
@@ -1410,8 +1536,7 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         }
         WM_APPBAR => {
             if w as u32 == ABN_FULLSCREENAPP {
-                a.need_check = true;
-                a.refresh(false);
+                a.schedule_check();
             }
             0
         }
