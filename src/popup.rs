@@ -16,7 +16,7 @@ use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
 use windows_sys::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
-use windows_sys::Win32::UI::Controls::{MARGINS, WM_MOUSELEAVE};
+use windows_sys::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -102,23 +102,52 @@ fn build_number() -> u32 {
 /// transparent background with correct premultiplied alpha.
 pub fn style_popup(hwnd: HWND, dark: bool) -> bool {
     style_window(hwnd, dark);
-    if build_number() < 22000 {
+    // Windows draws the Mica/Acrylic *system backdrop* only for the active
+    // window; this panel never takes focus (so you keep yours), which made it
+    // fall back to flat grey. The accent-policy acrylic blur — what the
+    // taskbar and Start use — stays frosted while inactive. Win10 1803+.
+    if build_number() < 17134 {
         return false;
     }
-    unsafe {
-        let kind: i32 = DWMSBT_TRANSIENTWINDOW;
-        let hr = DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE as u32, &kind as *const i32 as _, 4);
-        if hr >= 0 {
-            let m = MARGINS { cxLeftWidth: -1, cxRightWidth: -1, cyTopHeight: -1, cyBottomHeight: -1 };
-            if DwmExtendFrameIntoClientArea(hwnd, &m) >= 0 {
-                return true;
-            }
-            // Roll back so the opaque fallback paints on a plain window.
-            let auto: i32 = DWMSBT_AUTO;
-            DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE as u32, &auto as *const i32 as _, 4);
-        }
+    unsafe { acrylic_accent(hwnd, dark) }
+}
+
+/// Acrylic blur behind the whole window via SetWindowCompositionAttribute
+/// (user32, resolved at run time). Pixels with alpha 0 show the blur.
+unsafe fn acrylic_accent(hwnd: HWND, dark: bool) -> bool {
+    use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+    #[repr(C)]
+    struct AccentPolicy {
+        state: u32,
+        flags: u32,
+        /// 0xAABBGGRR tint.
+        color: u32,
+        animation: u32,
     }
-    false
+    #[repr(C)]
+    struct CompositionData {
+        attribute: u32,
+        data: *mut core::ffi::c_void,
+        size: usize,
+    }
+    type SetWca = unsafe extern "system" fn(HWND, *mut CompositionData) -> i32;
+    const WCA_ACCENT_POLICY: u32 = 19;
+    const ACCENT_ENABLE_ACRYLICBLURBEHIND: u32 = 4;
+    let user32 = GetModuleHandleW(wide("user32.dll").as_ptr());
+    if user32.is_null() {
+        return false;
+    }
+    let Some(f) = GetProcAddress(user32, b"SetWindowCompositionAttribute\0".as_ptr()) else { return false };
+    let set: SetWca = std::mem::transmute(f);
+    // Same tint strength as Windows flyouts: dark #202020 / light #F3F3F3 at ~70%.
+    let tint = if dark { 0xB320_2020u32 } else { 0xB3F3_F3F3u32 };
+    let mut policy = AccentPolicy { state: ACCENT_ENABLE_ACRYLICBLURBEHIND, flags: 2, color: tint, animation: 0 };
+    let mut data = CompositionData {
+        attribute: WCA_ACCENT_POLICY,
+        data: &mut policy as *mut AccentPolicy as *mut _,
+        size: std::mem::size_of::<AccentPolicy>(),
+    };
+    set(hwnd, &mut data) != 0
 }
 
 pub struct Fonts {
