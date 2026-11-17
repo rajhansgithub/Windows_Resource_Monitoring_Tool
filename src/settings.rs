@@ -105,6 +105,10 @@ pub struct Settings {
     pub labels: bool,
     /// Two (or three) metrics per column; off = one line, each metric its own column.
     pub stacked: bool,
+    /// Per-display override of `stacked`, keyed by display ("DISPLAY2").
+    pub stacked_on: Vec<(String, bool)>,
+    /// Allow switching a one-line widget to stacked rows when it doesn't fit.
+    pub auto_stack: bool,
     /// Max widget width on the taskbar, % of taskbar width. 0 = auto (stay clear of app icons).
     pub max_width_pct: u32,
     pub unit: SpeedUnit,
@@ -146,6 +150,8 @@ impl Default for Settings {
             sparklines: true,
             labels: true,
             stacked: true,
+            stacked_on: Vec::new(),
+            auto_stack: false,
             max_width_pct: 0,
             unit: SpeedUnit::AutoBytes,
             adapter: String::new(),
@@ -207,6 +213,18 @@ impl Settings {
         self.show[m.idx()]
     }
 
+    /// Stacked rows on this display? Per-display choice, else the default.
+    pub fn stacked_for(&self, display: &str) -> bool {
+        self.stacked_on.iter().find(|(k, _)| k.eq_ignore_ascii_case(display)).map_or(self.stacked, |e| e.1)
+    }
+
+    pub fn set_stacked(&mut self, display: &str, on: bool) {
+        match self.stacked_on.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(display)) {
+            Some(e) => e.1 = on,
+            None => self.stacked_on.push((display.to_string(), on)),
+        }
+    }
+
     pub fn offset(&self, display: &str, primary: bool) -> i32 {
         if primary {
             return self.dock_offset;
@@ -250,7 +268,7 @@ impl Settings {
     /// Reload from disk on top of `self`; None if unreadable (e.g. mid-save).
     pub fn reload(&self) -> Option<Settings> {
         let bytes = std::fs::read(Self::path()).ok()?;
-        let mut s = Settings { first_run: false, offsets: Vec::new(), ..self.clone() };
+        let mut s = Settings { first_run: false, offsets: Vec::new(), stacked_on: Vec::new(), ..self.clone() };
         s.apply(&decode(&bytes));
         Some(s)
     }
@@ -263,6 +281,12 @@ impl Settings {
             }
             let Some((k, v)) = line.split_once('=') else { continue };
             let (k, v) = (k.trim(), v.trim());
+            if let Some(d) = k.strip_prefix("stacked.") {
+                if let Some(on) = parse_bool(v) {
+                    self.set_stacked(d, on);
+                }
+                continue;
+            }
             if let Some(d) = k.strip_prefix("dock_offset.") {
                 if let Ok(v) = v.parse::<i32>() {
                     self.set_offset(d, false, v.max(0));
@@ -280,6 +304,7 @@ impl Settings {
                 "sparklines" => self.sparklines = parse_bool(v).unwrap_or(self.sparklines),
                 "labels" => self.labels = parse_bool(v).unwrap_or(self.labels),
                 "stacked" => self.stacked = parse_bool(v).unwrap_or(self.stacked),
+                "auto_stack" => self.auto_stack = parse_bool(v).unwrap_or(self.auto_stack),
                 "max_width_pct" => {
                     self.max_width_pct = v.parse().map(|x: u32| x.min(90)).unwrap_or(self.max_width_pct)
                 }
@@ -384,7 +409,9 @@ impl Settings {
             Mode::Float => "float",
         };
         o.push_str(&format!(
-            "\nvisible = {}\nsparklines = {}\nlabels = {}\n# 1 = metrics stacked in rows, 0 = one line, each metric its own column\nstacked = {}\n\
+            "\nvisible = {}\nsparklines = {}\nlabels = {}\n# 1 = metrics stacked in rows, 0 = one line, each metric its own column.\n\
+             # Default for every display; per display: stacked.DISPLAY2 = 0\nstacked = {}\n\
+             # 1 = a one-line widget may switch to stacked rows when it doesn't fit\nauto_stack = {}\n\
              # widest the widget may get, % of taskbar width; 0 = auto (never cover app icons)\nmax_width_pct = {}\n\
              # auto | autobits | KB/s | MB/s | Kbps | Mbps\nspeed_unit = {}\n\
              # empty = all connected physical adapters; otherwise the adapter name (e.g. Wi-Fi)\nadapter = {}\n\
@@ -399,6 +426,7 @@ impl Settings {
             b(self.sparklines),
             b(self.labels),
             b(self.stacked),
+            b(self.auto_stack),
             self.max_width_pct,
             self.unit.key(),
             self.adapter,
@@ -418,6 +446,9 @@ impl Settings {
             self.data_cap_gb,
             self.cap_reset_day,
         ));
+        for (k, v) in &self.stacked_on {
+            o.push_str(&format!("stacked.{} = {}\n", k, b(*v)));
+        }
         for (k, v) in &self.offsets {
             o.push_str(&format!("dock_offset.{} = {}\n", k, v));
         }

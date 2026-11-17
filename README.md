@@ -73,7 +73,9 @@ Most options are in the right-click menu. Everything is also in `%LOCALAPPDATA%\
 | `adapter` | empty = all physical adapters, or a name such as `Wi-Fi` |
 | `interval_ms` | 250–10000 |
 | `max_width_pct` | 0 = auto (stay clear of app icons), or a fixed % of the taskbar width |
-| `stacked` | 1 = metrics stacked in 2 rows, 0 = one line, each metric its own column (menu: Appearance → Stacked) |
+| `stacked` | default for every display: 1 = metrics stacked in 2 rows, 0 = one line (menu: Appearance → Stacked) |
+| `stacked.DISPLAY2` | per-display override (menu: Appearance → Stacked → *Display 2*) |
+| `auto_stack` | 1 = a one-line widget may switch to stacked rows when it doesn't fit (default 0: extra metrics go to the hover panel) |
 | `mode` | `dock` or `float` |
 | `dock_offset` | gap from the tray on the main taskbar (set by dragging) |
 | `displays` | `primary`, `all`, or a list such as `DISPLAY1,DISPLAY3` |
