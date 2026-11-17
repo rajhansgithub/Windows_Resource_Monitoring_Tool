@@ -37,6 +37,8 @@ pub struct Overlay {
     pub icons: Option<i32>,
     /// A full-screen app is on this monitor (updated on events only).
     pub fullscreen: bool,
+    /// Measured start of the clock/tray area on a secondary taskbar.
+    pub tray_l: Option<i32>,
 }
 
 /// Which metrics belong together in one column (e.g. ▲ above ▼).
@@ -189,6 +191,7 @@ impl Overlay {
             no_hover: false,
             icons: None,
             fullscreen: false,
+            tray_l: None,
         })
     }
 
@@ -255,6 +258,16 @@ impl Overlay {
         self.shown = on;
     }
 
+    /// Where the tray/clock area starts: measured on secondary taskbars,
+    /// the real tray window on the main one.
+    fn tray_left(&self) -> i32 {
+        if self.tb.primary {
+            self.tb.tray.l
+        } else {
+            self.tray_l.unwrap_or(self.tb.tray.l)
+        }
+    }
+
     /// Widest the widget may be on the taskbar without covering app icons.
     fn budget(&self, s: &crate::settings::Settings) -> Option<i32> {
         let tb = self.tb;
@@ -264,7 +277,7 @@ impl Overlay {
         let scale = tb.dpi as f32 / 96.0;
         let sc = |v: f32| (v * scale).round() as i32;
         let off = (s.offset(&tb.key(), tb.primary) as f32 * scale) as i32;
-        let right = tb.tray.l - sc(4.0) - off;
+        let right = self.tray_left() - sc(4.0) - off;
         let b = if s.max_width_pct > 0 {
             tb.rect.w() * s.max_width_pct as i32 / 100
         } else {
@@ -575,7 +588,7 @@ impl Overlay {
             let off = (m.s.offset(&tb.key(), tb.primary) as f32 * scale) as i32;
             match tb.edge {
                 Edge::Bottom | Edge::Top => {
-                    let x = (tb.tray.l - w - sc(4.0) - off).max(tb.rect.l);
+                    let x = (self.tray_left() - w - sc(4.0) - off).max(tb.rect.l);
                     (x, tb.rect.t + (tb.rect.h() - h) / 2)
                 }
                 Edge::Left | Edge::Right => {
