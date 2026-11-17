@@ -17,8 +17,9 @@ const REPO: &str = "rajhansgithub/Windows_Resource_Monitoring_Tool";
 const ASSET: &str = "ResourceMonitor.exe";
 const AGENT: &str = concat!("ResourceMonitor-Updater/", env!("CARGO_PKG_VERSION"));
 
-/// wParam: 0 = up to date, 1 = installed (restart now), 2 = newer version but
-/// this folder isn't writable (lParam = 0), 3 = check failed.
+/// wParam low byte: 0 = up to date, 1 = installed (restart now), 2 = newer
+/// version but this folder isn't writable, 3 = check failed. Bit 0x100 is set
+/// when the user started the check. lParam: version string (see take_version).
 pub const WM_APP_UPDATE: u32 = WM_APP + 8;
 pub const UP_TO_DATE: usize = 0;
 pub const INSTALLED: usize = 1;
@@ -26,6 +27,7 @@ pub const MANUAL: usize = 2;
 pub const FAILED: usize = 3;
 /// Like MANUAL, but from the automatic startup check: notify only.
 pub const MANUAL_QUIET: usize = 4;
+pub const MANUAL_FLAG: usize = 0x100;
 
 pub fn releases_page() -> String {
     format!("https://github.com/{}/releases/latest", REPO)
@@ -57,7 +59,8 @@ pub fn check(notify: isize, manual: bool) {
         if code == INSTALLED || code == MANUAL_QUIET || manual {
             // Version text goes through a leaked Box the UI thread takes back.
             let p = Box::into_raw(Box::new(ver)) as isize;
-            unsafe { PostMessageW(notify as _, WM_APP_UPDATE, code, p) };
+            let w = code | if manual { MANUAL_FLAG } else { 0 };
+            unsafe { PostMessageW(notify as _, WM_APP_UPDATE, w, p) };
         }
     });
 }

@@ -148,3 +148,12 @@ pub fn get_x(l: isize) -> i32 {
 pub fn get_y(l: isize) -> i32 {
     ((l >> 16) & 0xffff) as i16 as i32
 }
+
+/// Simple information dialog that always shows (unlike toast notifications).
+pub fn message(owner: HWND, title: &str, text: &str) {
+    let t = wide(title);
+    let x = wide(text);
+    unsafe {
+        MessageBoxW(owner, x.as_ptr(), t.as_ptr(), MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST);
+    }
+}
