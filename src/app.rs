@@ -663,7 +663,12 @@ impl App {
             let targets = wanted
                 .iter()
                 .filter(|t| !t.hwnd.is_null() && t.edge.horizontal() && self.m.s.mode == Mode::Dock)
-                .map(|t| crate::icons::Target { taskbar: t.hwnd as isize, rect: t.rect, limit: t.tray.l })
+                .map(|t| crate::icons::Target {
+                    taskbar: t.hwnd as isize,
+                    rect: t.rect,
+                    limit: t.tray.l,
+                    secondary: !t.primary,
+                })
                 .collect();
             wt.set_targets(targets);
         }
@@ -1267,6 +1272,19 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             }
             a.refresh(true);
             popup::show(a, true);
+            0
+        }
+        crate::icons::WM_APP_TRAY => {
+            let mut changed = false;
+            for o in &mut a.overlays {
+                if o.tb.hwnd as usize == w && o.tray_l != Some(l as i32) {
+                    o.tray_l = Some(l as i32);
+                    changed = true;
+                }
+            }
+            if changed {
+                a.refresh(true);
+            }
             0
         }
         crate::icons::WM_APP_ICONS => {

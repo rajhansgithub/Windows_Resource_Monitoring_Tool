@@ -2,8 +2,9 @@
 //! accessibility API), on a background thread so a busy Explorer can never
 //! stall the UI. Results are posted back to the controller window.
 //!
-//! No polling: it checks once at startup and then only when the user asks
-//! (menu → "Re-check taskbar icons"). The thread sleeps the rest of the time.
+//! No polling: each taskbar is checked once, when it first gets a widget, and
+//! then only when the user asks (menu → "Re-check taskbar icons"). The thread
+//! sleeps the rest of the time.
 
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -13,6 +14,9 @@ use windows::Win32::UI::Accessibility::*;
 
 /// wParam = taskbar HWND, lParam = screen x of the icons' right edge.
 pub const WM_APP_ICONS: u32 = windows_sys::Win32::UI::WindowsAndMessaging::WM_APP + 3;
+/// wParam = taskbar HWND, lParam = screen x where its tray/clock area starts
+/// (secondary taskbars only; they have no tray window to measure).
+pub const WM_APP_TRAY: u32 = windows_sys::Win32::UI::WindowsAndMessaging::WM_APP + 7;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Target {
@@ -20,13 +24,16 @@ pub struct Target {
     pub rect: crate::util::Rect,
     /// Tray left edge: buttons at or beyond this belong to the tray.
     pub limit: i32,
+    /// Secondary-monitor taskbar (no tray window; clock position is guessed).
+    pub secondary: bool,
 }
 
 #[derive(Default)]
 struct Shared {
     targets: Vec<Target>,
     kick: bool,
-    started: bool,
+    /// Taskbars already checked once.
+    checked: Vec<isize>,
     quit: bool,
 }
 
@@ -45,15 +52,15 @@ impl Watcher {
         Watcher { shared }
     }
 
-    /// Taskbars to check. The first non-empty list triggers the startup check;
-    /// later changes are only remembered for the next manual re-check.
+    /// Taskbars to check.
     pub fn set_targets(&self, t: Vec<Target>) {
         let (m, cv) = &*self.shared;
         if let Ok(mut s) = m.lock() {
             if s.targets != t {
                 s.targets = t;
-                if !s.started && !s.targets.is_empty() {
-                    s.started = true;
+                // A taskbar that has never been checked (startup, or one that
+                // just got a widget) is checked once.
+                if s.targets.iter().any(|t| !s.checked.contains(&t.taskbar)) {
                     s.kick = true;
                     cv.notify_one();
                 }
@@ -94,33 +101,45 @@ impl Uia {
             let cache = auto.CreateCacheRequest().ok()?;
             cache.AddProperty(UIA_BoundingRectanglePropertyId).ok()?;
             cache.AddProperty(UIA_ControlTypePropertyId).ok()?;
+            cache.AddProperty(UIA_ClassNamePropertyId).ok()?;
             // Everything; buttons (app icons, Start, Search, Task view…) are picked below.
             let cond = auto.CreateTrueCondition().ok()?;
             Some(Uia { auto, cache, cond })
         }
     }
 
-    /// Rightmost edge of the taskbar's buttons left of the tray; the taskbar's
-    /// left edge if it has none.
-    fn icons_right(&self, t: &Target) -> Option<i32> {
+    /// (right edge of the app buttons, left edge of the tray/clock items).
+    /// Right edge falls back to the taskbar's left edge when it has no buttons.
+    fn measure(&self, t: &Target) -> Option<(i32, Option<i32>)> {
         unsafe {
             let hwnd = HWND(t.taskbar as *mut core::ffi::c_void);
             let root = self.auto.ElementFromHandleBuildCache(hwnd, &self.cache).ok()?;
             let all = root.FindAllBuildCache(TreeScope_Descendants, &self.cond, &self.cache).ok()?;
             let n = all.Length().ok()?;
             let tb = t.rect;
-            let mut right = tb.l;
+            let mut buttons: Vec<RECT> = Vec::new();
+            let mut tray_l: Option<i32> = None;
             for i in 0..n {
                 let Ok(e) = all.GetElement(i) else { continue };
                 if e.CachedControlType().ok() != Some(UIA_ButtonControlTypeId) {
                     continue;
                 }
                 let Ok(r) = e.CachedBoundingRectangle() else { continue };
-                if is_icon(&r, tb, t.limit) {
-                    right = right.max(r.right);
+                if !is_icon(&r, tb, tb.r + 2) {
+                    continue;
                 }
+                // Win11 tray items (clock, show-desktop, notification icons)
+                // are "SystemTray.*"; they are not app icons.
+                let cls = e.CachedClassName().map(|b| b.to_string()).unwrap_or_default();
+                if cls.starts_with("SystemTray.") {
+                    tray_l = Some(tray_l.map_or(r.left, |v: i32| v.min(r.left)));
+                    continue;
+                }
+                buttons.push(r);
             }
-            Some(right)
+            let limit = if t.secondary { tray_l.unwrap_or(t.limit) } else { t.limit };
+            let right = buttons.iter().filter(|r| r.left < limit - 2).map(|r| r.right).max().unwrap_or(tb.l);
+            Some((right, if t.secondary { tray_l } else { None }))
         }
     }
 }
@@ -164,11 +183,22 @@ fn worker(shared: Arc<(Mutex<Shared>, Condvar)>, notify: isize) {
             let Ok(s) = m.lock() else { return };
             s.targets.clone()
         };
+        if let Ok(mut s) = shared.0.lock() {
+            for t in &targets {
+                if !s.checked.contains(&t.taskbar) {
+                    s.checked.push(t.taskbar);
+                }
+            }
+        }
         let Some(uia) = &uia else { continue };
         for t in &targets {
-            let Some(x) = uia.icons_right(t) else { continue };
+            let Some((x, tray)) = uia.measure(t) else { continue };
             unsafe {
-                windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(
+                use windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW;
+                if let Some(tl) = tray {
+                    PostMessageW(notify as _, WM_APP_TRAY, t.taskbar as usize, tl as isize);
+                }
+                PostMessageW(
                     notify as _,
                     WM_APP_ICONS,
                     t.taskbar as usize,
