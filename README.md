@@ -42,7 +42,7 @@ Pick any combination from **right-click → Metrics**. Default: CPU, RAM, GPU, �
 - **Stays on top of the taskbar without flicker**: the taskbar owns the widget window, so Windows keeps it directly above the taskbar — clicking the taskbar can never cover it.
 - **Hover** → details panel: ring gauges for CPU / memory / GPU, live network and disk charts, data usage (today, month, cap), uptime, battery, top 5 processes by CPU, memory and disk I/O.
 - **Click** → pin the panel. **Double-click** → Task Manager. **Drag** → move along the taskbar (or anywhere in floating mode).
-- **Theme-aware**: matches light/dark taskbar; values turn amber/red past thresholds (default 75% / 90%).
+- **Theme-aware, usage-coloured**: matches light/dark taskbar; colours ramp smoothly with usage — muted when idle, more saturated as load rises, amber at `warn_pct` (75%) and red at `crit_pct` (90%).
 - **Sensors your PC lacks are hidden** automatically (no GPU counter → no GPU row; no battery → no battery row).
 - **Display off** → samples every 5 s. Data usage stays exact anyway (cumulative counters).
 

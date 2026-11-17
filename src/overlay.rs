@@ -562,9 +562,11 @@ impl Overlay {
                 // Lightened accent: keeps the colour cue but reads like text.
                 self.canvas.text(font, short_label(r), x, y, ac.mix(fg, 0.3));
             }
-            let vc = match lvl {
-                2 => C_CRIT,
-                1 => C_WARN,
+            let pct = m.pct_of(r);
+            let vc = match (pct, lvl) {
+                (Some(p), _) => m.heat_text(fg, p),
+                (None, 2) => C_CRIT,
+                (None, 1) => C_WARN,
                 _ => fg,
             };
             let max_w = self.faces[fi].sticky[r.idx()];
@@ -582,8 +584,9 @@ impl Overlay {
             }
             if let Some(sr) = spark {
                 let data = m.series(r, 30);
-                self.canvas.fill_rect(sr, ac.with_a(if m.dark { 22 } else { 30 }));
-                self.canvas.spark(sr, &data, ac);
+                let sc_col = pct.map_or(ac, |p| m.heat(ac, p));
+                self.canvas.fill_rect(sr, sc_col.with_a(if m.dark { 22 } else { 30 }));
+                self.canvas.spark(sr, &data, sc_col);
             }
         }
 

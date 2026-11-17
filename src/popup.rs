@@ -1,6 +1,6 @@
 //! Hover / click details panel.
 
-use crate::app::{accent, App, C_CRIT, C_WARN};
+use crate::app::{accent, App};
 use crate::fmt;
 use crate::render::{create_font, ui_face, Canvas, Rgba};
 use crate::settings::Metric;
@@ -291,16 +291,6 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32) {
     }
     y += sc(HEADER) + gap;
 
-    let level = |v: f32| {
-        if v >= a.s.crit_pct {
-            Some(C_CRIT)
-        } else if v >= a.s.warn_pct {
-            Some(C_WARN)
-        } else {
-            None
-        }
-    };
-
     // ---- ring gauges
     struct Gauge {
         label: &'static str,
@@ -334,7 +324,7 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32) {
         let x = pad + i as i32 * (gw + gap);
         let r = Rect { l: x, t: y, r: x + gw, b: y + gh };
         card(c, r, rad, &pal);
-        let col = level(g.pct).unwrap_or(accent(g.m, a.dark));
+        let col = a.heat(accent(g.m, a.dark), g.pct);
         let (cx, cy) = ((x + gw / 2) as f32, (y + sc(48.0)) as f32);
         let rr = 36.0 * scale;
         let th = 7.0 * scale;
@@ -342,7 +332,7 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32) {
         c.ring(cx, cy, rr, th, g.pct / 100.0, col);
         let v = format!("{:.0}%", g.pct);
         let (_, vh) = c.measure(f.mid, &v);
-        c.text_center(f.mid, &v, cx as i32, cy as i32 - vh / 2, pal.fg);
+        c.text_center(f.mid, &v, cx as i32, cy as i32 - vh / 2, a.heat_text(pal.fg, g.pct));
         c.text_center(f.caps, g.label, cx as i32, y + sc(92.0), pal.dim);
         let sub = c.ellipsize(f.small, &g.sub, gw - sc(16.0));
         c.text_center(f.small, &sub, cx as i32, y + sc(108.0), pal.fg);
@@ -421,7 +411,7 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32) {
         let bar = Rect { l: ix, t: by, r: right - sc(14.0) - lw - sc(10.0), b: by + sc(8.0) };
         c.fill_round(bar, 4.0 * scale, pal.track);
         let fw = (bar.w() as f64 * (pct / 100.0).min(1.0)) as i32;
-        let col = level(pct as f32).unwrap_or(accent(Metric::Down, a.dark));
+        let col = a.heat(accent(Metric::Down, a.dark), pct as f32);
         if fw > 0 {
             c.fill_round(Rect { r: bar.l + fw.max(bar.h()), ..bar }, 4.0 * scale, col);
         }
