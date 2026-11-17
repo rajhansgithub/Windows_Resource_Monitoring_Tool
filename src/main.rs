@@ -13,6 +13,7 @@ mod sensors;
 mod settings;
 mod taskbar;
 mod tray;
+mod update;
 mod usage;
 mod util;
 
@@ -29,8 +30,17 @@ fn main() {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
         let report = std::env::args().any(|a| a.eq_ignore_ascii_case("--report"));
+        let after_update = std::env::args().any(|a| a.eq_ignore_ascii_case("--after-update"));
         let name = wide("Local\\ResourceMonitor.SingleInstance");
-        let mutex = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
+        let mut mutex = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
+        // Just updated: the previous version is still shutting down; wait for it.
+        let mut tries = 0;
+        while after_update && GetLastError() == ERROR_ALREADY_EXISTS && tries < 50 {
+            CloseHandle(mutex);
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            mutex = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
+            tries += 1;
+        }
         if GetLastError() == ERROR_ALREADY_EXISTS {
             let h = util::find_window(app::MAIN_CLASS);
             if !h.is_null() {
@@ -57,7 +67,8 @@ fn main() {
         );
 
         let hinst = GetModuleHandleW(std::ptr::null());
-        if app::create(hinst).is_none() {
+        update::cleanup();
+        if app::create(hinst, after_update).is_none() {
             return;
         }
         if report {

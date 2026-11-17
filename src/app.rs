@@ -335,7 +335,7 @@ fn guid_eq(a: &windows_sys::core::GUID, b: &windows_sys::core::GUID) -> bool {
     a.data1 == b.data1 && a.data2 == b.data2 && a.data3 == b.data3 && a.data4 == b.data4
 }
 
-pub fn create(hinst: HINSTANCE) -> Option<()> {
+pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
     unsafe {
         let cls = wide(MAIN_CLASS);
         let wc = WNDCLASSEXW {
@@ -420,6 +420,16 @@ pub fn create(hinst: HINSTANCE) -> Option<()> {
 
         a.popup = popup::create(hinst, hwnd);
         a.tray.add();
+        if after_update {
+            a.tray.balloon(
+                concat!("Updated to v", env!("CARGO_PKG_VERSION")),
+                "Resource Monitor installed the latest version and restarted.",
+            );
+        }
+        if a.m.s.auto_update && !after_update {
+            // Once per start, in the background. No repeated checks.
+            crate::update::check(hwnd as isize, false);
+        }
         if first_run {
             a.m.s.first_run = false;
             a.save_settings();
@@ -907,6 +917,8 @@ impl App {
             add(hm, ID_TASKMGR, "Task Manager", false);
             sep(hm);
             add(hm, ID_AUTOSTART, "Start with Windows", crate::autostart::enabled());
+            add(hm, ID_AUTOUPDATE, "Update automatically", s.auto_update);
+            add(hm, ID_UPDATE_NOW, "Check for updates now", false);
             add(hm, ID_EDIT, "Edit settings file\u{2026}", false);
             add(hm, ID_DATA, "Open data folder", false);
             sep(hm);
@@ -979,6 +991,10 @@ impl App {
         match id {
             ID_REPORT => return report::open(self),
             ID_TASKMGR => return shell_open("taskmgr.exe", None),
+            ID_UPDATE_NOW => {
+                self.tray.balloon("Checking for updates\u{2026}", "You'll get a notification with the result.");
+                return crate::update::check(self.hwnd as isize, true);
+            }
             ID_RECHECK => {
                 if let Some(w) = &self.icons {
                     w.kick();
@@ -1018,6 +1034,7 @@ impl App {
                 s.stacked_on.clear();
             }
             ID_AUTOSTACK => s.auto_stack = !s.auto_stack,
+            ID_AUTOUPDATE => s.auto_update = !s.auto_update,
             _ if (ID_STACK_DISP..ID_STACK_DISP + MAX_DISPLAYS).contains(&id) => {
                 if let Some(t) = self.taskbars.get(id - ID_STACK_DISP) {
                     let k = t.key();
@@ -1230,6 +1247,8 @@ const ID_FLOAT: usize = 606;
 const ID_RESET_POS: usize = 607;
 const ID_STACKED: usize = 608;
 const ID_AUTOSTACK: usize = 610;
+const ID_AUTOUPDATE: usize = 611;
+const ID_UPDATE_NOW: usize = 612;
 const ID_STACK_DISP: usize = 1000;
 const ID_MAXW: usize = 900;
 const ID_RECHECK: usize = 609;
@@ -1355,6 +1374,38 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             }
             a.refresh(true);
             popup::show(a, true);
+            0
+        }
+        crate::update::WM_APP_UPDATE => {
+            let ver = crate::update::take_version(l);
+            match w {
+                crate::update::INSTALLED => {
+                    // New exe is in place: save, start it, and exit. It waits for us to go.
+                    a.m.usage.save();
+                    a.save_settings();
+                    if let Ok(exe) = std::env::current_exe() {
+                        shell_open(&exe.display().to_string(), Some("--after-update"));
+                    }
+                    DestroyWindow(hwnd);
+                }
+                crate::update::MANUAL => {
+                    a.tray.balloon(
+                        &format!("Update {} available", ver),
+                        "This folder can't be written to, so it can't update itself. Opening the download page.",
+                    );
+                    shell_open(&crate::update::releases_page(), None);
+                }
+                crate::update::MANUAL_QUIET => {
+                    a.tray.balloon(
+                        &format!("Update {} available", ver),
+                        "Right-click \u{2192} Check for updates now to download it.",
+                    );
+                }
+                crate::update::UP_TO_DATE => {
+                    a.tray.balloon("You're up to date", concat!("Resource Monitor v", env!("CARGO_PKG_VERSION"), " is the latest version."));
+                }
+                _ => a.tray.balloon("Couldn't check for updates", "No connection to GitHub. Try again later."),
+            }
             0
         }
         crate::icons::WM_APP_TRAY => {

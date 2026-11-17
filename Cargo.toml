@@ -1,6 +1,6 @@
 [package]
 name = "resmon"
-version = "2.5.0"
+version = "2.6.0"
 edition = "2021"
 description = "Ultra-light taskbar resource monitor for Windows 10/11"
 license = "MIT"
@@ -33,6 +33,8 @@ features = [
   "Win32_System_ProcessStatus",
   "Win32_Storage_FileSystem",
   "Win32_NetworkManagement_IpHelper",
+  "Win32_Networking_WinHttp",
+  "Win32_Security_Cryptography",
   "Win32_NetworkManagement_Ndis",
   "Win32_Networking_WinSock",
 ]

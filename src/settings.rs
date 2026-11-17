@@ -109,6 +109,8 @@ pub struct Settings {
     pub stacked_on: Vec<(String, bool)>,
     /// Allow switching a one-line widget to stacked rows when it doesn't fit.
     pub auto_stack: bool,
+    /// Check GitHub for a newer version once at startup and install it.
+    pub auto_update: bool,
     /// Max widget width on the taskbar, % of taskbar width. 0 = auto (stay clear of app icons).
     pub max_width_pct: u32,
     pub unit: SpeedUnit,
@@ -152,6 +154,7 @@ impl Default for Settings {
             stacked: true,
             stacked_on: Vec::new(),
             auto_stack: false,
+            auto_update: true,
             max_width_pct: 0,
             unit: SpeedUnit::AutoBytes,
             adapter: String::new(),
@@ -305,6 +308,7 @@ impl Settings {
                 "labels" => self.labels = parse_bool(v).unwrap_or(self.labels),
                 "stacked" => self.stacked = parse_bool(v).unwrap_or(self.stacked),
                 "auto_stack" => self.auto_stack = parse_bool(v).unwrap_or(self.auto_stack),
+                "auto_update" => self.auto_update = parse_bool(v).unwrap_or(self.auto_update),
                 "max_width_pct" => {
                     self.max_width_pct = v.parse().map(|x: u32| x.min(90)).unwrap_or(self.max_width_pct)
                 }
@@ -412,6 +416,7 @@ impl Settings {
             "\nvisible = {}\nsparklines = {}\nlabels = {}\n# 1 = metrics stacked in rows, 0 = one line, each metric its own column.\n\
              # Default for every display; per display: stacked.DISPLAY2 = 0\nstacked = {}\n\
              # 1 = a one-line widget may switch to stacked rows when it doesn't fit\nauto_stack = {}\n\
+             # 1 = check GitHub for a new version once at startup and install it\nauto_update = {}\n\
              # widest the widget may get, % of taskbar width; 0 = auto (never cover app icons)\nmax_width_pct = {}\n\
              # auto | autobits | KB/s | MB/s | Kbps | Mbps\nspeed_unit = {}\n\
              # empty = all connected physical adapters; otherwise the adapter name (e.g. Wi-Fi)\nadapter = {}\n\
@@ -427,6 +432,7 @@ impl Settings {
             b(self.labels),
             b(self.stacked),
             b(self.auto_stack),
+            b(self.auto_update),
             self.max_width_pct,
             self.unit.key(),
             self.adapter,
