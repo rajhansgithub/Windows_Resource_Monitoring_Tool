@@ -403,6 +403,24 @@ impl Canvas {
     }
 
     /// Push to a layered window at screen position (x, y).
+    /// Push to a layered *child* window: content only; the caller positions
+    /// it (child coordinates are relative to the parent).
+    pub fn present_child(&self, hwnd: HWND) {
+        let Some(d) = &self.px else { return };
+        unsafe {
+            GdiFlush();
+            let sz = SIZE { cx: self.w, cy: self.h };
+            let src = POINT { x: 0, y: 0 };
+            let blend = BLENDFUNCTION {
+                BlendOp: AC_SRC_OVER as u8,
+                BlendFlags: 0,
+                SourceConstantAlpha: 255,
+                AlphaFormat: AC_SRC_ALPHA as u8,
+            };
+            UpdateLayeredWindow(hwnd, std::ptr::null_mut(), std::ptr::null(), &sz, d.dc, &src, 0, &blend, ULW_ALPHA);
+        }
+    }
+
     pub fn present(&self, hwnd: HWND, x: i32, y: i32) {
         let Some(d) = &self.px else { return };
         unsafe {

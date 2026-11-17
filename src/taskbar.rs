@@ -172,46 +172,139 @@ fn find_tray(tb: HWND, rect: Rect, edge: Edge, dpi: u32) -> Rect {
     }
 }
 
-/// True when a full-screen app/game/presentation owns this taskbar's monitor.
-/// Other monitors keep their widgets.
-pub fn fullscreen_active(tb: &Taskbar, own: &[HWND]) -> bool {
-    let fg = unsafe { GetForegroundWindow() };
-    let fg_mon = if fg.is_null() {
-        None
-    } else {
-        monitor_info(unsafe { MonitorFromWindow(fg, MONITOR_DEFAULTTONULL) }).map(|m| m.0)
-    };
-    let on_this = fg_mon.map_or(tb.primary, |m| m == tb.monitor);
+/// Shell surfaces (Start, Search, flyouts, Alt-Tab, desktop, lock screen…).
+/// They often cover a whole monitor while invisible or animating, so they
+/// must never count as a full-screen app.
+const SHELL_PROCESSES: [&str; 8] = [
+    "explorer.exe",
+    "shellexperiencehost.exe",
+    "startmenuexperiencehost.exe",
+    "searchhost.exe",
+    "searchapp.exe",
+    "shellhost.exe",
+    "textinputhost.exe",
+    "lockapp.exe",
+];
 
-    let mut st: QUERY_USER_NOTIFICATION_STATE = 0;
-    if on_this
-        && unsafe { SHQueryUserNotificationState(&mut st) } == 0
-        && (st == QUNS_BUSY || st == QUNS_RUNNING_D3D_FULL_SCREEN || st == QUNS_PRESENTATION_MODE)
-    {
-        return true;
+const SHELL_CLASSES: [&str; 9] = [
+    "Progman",
+    "WorkerW",
+    "Shell_TrayWnd",
+    "Shell_SecondaryTrayWnd",
+    "Windows.UI.Core.CoreWindow",
+    "XamlExplorerHostIslandWindow",
+    "TopLevelWindowForOverflowXamlIsland",
+    "MultitaskingViewFrame",
+    "ForegroundStaging",
+];
+
+/// Image file name (lower-case) of the process that owns `h`.
+pub fn process_name(h: HWND) -> String {
+    use windows_sys::Win32::System::Threading::*;
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(h, &mut pid) };
+    if pid == 0 {
+        return String::new();
     }
-    if fg.is_null() || own.contains(&fg) || !on_this {
-        return false;
+    unsafe {
+        let p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if p.is_null() {
+            return String::new();
+        }
+        let mut buf = [0u16; 520];
+        let mut n = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(p, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut n) != 0;
+        windows_sys::Win32::Foundation::CloseHandle(p);
+        if !ok {
+            return String::new();
+        }
+        let path = String::from_utf16_lossy(&buf[..n as usize]);
+        path.rsplit('\\').next().unwrap_or("").to_ascii_lowercase()
     }
-    let cls = class_name(fg);
-    if matches!(
-        cls.as_str(),
-        "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "Windows.UI.Core.CoreWindow"
-            | "XamlExplorerHostIslandWindow" | "TopLevelWindowForOverflowXamlIsland"
-    ) {
-        return false;
+}
+
+/// Hidden by the window manager (other virtual desktop, suspended UWP, shell
+/// surfaces waiting off-screen…).
+pub fn is_cloaked(h: HWND) -> bool {
+    use windows_sys::Win32::Graphics::Dwm::*;
+    let mut v: u32 = 0;
+    unsafe { DwmGetWindowAttribute(h, DWMWA_CLOAKED as u32, &mut v as *mut u32 as *mut _, 4) == 0 && v != 0 }
+}
+
+/// What the user actually sees: the DWM frame without the invisible resize
+/// borders (GetWindowRect includes ~8px of those).
+pub fn visible_bounds(h: HWND) -> Option<Rect> {
+    use windows_sys::Win32::Graphics::Dwm::*;
+    let mut r: RECT = unsafe { std::mem::zeroed() };
+    let ok = unsafe {
+        DwmGetWindowAttribute(
+            h,
+            DWMWA_EXTENDED_FRAME_BOUNDS as u32,
+            &mut r as *mut RECT as *mut _,
+            std::mem::size_of::<RECT>() as u32,
+        )
+    } == 0;
+    if ok {
+        Some(r.into())
+    } else {
+        window_rect(h)
     }
-    let Some(r) = window_rect(fg) else { return false };
-    let style = unsafe { GetWindowLongW(fg, GWL_STYLE) } as u32;
+}
+
+/// Is a full-screen app (game, video, presentation) showing on this
+/// taskbar's monitor? Decided per monitor, the way Explorer decides to drop
+/// its taskbar: the foreground window must exactly cover its own monitor and
+/// be a real app window — not a shell surface, cloaked window or maximized
+/// window. Returns (fullscreen, reason for the diagnostics log).
+pub fn fullscreen_active(tb: &Taskbar, own: &[HWND]) -> (bool, String) {
+    let fg = unsafe { GetForegroundWindow() };
+    if fg.is_null() {
+        return (false, "no foreground window".into());
+    }
+    let root = unsafe { GetAncestor(fg, GA_ROOT) };
+    let root = if root.is_null() { fg } else { root };
+    if own.contains(&root) || own.contains(&fg) {
+        return (false, "our window".into());
+    }
+    let hmon = unsafe { MonitorFromWindow(root, MONITOR_DEFAULTTONEAREST) };
+    let Some((mon, _)) = monitor_info(hmon) else { return (false, "no monitor".into()) };
+    if mon != tb.monitor {
+        return (false, "foreground is on another monitor".into());
+    }
+    let cls = class_name(root);
+    let style = unsafe { GetWindowLongW(root, GWL_STYLE) } as u32;
+    let ex = unsafe { GetWindowLongW(root, GWL_EXSTYLE) } as u32;
+    let desc = |why: &str| format!("{} [{} / {}]", why, cls, process_name(root));
     if style & WS_VISIBLE == 0 || style & WS_MINIMIZE != 0 {
-        return false;
+        return (false, desc("not visible"));
     }
-    // A maximized normal window overhangs the monitor by its frame; that isn't full-screen.
-    if style & WS_MAXIMIZE != 0 && style & (WS_CAPTION | WS_THICKFRAME) != 0 {
-        return false;
+    if is_cloaked(root) {
+        return (false, desc("cloaked"));
     }
-    let mon = tb.monitor;
-    r.l <= mon.l && r.t <= mon.t && r.r >= mon.r && r.b >= mon.b
+    if SHELL_CLASSES.contains(&cls.as_str()) {
+        return (false, desc("shell window"));
+    }
+    if ex & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT) != 0 && ex & WS_EX_APPWINDOW == 0 {
+        return (false, desc("tool/overlay window"));
+    }
+    // Exclusive full-screen games / presentation mode, on this monitor.
+    let mut st: QUERY_USER_NOTIFICATION_STATE = 0;
+    let exclusive = unsafe { SHQueryUserNotificationState(&mut st) } == 0
+        && (st == QUNS_RUNNING_D3D_FULL_SCREEN || st == QUNS_PRESENTATION_MODE);
+    let Some(b) = visible_bounds(root) else { return (false, desc("no bounds")) };
+    let covers = b.l <= mon.l + 1 && b.t <= mon.t + 1 && b.r >= mon.r - 1 && b.b >= mon.b - 1;
+    if !covers && !exclusive {
+        return (false, desc("doesn't cover the monitor"));
+    }
+    // With auto-hide, a maximized window also covers the monitor — not full-screen.
+    if style & WS_MAXIMIZE != 0 && style & WS_CAPTION == WS_CAPTION {
+        return (false, desc("maximized window"));
+    }
+    let proc = process_name(root);
+    if SHELL_PROCESSES.contains(&proc.as_str()) {
+        return (false, desc("shell process"));
+    }
+    (true, desc(if exclusive { "exclusive full-screen" } else { "covers the monitor" }))
 }
 
 /// Placeholder when Explorer isn't running: bottom of the primary monitor.

@@ -45,8 +45,8 @@ pub struct Overlay {
 fn group(m: Metric) -> u8 {
     match m {
         Metric::Cpu | Metric::Ram => 0,
-        Metric::Gpu | Metric::Vram => 1,
-        Metric::DiskRead | Metric::DiskWrite | Metric::DiskActive => 2,
+        Metric::Gpu | Metric::Vram | Metric::GpuTemp => 1,
+        Metric::DiskRead | Metric::DiskWrite | Metric::DiskActive | Metric::DiskFree => 2,
         Metric::Up | Metric::Down => 3,
         Metric::TodayUp | Metric::TodayDown => 4,
         Metric::TopProc => 5,
@@ -80,6 +80,7 @@ type Cell = (usize, i32, i32, i32, i32, Option<Rect>, bool, usize);
 /// A font size with its line metrics and reserved value widths.
 struct Face {
     font: HFONT,
+    name: String,
     px: u32,
     line_h: i32,
     spark_h: i32,
@@ -89,7 +90,7 @@ struct Face {
 
 impl Default for Face {
     fn default() -> Self {
-        Face { font: std::ptr::null_mut(), px: 0, line_h: 1, spark_h: 4, sticky: [0; Metric::ALL.len()] }
+        Face { font: std::ptr::null_mut(), name: String::new(), px: 0, line_h: 1, spark_h: 4, sticky: [0; Metric::ALL.len()] }
     }
 }
 
@@ -147,6 +148,11 @@ impl Overlay {
     /// Windows keeps the widget directly above the taskbar in the same z-order
     /// step — clicking the taskbar can't cover it, so no flicker and no
     /// topmost re-asserting. Floating widgets are plain topmost windows.
+    /// `owned` (dock mode): the widget becomes a *child window of the
+    /// taskbar* — part of the taskbar, like a deskband. It moves with
+    /// auto-hide, goes behind full-screen apps with the taskbar, can never be
+    /// covered by clicking the taskbar, and focus changes elsewhere (e.g. on
+    /// another monitor) can't hide it. Floating widgets are topmost popups.
     pub fn new(tb: Taskbar, click_through: bool, owned: bool) -> Option<Overlay> {
         let cls = wide(CLASS);
         let title = wide("Resource Monitor");
@@ -168,12 +174,21 @@ impl Overlay {
                 0,
                 1,
                 1,
-                owner,
+                std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(std::ptr::null()),
                 std::ptr::null(),
             )
         };
+        if !hwnd.is_null() && !owner.is_null() {
+            unsafe {
+                // Become a child of the taskbar (layered child windows: Win8+).
+                SetWindowLongW(hwnd, GWL_STYLE, (WS_CHILD | WS_CLIPSIBLINGS) as i32);
+                if SetParent(hwnd, owner).is_null() {
+                    crate::util::diag("could not attach the widget to the taskbar");
+                }
+            }
+        }
         let mut canvas = Canvas::new();
         // Text can be measured before the first real layout.
         canvas.resize(1, 1);
@@ -210,16 +225,18 @@ impl Overlay {
     }
 
     /// Create/resize face `i` and refresh its metrics.
-    fn ensure_face(&mut self, i: usize, px: u32, scale: f32) {
+    fn ensure_face(&mut self, i: usize, px: u32, scale: f32, face_name: &str) {
         let f = &mut self.faces[i];
-        if px != f.px || f.font.is_null() {
+        let name = if face_name.is_empty() { ui_face() } else { face_name };
+        if px != f.px || f.font.is_null() || f.name != name {
             unsafe {
                 if !f.font.is_null() {
                     DeleteObject(f.font);
                 }
             }
             // Regular weight: crisper and easier to read than semibold at a distance.
-            f.font = create_font(px as i32, 400, ui_face(), true);
+            f.font = create_font(px as i32, 400, name, true);
+            f.name = name.to_string();
             f.px = px;
             f.sticky = [0; Metric::ALL.len()];
         }
@@ -229,28 +246,21 @@ impl Overlay {
         f.spark_h = (f.line_h - (4.0 * scale).round() as i32).max(4);
     }
 
-    /// `raise`: re-assert topmost (only after events, e.g. focus changed).
+    /// `raise`: bring back to the top (only after events, e.g. focus changed).
     pub fn show(&mut self, on: bool, raise: bool) {
         unsafe {
             if on {
                 if !self.shown {
-                    ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+                    ShowWindow(self.hwnd, SW_SHOWNA);
                 }
-                // Owned by the taskbar: Windows already keeps us above it.
-                if !self.owner.is_null() || (self.shown && !raise) {
+                if self.shown && !raise {
                     self.shown = true;
                     return;
                 }
-                // Floating: keep above other always-on-top windows.
-                SetWindowPos(
-                    self.hwnd,
-                    HWND_TOPMOST,
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
-                );
+                let after = if self.owner.is_null() { HWND_TOPMOST } else { HWND_TOP };
+                // Embedded: stay above the taskbar's own content (siblings).
+                // Floating: stay above other always-on-top windows.
+                SetWindowPos(self.hwnd, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
             } else if self.shown {
                 ShowWindow(self.hwnd, SW_HIDE);
             }
@@ -401,8 +411,8 @@ impl Overlay {
             flat_px = stack_px.min((13.0 * 1.3 * scale * ts).round() as u32);
             stack_px = flat_px;
         }
-        self.ensure_face(0, flat_px, scale);
-        self.ensure_face(1, stack_px, scale);
+        self.ensure_face(0, flat_px, scale, &m.s.font);
+        self.ensure_face(1, stack_px, scale, &m.s.font);
         let rows = m.rows();
         let n = rows.len();
 
@@ -615,7 +625,17 @@ impl Overlay {
             )
         };
         self.pos = Rect { l: x, t: y, r: x + w, b: y + h };
-        self.canvas.present(self.hwnd, x, y);
+        if self.owner.is_null() {
+            self.canvas.present(self.hwnd, x, y);
+        } else {
+            // Child of the taskbar: position relative to its client area.
+            let mut pt = POINT { x, y };
+            unsafe {
+                ScreenToClient(self.owner, &mut pt);
+                self.canvas.present_child(self.hwnd);
+                SetWindowPos(self.hwnd, HWND_TOP, pt.x, pt.y, w, h, SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+            }
+        }
     }
 }
 

@@ -38,7 +38,10 @@ Pick any combination from **right-click → Metrics**. Default: CPU, RAM, GPU, �
 - **Multi-monitor**: a widget on every taskbar, or only the ones you pick (right-click → *Displays*). Needs Windows' "Show my taskbar on all displays". Each display keeps its own drag position; mixed DPI is handled per monitor.
 - **Never covers your app icons**: at startup it asks the taskbar (UI Automation) where its buttons end and keeps the widget in the free space. Too many metrics? It compacts step by step — one line → pairs stacked (▲ over ▼, CPU over RAM) → groups share columns → no sparklines — and anything that still doesn't fit moves to the hover panel (shown as “+N”). Opened lots of apps? Right-click → Appearance → *Re-check taskbar icons*.
 - **No background polling**: besides reading the metrics each interval, everything is event-driven — taskbar moves, auto-hide, full-screen apps, theme and settings-file changes all arrive as Windows notifications.
-- **Hides itself** for full-screen games, videos and presentations — only on the monitor that's full-screen — and when an auto-hide taskbar slides away.
+- **Part of the taskbar**: the docked widget is a child window of its taskbar (like a deskband), so it moves with it, hides with it behind full-screen apps, and clicks on another monitor never affect it.
+- **Hides itself** for full-screen games, videos and presentations — decided per monitor from the window's real (DWM) bounds, ignoring shell surfaces like Start, Search, Alt-Tab and flyouts.
+- **GPU temperature & fan** straight from the display driver (the same source as Task Manager), and **system drive space**.
+- **Alerts**: CPU/RAM staying high, drive almost full, battery low, data cap at 90%/100%.
 - **Stays on top of the taskbar without flicker**: the taskbar owns the widget window, so Windows keeps it directly above the taskbar — clicking the taskbar can never cover it.
 - **Hover** → details panel: ring gauges for CPU / memory / GPU, live network and disk charts, data usage (today, month, cap), uptime, battery, top 5 processes by CPU, memory and disk I/O.
 - **Click** → pin the panel. **Double-click** → Task Manager. **Drag** → move along the taskbar (or anywhere in floating mode).

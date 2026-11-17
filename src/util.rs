@@ -148,3 +148,23 @@ pub fn get_x(l: isize) -> i32 {
 pub fn get_y(l: isize) -> i32 {
     ((l >> 16) & 0xffff) as i16 as i32
 }
+
+/// Append a line to %LOCALAPPDATA%\ResourceMonitor\diagnostics.log (kept
+/// under ~256 KB). Used only for rare events (visibility changes, crashes).
+pub fn diag(msg: &str) {
+    use std::io::Write;
+    let path = data_dir().join("diagnostics.log");
+    if std::fs::metadata(&path).map(|m| m.len() > 256 * 1024).unwrap_or(false) {
+        if let Ok(old) = std::fs::read(&path) {
+            let _ = std::fs::write(&path, &old[old.len() / 2..]);
+        }
+    }
+    let st = local_time();
+    let line = format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}  {}\n",
+        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, msg
+    );
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = f.write_all(line.as_bytes());
+    }
+}

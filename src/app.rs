@@ -29,11 +29,14 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 pub const MAIN_CLASS: &str = "ResourceMonitor.Main";
 pub const WM_APP_ACTIVATE: u32 = WM_APP + 2;
-pub const HIST: usize = 60;
+/// History length in samples (1 hour at the default 1 s interval).
+pub const HIST: usize = 3600;
 
 const T_SAMPLE: usize = 1;
 /// One-shot: restart into the freshly installed version.
 const T_RESTART: usize = 3;
+/// One-shot, debounced re-check after window/taskbar events.
+const T_CHECK: usize = 4;
 /// Appbar callback: Windows tells us when a full-screen app opens/closes.
 const WM_APPBAR: u32 = WM_APP + 5;
 /// Settings file changed on disk (from the watcher thread).
@@ -42,19 +45,52 @@ const WM_SETTINGS_FILE: u32 = WM_APP + 6;
 pub const C_WARN: Rgba = Rgba::rgb(255, 183, 77);
 pub const C_CRIT: Rgba = Rgba::rgb(255, 82, 82);
 
-pub fn accent(m: Metric, dark: bool) -> Rgba {
-    let c = match m {
+/// Per-metric colour overrides (0 = none, else 0x01RRGGBB); set from settings.
+static ACCENT_OVERRIDE: [std::sync::atomic::AtomicU32; Metric::ALL.len()] =
+    [const { std::sync::atomic::AtomicU32::new(0) }; Metric::ALL.len()];
+
+/// Load colour overrides: explicit per-metric colours, else (optionally) the
+/// Windows accent colour for every metric.
+pub fn set_accents(s: &Settings) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let win = if s.windows_accent {
+        let (mut c, mut opaque) = (0u32, 0i32);
+        let ok = unsafe { windows_sys::Win32::Graphics::Dwm::DwmGetColorizationColor(&mut c, &mut opaque) } == 0;
+        ok.then_some(c & 0xFF_FFFF)
+    } else {
+        None
+    };
+    for m in Metric::ALL {
+        let own = s.colors.iter().find(|(x, _)| *x == m).map(|(_, c)| *c);
+        let v = own.or(win).map_or(0, |c| 0x0100_0000 | c);
+        ACCENT_OVERRIDE[m.idx()].store(v, Relaxed);
+    }
+}
+
+/// Built-in colour for a metric (ignores overrides).
+pub fn default_accent(m: Metric) -> Rgba {
+    match m {
         Metric::Cpu => Rgba::rgb(79, 195, 247),
         Metric::Ram => Rgba::rgb(179, 157, 219),
-        Metric::Gpu => Rgba::rgb(255, 138, 101),
+        Metric::Gpu | Metric::GpuTemp => Rgba::rgb(255, 138, 101),
         Metric::Vram => Rgba::rgb(255, 171, 145),
-        Metric::DiskRead | Metric::DiskWrite | Metric::DiskActive => Rgba::rgb(255, 213, 79),
+        Metric::DiskRead | Metric::DiskWrite | Metric::DiskActive | Metric::DiskFree => Rgba::rgb(255, 213, 79),
         Metric::Up => Rgba::rgb(255, 145, 0),
         Metric::Down => Rgba::rgb(38, 198, 218),
         Metric::TodayUp | Metric::TodayDown => Rgba::rgb(165, 214, 167),
         Metric::TopProc => Rgba::rgb(176, 190, 197),
         Metric::Battery => Rgba::rgb(129, 199, 132),
+    }
+}
+
+pub fn accent(m: Metric, dark: bool) -> Rgba {
+    let o = ACCENT_OVERRIDE[m.idx()].load(std::sync::atomic::Ordering::Relaxed);
+    let c = if o != 0 {
+        Rgba::rgb((o >> 16) as u8, (o >> 8) as u8, o as u8)
+    } else {
+        default_accent(m)
     };
+    #[allow(unreachable_code)]
     if dark {
         c
     } else {
@@ -98,6 +134,8 @@ pub fn short_label(m: Metric) -> &'static str {
         Metric::Ram => "RAM",
         Metric::Gpu => "GPU",
         Metric::Vram => "VRAM",
+        Metric::GpuTemp => "TEMP",
+        Metric::DiskFree => "C:",
         Metric::DiskRead => "DR",
         Metric::DiskWrite => "DW",
         Metric::DiskActive => "DISK",
@@ -141,7 +179,8 @@ pub struct Model {
 
 impl Model {
     pub fn rows(&self) -> Vec<Metric> {
-        Metric::ALL
+        self.s
+            .order
             .iter()
             .copied()
             .filter(|&m| self.s.shown(m))
@@ -151,6 +190,8 @@ impl Model {
                 Metric::Vram => (self.gpu_seen && self.snap.vram_used.is_some()) || self.samples < 4,
                 Metric::Battery => self.snap.battery.is_some(),
                 Metric::DiskActive => self.snap.disk_active.is_some() || self.samples < 4,
+                Metric::GpuTemp => self.snap.gpu_temp.is_some() || self.samples < 4,
+                Metric::DiskFree => self.snap.disk_used_pct.is_some() || self.samples < 4,
                 _ => true,
             })
             .collect()
@@ -175,6 +216,9 @@ impl Model {
             Metric::Gpu => s.gpu,
             Metric::DiskActive => s.disk_active,
             Metric::TodayUp | Metric::TodayDown => self.cycle_usage().map(|(_, p)| p as f32),
+            // 40 °C cool … 95 °C hot.
+            Metric::GpuTemp => s.gpu_temp.map(|t| ((t - 40.0) / 55.0 * 100.0).clamp(0.0, 100.0)),
+            Metric::DiskFree => s.disk_used_pct,
             _ => None,
         }
     }
@@ -215,6 +259,8 @@ impl Model {
                 None => ("\u{2013}".into(), 0, "100%"),
             },
             Metric::Vram => (s.vram_used.map_or("\u{2013}".into(), fmt::bytes), 0, "8.88 GB"),
+            Metric::GpuTemp => (s.gpu_temp.map_or("\u{2013}".into(), |t| format!("{:.0}\u{00B0}C", t)), 0, "100\u{00B0}C"),
+            Metric::DiskFree => (s.disk_used_pct.map_or("\u{2013}".into(), |p| format!("{:.0}%", p)), 0, "100%"),
             Metric::DiskRead => (fmt::rate(s.disk_read), 0, "8.88 MB/s"),
             Metric::DiskWrite => (fmt::rate(s.disk_write), 0, "8.88 MB/s"),
             Metric::DiskActive => {
@@ -257,9 +303,11 @@ impl Model {
         let start = h.len().saturating_sub(n);
         let data = h.iter().skip(start).copied();
         let floor = match m {
-            Metric::Cpu | Metric::Ram | Metric::Gpu | Metric::DiskActive | Metric::Battery => {
+            Metric::Cpu | Metric::Ram | Metric::Gpu | Metric::DiskActive | Metric::Battery | Metric::DiskFree => {
                 return data.map(|v| v / 100.0).collect()
             }
+            // 30..100 °C mapped to the chart.
+            Metric::GpuTemp => return data.map(|v| ((v - 30.0) / 70.0).clamp(0.0, 1.0)).collect(),
             Metric::Up | Metric::Down => 64.0 * 1024.0,
             Metric::DiskRead | Metric::DiskWrite => 1024.0 * 1024.0,
             _ => 1.0,
@@ -270,6 +318,17 @@ impl Model {
 }
 
 // ==================================================================== app
+
+#[derive(Default)]
+struct AlertState {
+    cpu_since: Option<Instant>,
+    cpu_done: bool,
+    ram_since: Option<Instant>,
+    ram_done: bool,
+    disk_done: bool,
+    battery_done: bool,
+    cap_level: u8,
+}
 
 pub struct App {
     /// Hidden controller window: tray, timers, broadcasts.
@@ -302,6 +361,7 @@ pub struct App {
     pub upd_pct: Option<f32>,
     /// Background UI Automation watcher for taskbar app-icon positions.
     icons: Option<crate::icons::Watcher>,
+    alerts: AlertState,
     /// Set by events: re-read taskbar geometry on the next refresh.
     need_locate: bool,
     /// Set by events: re-evaluate full-screen state and z-order.
@@ -309,6 +369,11 @@ pub struct App {
     /// Location-change hook scoped to the taskbar's own thread.
     move_hook: HWINEVENTHOOK,
     move_hook_tid: u32,
+    /// Taskbar windows created/destroyed/shown/hidden.
+    life_hook: HWINEVENTHOOK,
+    /// Foreground app's window moves (full-screen toggles).
+    fg_hook: HWINEVENTHOOK,
+    fg_hook_tid: u32,
     /// Fonts + canvas reused by the details panel between repaints.
     pub popup_cache: Option<(popup::Fonts, crate::render::Canvas)>,
 }
@@ -379,6 +444,7 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         let s = Settings::load();
         let first_run = s.first_run;
         let dark = effective_dark(s.theme);
+        set_accents(&s);
         let mut a = Box::new(App {
             hwnd,
             popup: std::ptr::null_mut(),
@@ -409,6 +475,7 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
             menu_open: false,
             popup_cache: None,
             icons: None,
+            alerts: AlertState::default(),
             upd: std::ptr::null_mut(),
             upd_text: String::new(),
             upd_pct: None,
@@ -417,6 +484,9 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
             need_check: true,
             move_hook: std::ptr::null_mut(),
             move_hook_tid: 0,
+            life_hook: std::ptr::null_mut(),
+            fg_hook: std::ptr::null_mut(),
+            fg_hook_tid: 0,
         });
         a.icons = Some(crate::icons::Watcher::start(hwnd as isize));
         // Register as a (zero-size, space-less) appbar purely to receive
@@ -479,27 +549,48 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
 
 unsafe extern "system" fn on_foreground(_: HWINEVENTHOOK, _: u32, _: HWND, _: i32, _: i32, _: u32, _: u32) {
     if let Some(a) = app() {
-        a.need_check = true;
-        a.refresh(false);
+        a.hook_foreground();
+        a.schedule_check();
     }
 }
 
-/// A taskbar window moved/resized/slid (auto-hide). Scoped to Explorer's
-/// taskbar thread, so it fires only for taskbar activity.
-unsafe extern "system" fn on_taskbar_move(_: HWINEVENTHOOK, _: u32, hwnd: HWND, obj: i32, _: i32, _: u32, _: u32) {
-    if obj != OBJID_WINDOW {
+/// The foreground app's own window moved/resized — e.g. a browser or player
+/// going full-screen (F11, full-screen video) without a focus change.
+unsafe extern "system" fn on_foreground_move(_: HWINEVENTHOOK, _: u32, hwnd: HWND, obj: i32, child: i32, _: u32, _: u32) {
+    if obj != OBJID_WINDOW || child != 0 {
+        return;
+    }
+    let fg = GetForegroundWindow();
+    if fg.is_null() || (hwnd != fg && hwnd != GetAncestor(fg, GA_ROOT)) {
         return;
     }
     if let Some(a) = app() {
-        if a.taskbars.iter().any(|t| t.hwnd == hwnd) {
-            a.need_locate = true;
-            a.refresh(false);
+        a.schedule_check();
+    }
+}
+
+/// Taskbar windows created/destroyed/shown/hidden/moved (auto-hide slide,
+/// second-monitor taskbar recreated after sleep or a display change…).
+/// Scoped to Explorer's taskbar thread, so it fires only for taskbar activity.
+unsafe extern "system" fn on_taskbar_event(_: HWINEVENTHOOK, ev: u32, hwnd: HWND, obj: i32, child: i32, _: u32, _: u32) {
+    if obj != OBJID_WINDOW || child != 0 || hwnd.is_null() {
+        return;
+    }
+    let Some(a) = app() else { return };
+    let ours = a.taskbars.iter().any(|t| t.hwnd == hwnd);
+    let relevant = match ev {
+        EVENT_OBJECT_CREATE | EVENT_OBJECT_SHOW => {
+            ours || matches!(class_name(hwnd).as_str(), "Shell_TrayWnd" | "Shell_SecondaryTrayWnd")
         }
+        _ => ours,
+    };
+    if relevant {
+        a.schedule_locate();
     }
 }
 
 impl App {
-    /// (Re)attach the taskbar move hook to whatever thread owns the taskbar now.
+    /// (Re)attach the taskbar hooks to whatever thread owns the taskbar now.
     fn hook_taskbar_moves(&mut self) {
         let Some(tb) = self.taskbars.iter().find(|t| !t.hwnd.is_null()) else { return };
         let mut pid = 0u32;
@@ -508,20 +599,72 @@ impl App {
             return;
         }
         unsafe {
-            if !self.move_hook.is_null() {
-                UnhookWinEvent(self.move_hook);
+            for h in [self.move_hook, self.life_hook] {
+                if !h.is_null() {
+                    UnhookWinEvent(h);
+                }
             }
             self.move_hook = SetWinEventHook(
                 EVENT_OBJECT_LOCATIONCHANGE,
                 EVENT_OBJECT_LOCATIONCHANGE,
                 std::ptr::null_mut(),
-                Some(on_taskbar_move),
+                Some(on_taskbar_event),
+                pid,
+                tid,
+                WINEVENT_OUTOFCONTEXT,
+            );
+            self.life_hook = SetWinEventHook(
+                EVENT_OBJECT_CREATE,
+                EVENT_OBJECT_HIDE,
+                std::ptr::null_mut(),
+                Some(on_taskbar_event),
                 pid,
                 tid,
                 WINEVENT_OUTOFCONTEXT,
             );
         }
         self.move_hook_tid = tid;
+    }
+
+    /// Follow the foreground app's window moves (scoped to its thread).
+    fn hook_foreground(&mut self) {
+        let fg = unsafe { GetForegroundWindow() };
+        if fg.is_null() {
+            return;
+        }
+        let mut pid = 0u32;
+        let tid = unsafe { GetWindowThreadProcessId(fg, &mut pid) };
+        if tid == 0 || tid == self.fg_hook_tid || pid == std::process::id() {
+            return;
+        }
+        unsafe {
+            if !self.fg_hook.is_null() {
+                UnhookWinEvent(self.fg_hook);
+            }
+            self.fg_hook = SetWinEventHook(
+                EVENT_OBJECT_LOCATIONCHANGE,
+                EVENT_OBJECT_LOCATIONCHANGE,
+                std::ptr::null_mut(),
+                Some(on_foreground_move),
+                pid,
+                tid,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+            );
+        }
+        self.fg_hook_tid = tid;
+    }
+
+    /// Re-check full-screen state / z-order shortly. Bursts of events (window
+    /// animations, Alt-Tab) collapse into one check, so nothing blinks.
+    pub fn schedule_check(&mut self) {
+        self.need_check = true;
+        unsafe { SetTimer(self.hwnd, T_CHECK, 250, None) };
+    }
+
+    /// Re-read taskbar geometry shortly (coalesced).
+    pub fn schedule_locate(&mut self) {
+        self.need_locate = true;
+        unsafe { SetTimer(self.hwnd, T_CHECK, 150, None) };
     }
 
     fn opts(&self) -> SampleOpts {
@@ -531,7 +674,7 @@ impl App {
             // GPU engine counters are the only costly source: query them only when needed.
             // Details stay "warm" a while after hover so the panel has data instantly
             // and counters aren't attached/detached on every hover.
-            gpu: sh(Metric::Gpu) || sh(Metric::Vram) || self.detail_warm(),
+            gpu: sh(Metric::Gpu) || sh(Metric::Vram) || sh(Metric::GpuTemp) || self.detail_warm(),
             disk: sh(Metric::DiskRead) || sh(Metric::DiskWrite) || sh(Metric::DiskActive) || self.detail_warm(),
             procs: sh(Metric::TopProc) || self.detail_warm(),
         }
@@ -572,6 +715,8 @@ impl App {
         v[Metric::Up.idx()] = snap.net_up as f32;
         v[Metric::Down.idx()] = snap.net_down as f32;
         v[Metric::Battery.idx()] = snap.battery.map_or(0.0, |b| b.percent as f32);
+        v[Metric::GpuTemp.idx()] = snap.gpu_temp.unwrap_or(0.0);
+        v[Metric::DiskFree.idx()] = snap.disk_used_pct.unwrap_or(0.0);
         for (h, v) in m.hist.iter_mut().zip(v) {
             if h.len() == HIST {
                 h.pop_front();
@@ -590,6 +735,80 @@ impl App {
         }
         if self.m.samples % 5 == 1 {
             self.update_tip();
+        }
+        self.check_alerts();
+    }
+
+    /// Alert rules evaluated on the samples we already take (no extra work).
+    /// Each alert fires once and re-arms only after the condition clears.
+    fn check_alerts(&mut self) {
+        let s = &self.m.s;
+        if !s.alerts {
+            return;
+        }
+        let snap = &self.m.snap;
+        let now = Instant::now();
+        let secs = s.alert_secs as u64;
+        let mut fire: Vec<(String, String)> = Vec::new();
+        let mut sustained = |v: f32, lim: f32, since: &mut Option<Instant>, done: &mut bool, what: &str| {
+            if lim <= 0.0 {
+                return;
+            }
+            if v >= lim {
+                let t = *since.get_or_insert(now);
+                if !*done && now.duration_since(t).as_secs() >= secs {
+                    *done = true;
+                    fire.push((
+                        format!("{} is at {:.0}%", what, v),
+                        format!("It has stayed above {:.0}% for {}.", lim, fmt::duration(secs)),
+                    ));
+                }
+            } else if v < lim - 5.0 {
+                *since = None;
+                *done = false;
+            }
+        };
+        let al = &mut self.alerts;
+        sustained(snap.cpu, s.alert_cpu_pct, &mut al.cpu_since, &mut al.cpu_done, "CPU");
+        sustained(snap.ram_pct, s.alert_ram_pct, &mut al.ram_since, &mut al.ram_done, "Memory");
+        if let Some(used) = snap.disk_used_pct {
+            let free = 100.0 - used;
+            if s.alert_disk_free_pct > 0.0 && free < s.alert_disk_free_pct {
+                if !al.disk_done {
+                    al.disk_done = true;
+                    fire.push((
+                        format!("System drive almost full ({:.0}% free)", free),
+                        format!("{} free of {}.", fmt::bytes(snap.disk_total - snap.disk_used), fmt::bytes(snap.disk_total)),
+                    ));
+                }
+            } else if free > s.alert_disk_free_pct + 2.0 {
+                al.disk_done = false;
+            }
+        }
+        if let Some(b) = snap.battery {
+            let low = !b.on_ac && !b.charging && s.alert_battery_pct > 0 && (b.percent as u32) <= s.alert_battery_pct;
+            if low && !al.battery_done {
+                al.battery_done = true;
+                fire.push((format!("Battery low ({}%)", b.percent), "Plug in your charger.".into()));
+            } else if !low {
+                al.battery_done = false;
+            }
+        }
+        if s.alert_cap {
+            if let Some((used, pct)) = self.m.cycle_usage() {
+                let level = if pct >= 100.0 { 2 } else if pct >= 90.0 { 1 } else { 0 };
+                if level > al.cap_level {
+                    fire.push((
+                        if level == 2 { "Monthly data cap reached".into() } else { "90% of your data cap used".into() },
+                        format!("{} of {:.0} GB this billing cycle.", fmt::bytes(used), s.data_cap_gb),
+                    ));
+                }
+                al.cap_level = level;
+            }
+        }
+        for (title, text) in fire {
+            crate::util::diag(&format!("alert: {} \u{2014} {}", title, text));
+            self.tray.balloon(&title, &text);
         }
     }
 
@@ -634,7 +853,15 @@ impl App {
         self.settings_mtime = Settings::mtime();
     }
 
+    /// Replace all settings (e.g. from the Settings window), save and apply.
+    pub fn apply_new_settings(&mut self, s: Settings) {
+        self.m.s = s;
+        self.save_settings();
+        self.apply_settings();
+    }
+
     fn apply_settings(&mut self) {
+        set_accents(&self.m.s);
         self.need_locate = true;
         self.m.dark = effective_dark(self.m.s.theme);
         let ct = self.m.s.click_through;
@@ -681,6 +908,15 @@ impl App {
     /// Nothing here polls: the taskbar is re-located only after an event set
     /// `need_locate`, and full-screen / z-order only after one set `need_check`.
     pub fn refresh(&mut self, redraw: bool) {
+        // A taskbar Windows recreated takes our owned widget down with it.
+        let dead = self.overlays.iter().any(|o| unsafe {
+            IsWindow(o.hwnd) == 0 || (!o.tb.hwnd.is_null() && IsWindow(o.tb.hwnd) == 0)
+        });
+        if dead {
+            crate::util::diag("taskbar or widget window was destroyed by Windows; recreating");
+            self.overlays.retain(|o| unsafe { IsWindow(o.hwnd) != 0 && (o.tb.hwnd.is_null() || IsWindow(o.tb.hwnd) != 0) });
+            self.need_locate = true;
+        }
         if self.need_locate || self.taskbars.is_empty() {
             self.need_locate = false;
             self.need_check = true;
@@ -756,9 +992,36 @@ impl App {
             let moved = !tb.same_geometry(&o.tb);
             o.tb = tb;
             if check || !o.shown && !o.fullscreen {
-                o.fullscreen = m.s.hide_fullscreen && taskbar::fullscreen_active(&tb, &own);
+                let (fs, why) = if m.s.hide_fullscreen {
+                    taskbar::fullscreen_active(&tb, &own)
+                } else {
+                    (false, String::new())
+                };
+                if fs != o.fullscreen {
+                    crate::util::diag(&format!(
+                        "{}: {} \u{2014} {}",
+                        tb.label(),
+                        if fs { "hidden for full-screen app" } else { "full-screen ended, shown" },
+                        why
+                    ));
+                }
+                o.fullscreen = fs;
             }
             let want = m.s.visible && !o.fullscreen && !(dock && tb.retracted) && self.display_on;
+            if want != o.shown {
+                let why = if !m.s.visible {
+                    "hidden in menu"
+                } else if o.fullscreen {
+                    "full-screen app"
+                } else if dock && tb.retracted {
+                    "auto-hide taskbar retracted"
+                } else if !self.display_on {
+                    "display off"
+                } else {
+                    "visible"
+                };
+                crate::util::diag(&format!("{}: {} ({})", tb.label(), if want { "show" } else { "hide" }, why));
+            }
             if want {
                 if redraw || moved || !o.shown {
                     o.render(m);
@@ -860,6 +1123,11 @@ impl App {
                 radio(zm, ID_SIZE + i, n, s.text_scale == *v);
             }
             sub(dm, zm, "Text size");
+            let fm = CreatePopupMenu();
+            for (i, (n, v)) in FONTS.iter().enumerate() {
+                radio(fm, ID_FONT + i, n, s.font.eq_ignore_ascii_case(v));
+            }
+            sub(dm, fm, "Font");
             let bm = CreatePopupMenu();
             for (i, (n, v)) in BACKGROUNDS.iter().enumerate() {
                 radio(bm, ID_BG + i, n, s.bg_opacity == *v);
@@ -1095,6 +1363,7 @@ impl App {
             }
             _ if (ID_SIZE..ID_SIZE + TEXT_SIZES.len()).contains(&id) => s.text_scale = TEXT_SIZES[id - ID_SIZE].1,
             _ if (ID_BG..ID_BG + BACKGROUNDS.len()).contains(&id) => s.bg_opacity = BACKGROUNDS[id - ID_BG].1,
+            _ if (ID_FONT..ID_FONT + FONTS.len()).contains(&id) => s.font = FONTS[id - ID_FONT].1.to_string(),
             _ if (ID_MAXW..ID_MAXW + MAX_WIDTHS.len()).contains(&id) => s.max_width_pct = MAX_WIDTHS[id - ID_MAXW].1,
             _ => return,
         }
@@ -1227,8 +1496,10 @@ impl App {
             }
 
             KillTimer(self.hwnd, T_SAMPLE);
-            if !self.move_hook.is_null() {
-                UnhookWinEvent(self.move_hook);
+            for h in [self.move_hook, self.life_hook, self.fg_hook] {
+                if !h.is_null() {
+                    UnhookWinEvent(h);
+                }
             }
             let mut abd: APPBARDATA = std::mem::zeroed();
             abd.cbSize = std::mem::size_of::<APPBARDATA>() as u32;
@@ -1263,6 +1534,14 @@ const ID_AUTOUPDATE: usize = 611;
 const ID_UPDATE_NOW: usize = 612;
 const ID_STACK_DISP: usize = 1000;
 const ID_MAXW: usize = 900;
+const ID_FONT: usize = 950;
+const FONTS: [(&str, &str); 5] = [
+    ("Default (Segoe UI Variable)", ""),
+    ("Segoe UI", "Segoe UI"),
+    ("Cascadia Mono (fixed-width digits)", "Cascadia Mono"),
+    ("Consolas", "Consolas"),
+    ("Bahnschrift", "Bahnschrift"),
+];
 const ID_RECHECK: usize = 609;
 const MAX_WIDTHS: [(&str, u32); 5] =
     [("Auto (don't cover app icons)", 0), ("20% of taskbar", 20), ("30% of taskbar", 30), ("40% of taskbar", 40), ("50% of taskbar", 50)];
@@ -1335,6 +1614,11 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         return 0;
     }
     match msg {
+        WM_TIMER if w == T_CHECK => {
+            KillTimer(hwnd, T_CHECK);
+            a.refresh(false);
+            0
+        }
         WM_TIMER if w == T_RESTART => {
             KillTimer(hwnd, T_RESTART);
             if let Ok(exe) = std::env::current_exe() {
@@ -1353,8 +1637,7 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         }
         WM_APPBAR => {
             if w as u32 == ABN_FULLSCREENAPP {
-                a.need_check = true;
-                a.refresh(false);
+                a.schedule_check();
             }
             0
         }

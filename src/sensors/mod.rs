@@ -9,11 +9,13 @@
 mod cpu;
 mod disk;
 mod gpu;
+mod gpu_temp;
 mod mem;
 mod net;
 mod pdh;
 mod power;
 mod procs;
+mod volume;
 
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
@@ -61,6 +63,15 @@ pub struct Snapshot {
     pub gpu: Option<f32>,
     /// Dedicated VRAM in use (busiest adapter), bytes.
     pub vram_used: Option<u64>,
+    /// Hottest GPU adapter temperature in deg C (WDDM driver). None = unavailable.
+    pub gpu_temp: Option<f32>,
+    pub gpu_fan_rpm: Option<u32>,
+    /// Reserved: the driver reports power only as a fraction of TDP, so this stays None.
+    pub gpu_power_w: Option<f32>,
+    /// System drive space (refreshed every ~30 s).
+    pub disk_used_pct: Option<f32>,
+    pub disk_used: u64,
+    pub disk_total: u64,
     /// Bytes/s, all physical disks.
     pub disk_read: f64,
     pub disk_write: f64,
@@ -122,6 +133,8 @@ pub struct Sensors {
     clock: Clock,
     cpu: cpu::Cpu,
     gpu: gpu::Gpu,
+    gpu_temp: gpu_temp::GpuTemp,
+    sys_drive: volume::SystemDrive,
     disk: disk::Disk,
     net: net::Net,
     procs: procs::Procs,
@@ -136,6 +149,8 @@ impl Sensors {
             clock: Clock::new(),
             cpu: cpu::Cpu::default(),
             gpu: gpu::Gpu::default(),
+            gpu_temp: gpu_temp::GpuTemp::default(),
+            sys_drive: volume::SystemDrive::default(),
             disk: disk::Disk::default(),
             net: net::Net::default(),
             procs: procs::Procs::new(),
@@ -165,6 +180,10 @@ impl Sensors {
         };
 
         (s.gpu, s.vram_used) = if opts.gpu { self.gpu.sample() } else { (None, None) };
+
+        (s.gpu_temp, s.gpu_fan_rpm) = if opts.gpu { self.gpu_temp.sample() } else { (None, None) };
+        s.gpu_power_w = None;
+        (s.disk_used, s.disk_total, s.disk_used_pct) = self.sys_drive.sample(elapsed);
 
         if opts.disk {
             let d = self.disk.sample();
