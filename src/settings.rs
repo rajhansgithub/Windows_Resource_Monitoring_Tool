@@ -10,9 +10,11 @@ pub enum Metric {
     Ram,
     Gpu,
     Vram,
+    GpuTemp,
     DiskRead,
     DiskWrite,
     DiskActive,
+    DiskFree,
     Up,
     Down,
     TodayUp,
@@ -22,14 +24,17 @@ pub enum Metric {
 }
 
 impl Metric {
-    pub const ALL: [Metric; 13] = [
+    /// Same order as the enum (index = discriminant).
+    pub const ALL: [Metric; 15] = [
         Metric::Cpu,
         Metric::Ram,
         Metric::Gpu,
         Metric::Vram,
+        Metric::GpuTemp,
         Metric::DiskRead,
         Metric::DiskWrite,
         Metric::DiskActive,
+        Metric::DiskFree,
         Metric::Up,
         Metric::Down,
         Metric::TodayUp,
@@ -43,6 +48,8 @@ impl Metric {
             Metric::Ram => "ram",
             Metric::Gpu => "gpu",
             Metric::Vram => "vram",
+            Metric::GpuTemp => "gpu_temp",
+            Metric::DiskFree => "disk_free",
             Metric::DiskRead => "disk_read",
             Metric::DiskWrite => "disk_write",
             Metric::DiskActive => "disk_active",
@@ -60,6 +67,8 @@ impl Metric {
             Metric::Ram => "Memory",
             Metric::Gpu => "GPU",
             Metric::Vram => "GPU memory",
+            Metric::GpuTemp => "GPU temperature",
+            Metric::DiskFree => "Disk space used (C:)",
             Metric::DiskRead => "Disk read",
             Metric::DiskWrite => "Disk write",
             Metric::DiskActive => "Disk active time",
@@ -79,6 +88,9 @@ impl Metric {
     }
     pub fn idx(self) -> usize {
         self as usize
+    }
+    pub fn from_key(k: &str) -> Option<Metric> {
+        Metric::ALL.iter().copied().find(|m| m.key().eq_ignore_ascii_case(k.trim()))
     }
 }
 
@@ -135,6 +147,26 @@ pub struct Settings {
     pub crit_pct: f32,
     /// Monthly data cap in GB, 0 = off.
     pub data_cap_gb: f64,
+    /// Display order of metrics on the widget (all metrics, shown or not).
+    pub order: Vec<Metric>,
+    /// Widget font face; empty = Segoe UI Variable / Segoe UI.
+    pub font: String,
+    /// Per-metric colour overrides (0xRRGGBB).
+    pub colors: Vec<(Metric, u32)>,
+    /// Use the Windows accent colour for every metric.
+    pub windows_accent: bool,
+    /// Alerts (tray notifications). 0 disables a rule.
+    pub alerts: bool,
+    pub alert_cpu_pct: f32,
+    pub alert_ram_pct: f32,
+    /// Seconds a CPU/RAM level must last before alerting.
+    pub alert_secs: u32,
+    /// Alert when the system drive has less than this % free.
+    pub alert_disk_free_pct: f32,
+    /// Alert when the battery is at or below this % and not charging.
+    pub alert_battery_pct: u32,
+    /// Alert at 90% and 100% of the monthly data cap.
+    pub alert_cap: bool,
     /// Day of month the billing cycle resets (1..28).
     pub cap_reset_day: u32,
     pub first_run: bool,
@@ -173,6 +205,17 @@ impl Default for Settings {
             warn_pct: 75.0,
             crit_pct: 90.0,
             data_cap_gb: 0.0,
+            order: Metric::ALL.to_vec(),
+            font: String::new(),
+            colors: Vec::new(),
+            windows_accent: false,
+            alerts: true,
+            alert_cpu_pct: 95.0,
+            alert_ram_pct: 90.0,
+            alert_secs: 60,
+            alert_disk_free_pct: 10.0,
+            alert_battery_pct: 15,
+            alert_cap: true,
             cap_reset_day: 1,
             first_run: true,
         }
@@ -271,7 +314,13 @@ impl Settings {
     /// Reload from disk on top of `self`; None if unreadable (e.g. mid-save).
     pub fn reload(&self) -> Option<Settings> {
         let bytes = std::fs::read(Self::path()).ok()?;
-        let mut s = Settings { first_run: false, offsets: Vec::new(), stacked_on: Vec::new(), ..self.clone() };
+        let mut s = Settings {
+            first_run: false,
+            offsets: Vec::new(),
+            stacked_on: Vec::new(),
+            colors: Vec::new(),
+            ..self.clone()
+        };
         s.apply(&decode(&bytes));
         Some(s)
     }
@@ -284,6 +333,14 @@ impl Settings {
             }
             let Some((k, v)) = line.split_once('=') else { continue };
             let (k, v) = (k.trim(), v.trim());
+            if let Some(mk) = k.strip_prefix("color.") {
+                let hex = v.trim_start_matches('#');
+                if let (Some(m), Ok(rgb)) = (Metric::from_key(mk), u32::from_str_radix(hex, 16)) {
+                    self.colors.retain(|(x, _)| *x != m);
+                    self.colors.push((m, rgb & 0xFF_FFFF));
+                }
+                continue;
+            }
             if let Some(d) = k.strip_prefix("stacked.") {
                 if let Some(on) = parse_bool(v) {
                     self.set_stacked(d, on);
@@ -309,6 +366,26 @@ impl Settings {
                 "stacked" => self.stacked = parse_bool(v).unwrap_or(self.stacked),
                 "auto_stack" => self.auto_stack = parse_bool(v).unwrap_or(self.auto_stack),
                 "auto_update" => self.auto_update = parse_bool(v).unwrap_or(self.auto_update),
+                "order" => {
+                    let mut o: Vec<Metric> = v.split(',').filter_map(Metric::from_key).collect();
+                    o.dedup();
+                    // Metrics missing from the list (e.g. new ones) go at the end.
+                    for m in Metric::ALL {
+                        if !o.contains(&m) {
+                            o.push(m);
+                        }
+                    }
+                    self.order = o;
+                }
+                "font" => self.font = v.to_string(),
+                "windows_accent" => self.windows_accent = parse_bool(v).unwrap_or(self.windows_accent),
+                "alerts" => self.alerts = parse_bool(v).unwrap_or(self.alerts),
+                "alert_cpu_pct" => self.alert_cpu_pct = v.parse().unwrap_or(self.alert_cpu_pct),
+                "alert_ram_pct" => self.alert_ram_pct = v.parse().unwrap_or(self.alert_ram_pct),
+                "alert_secs" => self.alert_secs = v.parse().map(|x: u32| x.clamp(5, 3600)).unwrap_or(self.alert_secs),
+                "alert_disk_free_pct" => self.alert_disk_free_pct = v.parse().unwrap_or(self.alert_disk_free_pct),
+                "alert_battery_pct" => self.alert_battery_pct = v.parse().unwrap_or(self.alert_battery_pct),
+                "alert_cap" => self.alert_cap = parse_bool(v).unwrap_or(self.alert_cap),
                 "max_width_pct" => {
                     self.max_width_pct = v.parse().map(|x: u32| x.min(90)).unwrap_or(self.max_width_pct)
                 }
@@ -451,6 +528,30 @@ impl Settings {
             self.crit_pct,
             self.data_cap_gb,
             self.cap_reset_day,
+        ));
+        let order: Vec<&str> = self.order.iter().map(|m| m.key()).collect();
+        o.push_str(&format!(
+            "\n# Widget order (comma list of metric names)\norder = {}\n\
+             # Widget font; empty = Segoe UI Variable\nfont = {}\n\
+             # 1 = colour every metric with the Windows accent colour\nwindows_accent = {}\n\
+             # Per-metric colours: color.cpu = #4FC3F7\n",
+            order.join(","),
+            self.font,
+            b(self.windows_accent)
+        ));
+        for (m, rgb) in &self.colors {
+            o.push_str(&format!("color.{} = #{:06X}\n", m.key(), rgb));
+        }
+        o.push_str(&format!(
+            "\n# Alerts (tray notifications). 0 turns a rule off.\nalerts = {}\nalert_cpu_pct = {}\nalert_ram_pct = {}\n\
+             # seconds a CPU/RAM level must last\nalert_secs = {}\nalert_disk_free_pct = {}\nalert_battery_pct = {}\nalert_cap = {}\n\n",
+            b(self.alerts),
+            self.alert_cpu_pct,
+            self.alert_ram_pct,
+            self.alert_secs,
+            self.alert_disk_free_pct,
+            self.alert_battery_pct,
+            b(self.alert_cap)
         ));
         for (k, v) in &self.stacked_on {
             o.push_str(&format!("stacked.{} = {}\n", k, b(*v)));

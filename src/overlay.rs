@@ -45,8 +45,8 @@ pub struct Overlay {
 fn group(m: Metric) -> u8 {
     match m {
         Metric::Cpu | Metric::Ram => 0,
-        Metric::Gpu | Metric::Vram => 1,
-        Metric::DiskRead | Metric::DiskWrite | Metric::DiskActive => 2,
+        Metric::Gpu | Metric::Vram | Metric::GpuTemp => 1,
+        Metric::DiskRead | Metric::DiskWrite | Metric::DiskActive | Metric::DiskFree => 2,
         Metric::Up | Metric::Down => 3,
         Metric::TodayUp | Metric::TodayDown => 4,
         Metric::TopProc => 5,

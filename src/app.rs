@@ -29,7 +29,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 pub const MAIN_CLASS: &str = "ResourceMonitor.Main";
 pub const WM_APP_ACTIVATE: u32 = WM_APP + 2;
-pub const HIST: usize = 60;
+/// History length in samples (1 hour at the default 1 s interval).
+pub const HIST: usize = 3600;
 
 const T_SAMPLE: usize = 1;
 /// One-shot: restart into the freshly installed version.
@@ -42,19 +43,52 @@ const WM_SETTINGS_FILE: u32 = WM_APP + 6;
 pub const C_WARN: Rgba = Rgba::rgb(255, 183, 77);
 pub const C_CRIT: Rgba = Rgba::rgb(255, 82, 82);
 
-pub fn accent(m: Metric, dark: bool) -> Rgba {
-    let c = match m {
+/// Per-metric colour overrides (0 = none, else 0x01RRGGBB); set from settings.
+static ACCENT_OVERRIDE: [std::sync::atomic::AtomicU32; Metric::ALL.len()] =
+    [const { std::sync::atomic::AtomicU32::new(0) }; Metric::ALL.len()];
+
+/// Load colour overrides: explicit per-metric colours, else (optionally) the
+/// Windows accent colour for every metric.
+pub fn set_accents(s: &Settings) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let win = if s.windows_accent {
+        let (mut c, mut opaque) = (0u32, 0i32);
+        let ok = unsafe { windows_sys::Win32::Graphics::Dwm::DwmGetColorizationColor(&mut c, &mut opaque) } == 0;
+        ok.then_some(c & 0xFF_FFFF)
+    } else {
+        None
+    };
+    for m in Metric::ALL {
+        let own = s.colors.iter().find(|(x, _)| *x == m).map(|(_, c)| *c);
+        let v = own.or(win).map_or(0, |c| 0x0100_0000 | c);
+        ACCENT_OVERRIDE[m.idx()].store(v, Relaxed);
+    }
+}
+
+/// Built-in colour for a metric (ignores overrides).
+pub fn default_accent(m: Metric) -> Rgba {
+    match m {
         Metric::Cpu => Rgba::rgb(79, 195, 247),
         Metric::Ram => Rgba::rgb(179, 157, 219),
-        Metric::Gpu => Rgba::rgb(255, 138, 101),
+        Metric::Gpu | Metric::GpuTemp => Rgba::rgb(255, 138, 101),
         Metric::Vram => Rgba::rgb(255, 171, 145),
-        Metric::DiskRead | Metric::DiskWrite | Metric::DiskActive => Rgba::rgb(255, 213, 79),
+        Metric::DiskRead | Metric::DiskWrite | Metric::DiskActive | Metric::DiskFree => Rgba::rgb(255, 213, 79),
         Metric::Up => Rgba::rgb(255, 145, 0),
         Metric::Down => Rgba::rgb(38, 198, 218),
         Metric::TodayUp | Metric::TodayDown => Rgba::rgb(165, 214, 167),
         Metric::TopProc => Rgba::rgb(176, 190, 197),
         Metric::Battery => Rgba::rgb(129, 199, 132),
+    }
+}
+
+pub fn accent(m: Metric, dark: bool) -> Rgba {
+    let o = ACCENT_OVERRIDE[m.idx()].load(std::sync::atomic::Ordering::Relaxed);
+    let c = if o != 0 {
+        Rgba::rgb((o >> 16) as u8, (o >> 8) as u8, o as u8)
+    } else {
+        default_accent(m)
     };
+    #[allow(unreachable_code)]
     if dark {
         c
     } else {
@@ -98,6 +132,8 @@ pub fn short_label(m: Metric) -> &'static str {
         Metric::Ram => "RAM",
         Metric::Gpu => "GPU",
         Metric::Vram => "VRAM",
+        Metric::GpuTemp => "TEMP",
+        Metric::DiskFree => "C:",
         Metric::DiskRead => "DR",
         Metric::DiskWrite => "DW",
         Metric::DiskActive => "DISK",
@@ -141,7 +177,8 @@ pub struct Model {
 
 impl Model {
     pub fn rows(&self) -> Vec<Metric> {
-        Metric::ALL
+        self.s
+            .order
             .iter()
             .copied()
             .filter(|&m| self.s.shown(m))
@@ -151,6 +188,8 @@ impl Model {
                 Metric::Vram => (self.gpu_seen && self.snap.vram_used.is_some()) || self.samples < 4,
                 Metric::Battery => self.snap.battery.is_some(),
                 Metric::DiskActive => self.snap.disk_active.is_some() || self.samples < 4,
+                Metric::GpuTemp => self.snap.gpu_temp.is_some() || self.samples < 4,
+                Metric::DiskFree => self.snap.disk_used_pct.is_some() || self.samples < 4,
                 _ => true,
             })
             .collect()
@@ -175,6 +214,9 @@ impl Model {
             Metric::Gpu => s.gpu,
             Metric::DiskActive => s.disk_active,
             Metric::TodayUp | Metric::TodayDown => self.cycle_usage().map(|(_, p)| p as f32),
+            // 40 °C cool … 95 °C hot.
+            Metric::GpuTemp => s.gpu_temp.map(|t| ((t - 40.0) / 55.0 * 100.0).clamp(0.0, 100.0)),
+            Metric::DiskFree => s.disk_used_pct,
             _ => None,
         }
     }
@@ -215,6 +257,8 @@ impl Model {
                 None => ("\u{2013}".into(), 0, "100%"),
             },
             Metric::Vram => (s.vram_used.map_or("\u{2013}".into(), fmt::bytes), 0, "8.88 GB"),
+            Metric::GpuTemp => (s.gpu_temp.map_or("\u{2013}".into(), |t| format!("{:.0}\u{00B0}C", t)), 0, "100\u{00B0}C"),
+            Metric::DiskFree => (s.disk_used_pct.map_or("\u{2013}".into(), |p| format!("{:.0}%", p)), 0, "100%"),
             Metric::DiskRead => (fmt::rate(s.disk_read), 0, "8.88 MB/s"),
             Metric::DiskWrite => (fmt::rate(s.disk_write), 0, "8.88 MB/s"),
             Metric::DiskActive => {
@@ -257,9 +301,11 @@ impl Model {
         let start = h.len().saturating_sub(n);
         let data = h.iter().skip(start).copied();
         let floor = match m {
-            Metric::Cpu | Metric::Ram | Metric::Gpu | Metric::DiskActive | Metric::Battery => {
+            Metric::Cpu | Metric::Ram | Metric::Gpu | Metric::DiskActive | Metric::Battery | Metric::DiskFree => {
                 return data.map(|v| v / 100.0).collect()
             }
+            // 30..100 °C mapped to the chart.
+            Metric::GpuTemp => return data.map(|v| ((v - 30.0) / 70.0).clamp(0.0, 1.0)).collect(),
             Metric::Up | Metric::Down => 64.0 * 1024.0,
             Metric::DiskRead | Metric::DiskWrite => 1024.0 * 1024.0,
             _ => 1.0,
@@ -379,6 +425,7 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         let s = Settings::load();
         let first_run = s.first_run;
         let dark = effective_dark(s.theme);
+        set_accents(&s);
         let mut a = Box::new(App {
             hwnd,
             popup: std::ptr::null_mut(),
@@ -531,7 +578,7 @@ impl App {
             // GPU engine counters are the only costly source: query them only when needed.
             // Details stay "warm" a while after hover so the panel has data instantly
             // and counters aren't attached/detached on every hover.
-            gpu: sh(Metric::Gpu) || sh(Metric::Vram) || self.detail_warm(),
+            gpu: sh(Metric::Gpu) || sh(Metric::Vram) || sh(Metric::GpuTemp) || self.detail_warm(),
             disk: sh(Metric::DiskRead) || sh(Metric::DiskWrite) || sh(Metric::DiskActive) || self.detail_warm(),
             procs: sh(Metric::TopProc) || self.detail_warm(),
         }
@@ -572,6 +619,8 @@ impl App {
         v[Metric::Up.idx()] = snap.net_up as f32;
         v[Metric::Down.idx()] = snap.net_down as f32;
         v[Metric::Battery.idx()] = snap.battery.map_or(0.0, |b| b.percent as f32);
+        v[Metric::GpuTemp.idx()] = snap.gpu_temp.unwrap_or(0.0);
+        v[Metric::DiskFree.idx()] = snap.disk_used_pct.unwrap_or(0.0);
         for (h, v) in m.hist.iter_mut().zip(v) {
             if h.len() == HIST {
                 h.pop_front();
@@ -634,7 +683,15 @@ impl App {
         self.settings_mtime = Settings::mtime();
     }
 
+    /// Replace all settings (e.g. from the Settings window), save and apply.
+    pub fn apply_new_settings(&mut self, s: Settings) {
+        self.m.s = s;
+        self.save_settings();
+        self.apply_settings();
+    }
+
     fn apply_settings(&mut self) {
+        set_accents(&self.m.s);
         self.need_locate = true;
         self.m.dark = effective_dark(self.m.s.theme);
         let ct = self.m.s.click_through;

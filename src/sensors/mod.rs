@@ -61,6 +61,15 @@ pub struct Snapshot {
     pub gpu: Option<f32>,
     /// Dedicated VRAM in use (busiest adapter), bytes.
     pub vram_used: Option<u64>,
+    /// GPU temperature °C (hottest adapter), from the display driver (WDDM 2.4+).
+    pub gpu_temp: Option<f32>,
+    /// GPU fan speed (RPM) and board power (watts) when the driver reports them.
+    pub gpu_fan_rpm: Option<u32>,
+    pub gpu_power_w: Option<f32>,
+    /// System drive (e.g. C:) used %, used and total bytes.
+    pub disk_used_pct: Option<f32>,
+    pub disk_used: u64,
+    pub disk_total: u64,
     /// Bytes/s, all physical disks.
     pub disk_read: f64,
     pub disk_write: f64,
