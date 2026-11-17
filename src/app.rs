@@ -991,10 +991,7 @@ impl App {
         match id {
             ID_REPORT => return report::open(self),
             ID_TASKMGR => return shell_open("taskmgr.exe", None),
-            ID_UPDATE_NOW => {
-                self.tray.balloon("Checking for updates\u{2026}", "You'll get a notification with the result.");
-                return crate::update::check(self.hwnd as isize, true);
-            }
+            ID_UPDATE_NOW => return crate::update::check(self.hwnd as isize, true),
             ID_RECHECK => {
                 if let Some(w) = &self.icons {
                     w.kick();
@@ -1378,33 +1375,48 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         }
         crate::update::WM_APP_UPDATE => {
             let ver = crate::update::take_version(l);
-            match w {
+            let asked = w & crate::update::MANUAL_FLAG != 0;
+            // Answers to "Check for updates now" use a message box: toast
+            // balloons can be hidden by Do Not Disturb / notification settings.
+            let tell = |title: &str, text: &str| {
+                if asked {
+                    message(hwnd, title, text);
+                } else if let Some(a) = app() {
+                    a.tray.balloon(title, text);
+                }
+            };
+            match w & 0xFF {
                 crate::update::INSTALLED => {
+                    tell(
+                        &format!("Updated to {}", ver),
+                        "Resource Monitor installed the new version and will restart now.",
+                    );
                     // New exe is in place: save, start it, and exit. It waits for us to go.
-                    a.m.usage.save();
-                    a.save_settings();
+                    if let Some(a) = app() {
+                        a.m.usage.save();
+                        a.save_settings();
+                    }
                     if let Ok(exe) = std::env::current_exe() {
                         shell_open(&exe.display().to_string(), Some("--after-update"));
                     }
                     DestroyWindow(hwnd);
                 }
                 crate::update::MANUAL => {
-                    a.tray.balloon(
+                    tell(
                         &format!("Update {} available", ver),
-                        "This folder can't be written to, so it can't update itself. Opening the download page.",
+                        "This folder can't be written to, so the app can't update itself.\nThe download page will open.",
                     );
                     shell_open(&crate::update::releases_page(), None);
                 }
-                crate::update::MANUAL_QUIET => {
-                    a.tray.balloon(
-                        &format!("Update {} available", ver),
-                        "Right-click \u{2192} Check for updates now to download it.",
-                    );
-                }
-                crate::update::UP_TO_DATE => {
-                    a.tray.balloon("You're up to date", concat!("Resource Monitor v", env!("CARGO_PKG_VERSION"), " is the latest version."));
-                }
-                _ => a.tray.balloon("Couldn't check for updates", "No connection to GitHub. Try again later."),
+                crate::update::MANUAL_QUIET => tell(
+                    &format!("Update {} available", ver),
+                    "Right-click \u{2192} Check for updates now to download it.",
+                ),
+                crate::update::UP_TO_DATE => tell(
+                    "No updates available",
+                    concat!("You're on the latest version (v", env!("CARGO_PKG_VERSION"), ")."),
+                ),
+                _ => tell("Couldn't check for updates", "Couldn't reach GitHub. Check your connection and try again."),
             }
             0
         }
