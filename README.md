@@ -71,7 +71,7 @@ Upgrading from the old .NET version: settings and data usage history are importe
 
 ## Settings
 
-Most options are in the right-click menu. Everything is also in `%LOCALAPPDATA%\ResourceMonitor\settings.ini` (menu → *Edit settings file*); edits apply within a few seconds.
+Right-click → **Settings…** opens a native settings window (General, Metrics with drag-free reordering, Colours with the Windows colour picker, Alerts, Data). Most options are also in the right-click menu. Everything is also in `%LOCALAPPDATA%\ResourceMonitor\settings.ini` (menu → *Edit settings file*); edits apply within a few seconds.
 
 | Key | Meaning |
 |---|---|
