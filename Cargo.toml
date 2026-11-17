@@ -37,6 +37,7 @@ features = [
   "Win32_Security_Cryptography",
   "Win32_NetworkManagement_Ndis",
   "Win32_Networking_WinSock",
+  "Wdk_Graphics_Direct3D",
 ]
 
 # COM bindings for UI Automation (locating taskbar app buttons). Shares
