@@ -60,6 +60,36 @@ pub fn accent(m: Metric, dark: bool) -> Rgba {
     }
 }
 
+/// Usage colour ramp. Low usage: the metric's colour, a little muted; it
+/// grows more saturated as usage rises, turns amber at `warn` and red at
+/// `crit`.
+pub fn heat(base: Rgba, pct: f32, warn: f32, crit: f32) -> Rgba {
+    let gray = Rgba::rgb(140, 140, 140);
+    let lo = (warn - 25.0).max(1.0);
+    if pct <= lo {
+        // 0% → 45% muted, lo → full colour.
+        base.mix(gray, 0.45 * (1.0 - pct / lo))
+    } else if pct <= warn {
+        base.mix(C_WARN, (pct - lo) / (warn - lo).max(1.0))
+    } else if pct <= crit {
+        C_WARN.mix(C_CRIT, (pct - warn) / (crit - warn).max(1.0))
+    } else {
+        C_CRIT
+    }
+}
+
+/// Same ramp for text: stays the normal text colour until it gets busy.
+pub fn heat_text(fg: Rgba, pct: f32, warn: f32, crit: f32) -> Rgba {
+    let lo = (warn - 25.0).max(1.0);
+    if pct <= lo {
+        fg
+    } else if pct <= warn {
+        fg.mix(C_WARN, (pct - lo) / (warn - lo).max(1.0))
+    } else {
+        heat(C_WARN, pct, warn, crit)
+    }
+}
+
 pub fn short_label(m: Metric) -> &'static str {
     match m {
         Metric::Cpu => "CPU",
@@ -132,6 +162,27 @@ impl Model {
         } else {
             0
         }
+    }
+
+    /// Usage as a percentage, for metrics that have one (drives the colour ramp).
+    pub fn pct_of(&self, m: Metric) -> Option<f32> {
+        let s = &self.snap;
+        match m {
+            Metric::Cpu => Some(s.cpu),
+            Metric::Ram => Some(s.ram_pct),
+            Metric::Gpu => s.gpu,
+            Metric::DiskActive => s.disk_active,
+            Metric::TodayUp | Metric::TodayDown => self.cycle_usage().map(|(_, p)| p as f32),
+            _ => None,
+        }
+    }
+
+    pub fn heat(&self, base: Rgba, pct: f32) -> Rgba {
+        heat(base, pct, self.s.warn_pct, self.s.crit_pct)
+    }
+
+    pub fn heat_text(&self, fg: Rgba, pct: f32) -> Rgba {
+        heat_text(fg, pct, self.s.warn_pct, self.s.crit_pct)
     }
 
     pub fn cycle_usage(&self) -> Option<(u64, f64)> {
