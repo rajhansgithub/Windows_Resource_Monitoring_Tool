@@ -257,28 +257,24 @@ impl Canvas {
             Some(d) => unsafe { std::slice::from_raw_parts_mut(d.bits, (w * h) as usize) },
             None => return tw,
         };
-        // Soft 1px outline: keeps thin glyphs legible on translucent / Mica taskbars.
+        // Crisp 1px drop shadow (down-right): keeps glyphs legible on
+        // translucent / Mica taskbars without blurring their edges.
         if let Some(hc) = halo {
             for yy in t..b {
                 for xx in l..r {
-                    let mut cv = cov_at(xx, yy);
-                    for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
-                        cv = cv.max(cov_at(xx + dx, yy + dy));
-                    }
-                    for (dx, dy) in [(-1, -1), (1, -1), (-1, 1), (1, 1)] {
-                        cv = cv.max(cov_at(xx + dx, yy + dy) * 3 / 5);
-                    }
+                    let cv = cov_at(xx - 1, yy - 1);
                     if cv != 0 {
                         Self::blend_px(&mut buf[(yy * w + xx) as usize], hc, cv);
                     }
                 }
             }
         }
+        let lut = sharpen_lut();
         for yy in t..b {
             for xx in l..r {
                 let cov = cov_at(xx, yy);
                 if cov != 0 {
-                    Self::blend_px(&mut buf[(yy * w + xx) as usize], c, cov);
+                    Self::blend_px(&mut buf[(yy * w + xx) as usize], c, lut[cov as usize] as u32);
                 }
             }
         }
@@ -423,6 +419,20 @@ impl Canvas {
             UpdateLayeredWindow(hwnd, std::ptr::null_mut(), &pt, &sz, d.dc, &src, 0, &blend, ULW_ALPHA);
         }
     }
+}
+
+/// Contrast curve for anti-aliased glyph edges: firms up partially covered
+/// pixels so strokes look sharper (grayscale AA alone reads soft and thin).
+fn sharpen_lut() -> &'static [u8; 256] {
+    use std::sync::OnceLock;
+    static LUT: OnceLock<[u8; 256]> = OnceLock::new();
+    LUT.get_or_init(|| {
+        let mut t = [0u8; 256];
+        for (i, v) in t.iter_mut().enumerate() {
+            *v = ((i as f32 / 255.0).powf(0.72) * 255.0).round() as u8;
+        }
+        t
+    })
 }
 
 fn premul(c: Rgba) -> u32 {
