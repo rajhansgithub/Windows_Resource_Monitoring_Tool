@@ -37,6 +37,8 @@ const T_SAMPLE: usize = 1;
 const T_RESTART: usize = 3;
 /// One-shot, debounced re-check after window/taskbar events.
 const T_CHECK: usize = 4;
+/// One-shot: close an unpinned panel after the mouse left widget and panel.
+const T_HOVER_HIDE: usize = 5;
 /// Appbar callback: Windows tells us when a full-screen app opens/closes.
 const WM_APPBAR: u32 = WM_APP + 5;
 /// Settings file changed on disk (from the watcher thread).
@@ -672,6 +674,21 @@ impl App {
             );
         }
         self.fg_hook_tid = tid;
+    }
+
+    /// Close an unpinned panel shortly, unless the mouse is then over the
+    /// panel or a widget (lets you move from the widget into the panel).
+    pub fn hide_popup_soon(&mut self) {
+        unsafe { SetTimer(self.hwnd, T_HOVER_HIDE, 300, None) };
+    }
+
+    fn mouse_over_ours(&self) -> bool {
+        unsafe {
+            let mut pt = POINT { x: 0, y: 0 };
+            GetCursorPos(&mut pt);
+            let h = WindowFromPoint(pt);
+            !h.is_null() && (h == self.popup || self.overlays.iter().any(|o| o.hwnd == h))
+        }
     }
 
     /// Re-check full-screen state / z-order shortly. Bursts of events (window
@@ -1464,7 +1481,8 @@ impl App {
                 self.overlays[i].tracking = false;
                 self.overlays[i].no_hover = false;
                 if !self.popup_pinned {
-                    popup::hide(self);
+                    // Give the mouse a moment to reach the panel before closing it.
+                    self.hide_popup_soon();
                 }
             }
             WM_LBUTTONDOWN => {
@@ -1643,6 +1661,13 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         return 0;
     }
     match msg {
+        WM_TIMER if w == T_HOVER_HIDE => {
+            KillTimer(hwnd, T_HOVER_HIDE);
+            if !a.popup_pinned && !a.mouse_over_ours() {
+                popup::hide(a);
+            }
+            0
+        }
         WM_TIMER if w == T_CHECK => {
             KillTimer(hwnd, T_CHECK);
             a.refresh(false);

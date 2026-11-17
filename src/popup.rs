@@ -877,6 +877,9 @@ fn on_mouse_move(hwnd: HWND, l: LPARAM) {
 fn on_mouse_leave(hwnd: HWND) {
     if let Some(a) = crate::app::app() {
         a.popup_tracking = false;
+        if !a.popup_pinned {
+            a.hide_popup_soon();
+        }
         if a.popup_hover.take().is_some() {
             unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
         }
