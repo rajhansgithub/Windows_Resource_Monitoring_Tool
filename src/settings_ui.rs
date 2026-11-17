@@ -1,6 +1,6 @@
 //! Settings window in the style of Windows 11 Settings: a navigation pane on
 //! the left, a scrollable page of translucent "setting cards" on the right and
-//! an OK / Cancel / Apply footer, all on the Mica backdrop (Windows 11).
+//! a "Done" footer (changes apply live), all on the Mica backdrop (Windows 11).
 //!
 //! There are no child windows. The whole client area is one surface rendered
 //! into a `render::Canvas` (premultiplied BGRA) and copied to the window in a
@@ -13,8 +13,8 @@
 //! fills are translucent white / black like the system's own. On Windows 10
 //! (or if the backdrop cannot be enabled) opaque fallback colours are used.
 //!
-//! The window edits a *copy* of the settings. OK / Apply merge that copy into
-//! the live settings via `App::apply_new_settings`; Cancel throws it away.
+//! The window edits a *copy* of the settings; each change is merged into
+//! the live settings via `App::apply_new_settings` ~150 ms later (debounced).
 //!
 //! Re-entrancy rules (single UI thread, raw Win32):
 //! * `ui()` borrows are short; none is used after a call that runs a nested
@@ -76,6 +76,8 @@ const STEPPER_W: i32 = 132;
 
 const T_SCROLL: usize = 1;
 const T_REPEAT: usize = 2;
+/// Debounced live apply: changes take effect ~150 ms after the last edit.
+const T_LIVE: usize = 3;
 
 // ------------------------------------------------------------------ ids
 
@@ -1184,16 +1186,16 @@ impl Ui {
         let fh = self.sc(FOOTER_H);
         let by = self.ch - fh + (fh - bh) / 2;
         let right = self.cw - self.sc(24);
-        for (i, (id, text, accent)) in [(IDOK, "OK", true), (IDCANCEL, "Cancel", false), (ID_APPLY, "Apply", false)].into_iter().enumerate() {
-            let x = right - (3 - i as i32) * bw - (2 - i as i32) * gap;
-            controls.push(Control {
-                id,
-                kind: Kind::Button(text, accent),
-                rect: Rect { l: x, t: by, r: x + bw, b: by + bh },
-                in_page: false,
-                enabled: id != ID_APPLY || self.dirty,
-            });
-        }
+        // Changes apply live, so the footer only needs "Done" (like Windows Settings).
+        let _ = gap;
+        let x = right - bw;
+        controls.push(Control {
+            id: IDOK,
+            kind: Kind::Button("Done", true),
+            rect: Rect { l: x, t: by, r: x + bw, b: by + bh },
+            in_page: false,
+            enabled: true,
+        });
         self.controls = controls;
         self.blocks = blocks;
 
@@ -1477,6 +1479,13 @@ impl Ui {
         cv.fill_rect(Rect { l: px, t: vb, r: cv.w, b: cv.h }, p.footer);
         cv.fill_rect(Rect { l: px, t: vb, r: cv.w, b: vb + 1 }, p.line);
 
+        // Hint left of "Done".
+        {
+            let hint = "Changes are applied as you make them";
+            let (_, th) = cv.measure(f.small, hint);
+            cv.text(f.small, hint, px + self.sc(PAGE_PAD_L), vb + (cv.h - vb - th) / 2, p.dim);
+        }
+
         // App title, navigation, footer buttons.
         cv.text(f.app, "Settings", self.sc(20), self.sc(18), p.fg);
         for c in self.controls.iter().filter(|c| !c.in_page) {
@@ -1697,15 +1706,29 @@ impl Ui {
 
 // ------------------------------------------------------------------ actions
 
-/// The draft changed: enable Apply, rebuild the layout, repaint.
+/// The draft changed: rebuild the layout, repaint, and apply it live
+/// (debounced so slider drags / stepper repeats apply smoothly, not per pixel).
 fn changed(hwnd: HWND) {
+    let mut live = false;
     if let Some(u) = ui() {
         if READY.load(Relaxed) {
             u.dirty = true;
+            live = true;
         }
         u.layout();
     }
     invalidate(hwnd);
+    if live {
+        unsafe { SetTimer(hwnd, T_LIVE, 150, None) };
+    }
+}
+
+/// Apply anything still pending (closing the window, pressing Done).
+fn flush(hwnd: HWND) {
+    unsafe { KillTimer(hwnd, T_LIVE) };
+    if ui().is_some_and(|u| u.dirty) {
+        commit(hwnd);
+    }
 }
 
 /// Copy the settings this window owns into `dst`; everything else (widget
@@ -1784,9 +1807,8 @@ fn commit(hwnd: HWND) -> bool {
 }
 
 fn ok(hwnd: HWND) {
-    if commit(hwnd) {
-        unsafe { DestroyWindow(hwnd) };
-    }
+    flush(hwnd);
+    unsafe { DestroyWindow(hwnd) };
 }
 
 fn pick_colour(hwnd: HWND, m: Metric) {
@@ -2010,9 +2032,10 @@ fn on_key(hwnd: HWND, key: u16) {
             }
         }
         VK_TAB => u.move_focus(if shift { -1 } else { 1 }),
-        VK_ESCAPE => unsafe {
-            DestroyWindow(hwnd);
-        },
+        VK_ESCAPE => {
+            flush(hwnd);
+            unsafe { DestroyWindow(hwnd) };
+        }
         VK_RETURN => match focus {
             Some((id, Kind::Button(..) | Kind::Link(_) | Kind::Swatch(_) | Kind::Glyph(_) | Kind::Dropdown)) => {
                 u.focus_visible = true;
@@ -2491,6 +2514,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                     }
                 }
                 T_REPEAT => on_repeat(hwnd),
+                T_LIVE => {
+                    KillTimer(hwnd, T_LIVE);
+                    commit(hwnd);
+                }
                 _ => {}
             }
             0
@@ -2523,7 +2550,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             invalidate(hwnd);
             0
         }
+        WM_CLOSE => {
+            // Title-bar X / Alt+F4: apply anything pending, then close.
+            flush(hwnd);
+            DestroyWindow(hwnd);
+            0
+        }
         WM_DESTROY => {
+            KillTimer(hwnd, T_LIVE);
             KillTimer(hwnd, T_SCROLL);
             KillTimer(hwnd, T_REPEAT);
             if let Some(a) = app() {
