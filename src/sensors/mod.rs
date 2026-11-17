@@ -19,7 +19,6 @@ use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerf
 
 #[derive(Clone, Debug, Default)]
 pub struct ProcStat {
-    #[allow(dead_code)]
     pub pid: u32,
     /// Image name without ".exe" (e.g. "chrome").
     pub name: String,
