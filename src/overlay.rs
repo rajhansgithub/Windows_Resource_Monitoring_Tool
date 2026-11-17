@@ -80,6 +80,7 @@ type Cell = (usize, i32, i32, i32, i32, Option<Rect>, bool, usize);
 /// A font size with its line metrics and reserved value widths.
 struct Face {
     font: HFONT,
+    name: String,
     px: u32,
     line_h: i32,
     spark_h: i32,
@@ -89,7 +90,7 @@ struct Face {
 
 impl Default for Face {
     fn default() -> Self {
-        Face { font: std::ptr::null_mut(), px: 0, line_h: 1, spark_h: 4, sticky: [0; Metric::ALL.len()] }
+        Face { font: std::ptr::null_mut(), name: String::new(), px: 0, line_h: 1, spark_h: 4, sticky: [0; Metric::ALL.len()] }
     }
 }
 
@@ -224,16 +225,18 @@ impl Overlay {
     }
 
     /// Create/resize face `i` and refresh its metrics.
-    fn ensure_face(&mut self, i: usize, px: u32, scale: f32) {
+    fn ensure_face(&mut self, i: usize, px: u32, scale: f32, face_name: &str) {
         let f = &mut self.faces[i];
-        if px != f.px || f.font.is_null() {
+        let name = if face_name.is_empty() { ui_face() } else { face_name };
+        if px != f.px || f.font.is_null() || f.name != name {
             unsafe {
                 if !f.font.is_null() {
                     DeleteObject(f.font);
                 }
             }
             // Regular weight: crisper and easier to read than semibold at a distance.
-            f.font = create_font(px as i32, 400, ui_face(), true);
+            f.font = create_font(px as i32, 400, name, true);
+            f.name = name.to_string();
             f.px = px;
             f.sticky = [0; Metric::ALL.len()];
         }
@@ -408,8 +411,8 @@ impl Overlay {
             flat_px = stack_px.min((13.0 * 1.3 * scale * ts).round() as u32);
             stack_px = flat_px;
         }
-        self.ensure_face(0, flat_px, scale);
-        self.ensure_face(1, stack_px, scale);
+        self.ensure_face(0, flat_px, scale, &m.s.font);
+        self.ensure_face(1, stack_px, scale, &m.s.font);
         let rows = m.rows();
         let n = rows.len();
 

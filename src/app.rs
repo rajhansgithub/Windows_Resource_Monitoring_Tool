@@ -319,6 +319,17 @@ impl Model {
 
 // ==================================================================== app
 
+#[derive(Default)]
+struct AlertState {
+    cpu_since: Option<Instant>,
+    cpu_done: bool,
+    ram_since: Option<Instant>,
+    ram_done: bool,
+    disk_done: bool,
+    battery_done: bool,
+    cap_level: u8,
+}
+
 pub struct App {
     /// Hidden controller window: tray, timers, broadcasts.
     pub hwnd: HWND,
@@ -350,6 +361,7 @@ pub struct App {
     pub upd_pct: Option<f32>,
     /// Background UI Automation watcher for taskbar app-icon positions.
     icons: Option<crate::icons::Watcher>,
+    alerts: AlertState,
     /// Set by events: re-read taskbar geometry on the next refresh.
     need_locate: bool,
     /// Set by events: re-evaluate full-screen state and z-order.
@@ -463,6 +475,7 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
             menu_open: false,
             popup_cache: None,
             icons: None,
+            alerts: AlertState::default(),
             upd: std::ptr::null_mut(),
             upd_text: String::new(),
             upd_pct: None,
@@ -722,6 +735,80 @@ impl App {
         }
         if self.m.samples % 5 == 1 {
             self.update_tip();
+        }
+        self.check_alerts();
+    }
+
+    /// Alert rules evaluated on the samples we already take (no extra work).
+    /// Each alert fires once and re-arms only after the condition clears.
+    fn check_alerts(&mut self) {
+        let s = &self.m.s;
+        if !s.alerts {
+            return;
+        }
+        let snap = &self.m.snap;
+        let now = Instant::now();
+        let secs = s.alert_secs as u64;
+        let mut fire: Vec<(String, String)> = Vec::new();
+        let mut sustained = |v: f32, lim: f32, since: &mut Option<Instant>, done: &mut bool, what: &str| {
+            if lim <= 0.0 {
+                return;
+            }
+            if v >= lim {
+                let t = *since.get_or_insert(now);
+                if !*done && now.duration_since(t).as_secs() >= secs {
+                    *done = true;
+                    fire.push((
+                        format!("{} is at {:.0}%", what, v),
+                        format!("It has stayed above {:.0}% for {}.", lim, fmt::duration(secs)),
+                    ));
+                }
+            } else if v < lim - 5.0 {
+                *since = None;
+                *done = false;
+            }
+        };
+        let al = &mut self.alerts;
+        sustained(snap.cpu, s.alert_cpu_pct, &mut al.cpu_since, &mut al.cpu_done, "CPU");
+        sustained(snap.ram_pct, s.alert_ram_pct, &mut al.ram_since, &mut al.ram_done, "Memory");
+        if let Some(used) = snap.disk_used_pct {
+            let free = 100.0 - used;
+            if s.alert_disk_free_pct > 0.0 && free < s.alert_disk_free_pct {
+                if !al.disk_done {
+                    al.disk_done = true;
+                    fire.push((
+                        format!("System drive almost full ({:.0}% free)", free),
+                        format!("{} free of {}.", fmt::bytes(snap.disk_total - snap.disk_used), fmt::bytes(snap.disk_total)),
+                    ));
+                }
+            } else if free > s.alert_disk_free_pct + 2.0 {
+                al.disk_done = false;
+            }
+        }
+        if let Some(b) = snap.battery {
+            let low = !b.on_ac && !b.charging && s.alert_battery_pct > 0 && (b.percent as u32) <= s.alert_battery_pct;
+            if low && !al.battery_done {
+                al.battery_done = true;
+                fire.push((format!("Battery low ({}%)", b.percent), "Plug in your charger.".into()));
+            } else if !low {
+                al.battery_done = false;
+            }
+        }
+        if s.alert_cap {
+            if let Some((used, pct)) = self.m.cycle_usage() {
+                let level = if pct >= 100.0 { 2 } else if pct >= 90.0 { 1 } else { 0 };
+                if level > al.cap_level {
+                    fire.push((
+                        if level == 2 { "Monthly data cap reached".into() } else { "90% of your data cap used".into() },
+                        format!("{} of {:.0} GB this billing cycle.", fmt::bytes(used), s.data_cap_gb),
+                    ));
+                }
+                al.cap_level = level;
+            }
+        }
+        for (title, text) in fire {
+            crate::util::diag(&format!("alert: {} \u{2014} {}", title, text));
+            self.tray.balloon(&title, &text);
         }
     }
 
@@ -1036,6 +1123,11 @@ impl App {
                 radio(zm, ID_SIZE + i, n, s.text_scale == *v);
             }
             sub(dm, zm, "Text size");
+            let fm = CreatePopupMenu();
+            for (i, (n, v)) in FONTS.iter().enumerate() {
+                radio(fm, ID_FONT + i, n, s.font.eq_ignore_ascii_case(v));
+            }
+            sub(dm, fm, "Font");
             let bm = CreatePopupMenu();
             for (i, (n, v)) in BACKGROUNDS.iter().enumerate() {
                 radio(bm, ID_BG + i, n, s.bg_opacity == *v);
@@ -1271,6 +1363,7 @@ impl App {
             }
             _ if (ID_SIZE..ID_SIZE + TEXT_SIZES.len()).contains(&id) => s.text_scale = TEXT_SIZES[id - ID_SIZE].1,
             _ if (ID_BG..ID_BG + BACKGROUNDS.len()).contains(&id) => s.bg_opacity = BACKGROUNDS[id - ID_BG].1,
+            _ if (ID_FONT..ID_FONT + FONTS.len()).contains(&id) => s.font = FONTS[id - ID_FONT].1.to_string(),
             _ if (ID_MAXW..ID_MAXW + MAX_WIDTHS.len()).contains(&id) => s.max_width_pct = MAX_WIDTHS[id - ID_MAXW].1,
             _ => return,
         }
@@ -1441,6 +1534,14 @@ const ID_AUTOUPDATE: usize = 611;
 const ID_UPDATE_NOW: usize = 612;
 const ID_STACK_DISP: usize = 1000;
 const ID_MAXW: usize = 900;
+const ID_FONT: usize = 950;
+const FONTS: [(&str, &str); 5] = [
+    ("Default (Segoe UI Variable)", ""),
+    ("Segoe UI", "Segoe UI"),
+    ("Cascadia Mono (fixed-width digits)", "Cascadia Mono"),
+    ("Consolas", "Consolas"),
+    ("Bahnschrift", "Bahnschrift"),
+];
 const ID_RECHECK: usize = 609;
 const MAX_WIDTHS: [(&str, u32); 5] =
     [("Auto (don't cover app icons)", 0), ("20% of taskbar", 20), ("30% of taskbar", 30), ("40% of taskbar", 40), ("50% of taskbar", 50)];
