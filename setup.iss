@@ -1,6 +1,6 @@
 ; Inno Setup script. Build the exe first: cargo build --release
 #define MyAppName "Resource Monitor"
-#define MyAppVersion "2.5.0"
+#define MyAppVersion "2.6.0"
 #define MyAppPublisher "RajhansDewangan"
 #define MyAppExeName "ResourceMonitor.exe"
 
@@ -44,6 +44,10 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: 
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[UninstallDelete]
+Type: files; Name: "{app}\ResourceMonitor.old.exe"
+Type: files; Name: "{app}\ResourceMonitor.new.exe"
 
 [UninstallRun]
 Filename: "taskkill.exe"; Parameters: "/F /IM {#MyAppExeName}"; Flags: runhidden; RunOnceId: "KillApp"

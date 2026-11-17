@@ -1,0 +1,270 @@
+//! Self-update from GitHub Releases.
+//!
+//! Checks once at startup (if enabled) and when the user picks "Check for
+//! updates now" — never on a timer. Runs on a background thread. A newer
+//! `ResourceMonitor.exe` is downloaded, its SHA-256 verified against the
+//! digest GitHub publishes, then swapped in: Windows lets a running exe be
+//! renamed, so the old file becomes `ResourceMonitor.old.exe` and the new one
+//! takes its name. The app then restarts itself.
+
+use crate::util::wide;
+use std::path::{Path, PathBuf};
+use windows_sys::Win32::Networking::WinHttp::*;
+use windows_sys::Win32::Security::Cryptography::{BCryptHash, BCRYPT_SHA256_ALG_HANDLE};
+use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
+
+const REPO: &str = "rajhansgithub/Windows_Resource_Monitoring_Tool";
+const ASSET: &str = "ResourceMonitor.exe";
+const AGENT: &str = concat!("ResourceMonitor-Updater/", env!("CARGO_PKG_VERSION"));
+
+/// wParam: 0 = up to date, 1 = installed (restart now), 2 = newer version but
+/// this folder isn't writable (lParam = 0), 3 = check failed.
+pub const WM_APP_UPDATE: u32 = WM_APP + 8;
+pub const UP_TO_DATE: usize = 0;
+pub const INSTALLED: usize = 1;
+pub const MANUAL: usize = 2;
+pub const FAILED: usize = 3;
+/// Like MANUAL, but from the automatic startup check: notify only.
+pub const MANUAL_QUIET: usize = 4;
+
+pub fn releases_page() -> String {
+    format!("https://github.com/{}/releases/latest", REPO)
+}
+
+/// Remove the previous exe left behind by the last update.
+pub fn cleanup() {
+    if let Some(old) = old_path() {
+        let _ = std::fs::remove_file(old);
+    }
+}
+
+fn old_path() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    Some(exe.with_file_name("ResourceMonitor.old.exe"))
+}
+
+/// Start a check on a background thread; the result is posted to `notify`.
+/// `manual`: the user asked, so also report "up to date" / failures.
+pub fn check(notify: isize, manual: bool) {
+    let _ = std::thread::Builder::new().name("update".into()).spawn(move || {
+        let (code, ver) = match run() {
+            Ok(Some(v)) => (INSTALLED, v),
+            Ok(None) => (UP_TO_DATE, String::new()),
+            Err(Outcome::NotWritable(v)) => (MANUAL, v),
+            Err(Outcome::Failed) => (FAILED, String::new()),
+        };
+        let code = if code == MANUAL && !manual { MANUAL_QUIET } else { code };
+        if code == INSTALLED || code == MANUAL_QUIET || manual {
+            // Version text goes through a leaked Box the UI thread takes back.
+            let p = Box::into_raw(Box::new(ver)) as isize;
+            unsafe { PostMessageW(notify as _, WM_APP_UPDATE, code, p) };
+        }
+    });
+}
+
+/// Take back the version string posted with WM_APP_UPDATE.
+///
+/// # Safety
+/// `l` must be the lParam of a WM_APP_UPDATE message, taken exactly once.
+pub unsafe fn take_version(l: isize) -> String {
+    if l == 0 {
+        return String::new();
+    }
+    *Box::from_raw(l as *mut String)
+}
+
+enum Outcome {
+    NotWritable(String),
+    Failed,
+}
+
+fn run() -> Result<Option<String>, Outcome> {
+    let json = get(&format!("https://api.github.com/repos/{}/releases/latest", REPO))
+        .ok_or(Outcome::Failed)?;
+    let json = String::from_utf8_lossy(&json);
+    let tag = field(&json, "tag_name").ok_or(Outcome::Failed)?;
+    if !newer(&tag, env!("CARGO_PKG_VERSION")) {
+        return Ok(None);
+    }
+    let (url, digest) = asset(&json, ASSET).ok_or(Outcome::Failed)?;
+    if !url.starts_with("https://github.com/") {
+        return Err(Outcome::Failed);
+    }
+    let exe = std::env::current_exe().map_err(|_| Outcome::Failed)?;
+    let dir = exe.parent().ok_or(Outcome::Failed)?;
+    if !writable(dir) {
+        return Err(Outcome::NotWritable(tag));
+    }
+    let bin = get(&url).ok_or(Outcome::Failed)?;
+    // Sanity: a Windows executable, and the exact bytes GitHub says it published.
+    if bin.len() < 64 * 1024 || !bin.starts_with(b"MZ") {
+        return Err(Outcome::Failed);
+    }
+    if let Some(want) = digest {
+        if !sha256_hex(&bin).eq_ignore_ascii_case(&want) {
+            return Err(Outcome::Failed);
+        }
+    }
+    install(&exe, &bin).map_err(|_| Outcome::NotWritable(tag.clone()))?;
+    Ok(Some(tag))
+}
+
+/// Write next to the exe, then swap names. The running exe can be renamed
+/// but not overwritten.
+fn install(exe: &Path, bin: &[u8]) -> std::io::Result<()> {
+    let new = exe.with_file_name("ResourceMonitor.new.exe");
+    let old = exe.with_file_name("ResourceMonitor.old.exe");
+    std::fs::write(&new, bin)?;
+    let _ = std::fs::remove_file(&old);
+    std::fs::rename(exe, &old)?;
+    if let Err(e) = std::fs::rename(&new, exe) {
+        // Put the original back so the app still starts.
+        let _ = std::fs::rename(&old, exe);
+        return Err(e);
+    }
+    Ok(())
+}
+
+fn writable(dir: &Path) -> bool {
+    let probe = dir.join(".resmon-write-test");
+    let ok = std::fs::write(&probe, b"").is_ok();
+    let _ = std::fs::remove_file(&probe);
+    ok
+}
+
+/// "v2.10.0" > "2.9.3"
+fn newer(tag: &str, current: &str) -> bool {
+    let parse = |s: &str| -> Vec<u32> {
+        s.trim_start_matches(['v', 'V']).split(['.', '-']).take(3).map(|p| p.parse().unwrap_or(0)).collect()
+    };
+    let (a, b) = (parse(tag), parse(current));
+    a > b
+}
+
+/// Value of the first `"key": "value"` in `json` (string values only).
+fn field(json: &str, key: &str) -> Option<String> {
+    let k = format!("\"{}\"", key);
+    let i = json.find(&k)? + k.len();
+    let rest = json[i..].trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
+    Some(rest[..rest.find('"')?].to_string())
+}
+
+/// (download URL, sha256 hex) of the asset called `name`.
+fn asset(json: &str, name: &str) -> Option<(String, Option<String>)> {
+    let pats = [format!("\"name\":\"{}\"", name), format!("\"name\": \"{}\"", name)];
+    let start = pats.iter().filter_map(|p| json.find(p.as_str())).min()?;
+    let body = &json[start + 8..];
+    // This asset's fields end where the next asset's "name" begins.
+    let end = body.find("\"name\"").unwrap_or(body.len());
+    let body = &body[..end];
+    let url = field(body, "browser_download_url")?;
+    let digest = field(body, "digest").and_then(|d| d.strip_prefix("sha256:").map(str::to_string));
+    Some((url, digest))
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    let mut out = [0u8; 32];
+    let st = unsafe {
+        BCryptHash(BCRYPT_SHA256_ALG_HANDLE, std::ptr::null(), 0, data.as_ptr(), data.len() as u32, out.as_mut_ptr(), 32)
+    };
+    if st != 0 {
+        return String::new();
+    }
+    out.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// HTTPS GET via WinHTTP (follows redirects, uses the system proxy).
+fn get(url: &str) -> Option<Vec<u8>> {
+    let rest = url.strip_prefix("https://")?;
+    let (host, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    let path = if path.is_empty() { "/" } else { path };
+    struct H(*mut core::ffi::c_void);
+    impl Drop for H {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe { WinHttpCloseHandle(self.0) };
+            }
+        }
+    }
+    unsafe {
+        let agent = wide(AGENT);
+        let s = H(WinHttpOpen(agent.as_ptr(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, std::ptr::null(), std::ptr::null(), 0));
+        if s.0.is_null() {
+            return None;
+        }
+        WinHttpSetTimeouts(s.0, 10_000, 10_000, 15_000, 30_000);
+        let h = wide(host);
+        let c = H(WinHttpConnect(s.0, h.as_ptr(), 443, 0));
+        if c.0.is_null() {
+            return None;
+        }
+        let verb = wide("GET");
+        let p = wide(path);
+        let r = H(WinHttpOpenRequest(
+            c.0,
+            verb.as_ptr(),
+            p.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            WINHTTP_FLAG_SECURE,
+        ));
+        if r.0.is_null() {
+            return None;
+        }
+        let hdr = wide("Accept: application/vnd.github+json\r\n");
+        if WinHttpSendRequest(r.0, hdr.as_ptr(), u32::MAX, std::ptr::null(), 0, 0, 0) == 0
+            || WinHttpReceiveResponse(r.0, std::ptr::null_mut()) == 0
+        {
+            return None;
+        }
+        let mut status: u32 = 0;
+        let mut len: u32 = 4;
+        WinHttpQueryHeaders(
+            r.0,
+            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            std::ptr::null(),
+            &mut status as *mut u32 as *mut _,
+            &mut len,
+            std::ptr::null_mut(),
+        );
+        if status != 200 {
+            return None;
+        }
+        let mut body = Vec::new();
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            let mut n: u32 = 0;
+            if WinHttpReadData(r.0, buf.as_mut_ptr() as *mut _, buf.len() as u32, &mut n) == 0 {
+                return None;
+            }
+            if n == 0 {
+                break;
+            }
+            body.extend_from_slice(&buf[..n as usize]);
+            if body.len() > 64 * 1024 * 1024 {
+                return None;
+            }
+        }
+        Some(body)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn versions_and_json() {
+        assert!(newer("v2.10.0", "2.9.3"));
+        assert!(!newer("v2.5.0", "2.5.0"));
+        assert!(!newer("v2.4.9", "2.5.0"));
+        let j = r#"{"tag_name": "v2.6.0", "assets": [
+            {"name": "ResourceMonitor.exe", "uploader": {"login": "x"}, "digest": "sha256:abc",
+             "browser_download_url": "https://github.com/a/b/releases/download/v2.6.0/ResourceMonitor.exe"},
+            {"name": "Setup_ResourceMonitor.exe", "browser_download_url": "https://github.com/x/setup.exe"}]}"#;
+        assert_eq!(field(j, "tag_name").as_deref(), Some("v2.6.0"));
+        let (u, d) = asset(j, "ResourceMonitor.exe").unwrap();
+        assert!(u.ends_with("/v2.6.0/ResourceMonitor.exe"));
+        assert_eq!(d.as_deref(), Some("abc"));
+    }
+}

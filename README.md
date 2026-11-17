@@ -55,6 +55,10 @@ Pick any combination from **right-click → Metrics**. Default: CPU, RAM, GPU, �
 - **Monthly data cap**: set `data_cap_gb` and `cap_reset_day` in the settings file → progress bar, and the widget turns amber/red as you approach it.
 - Stored in `%LOCALAPPDATA%\ResourceMonitor\usage.csv` (plain CSV, atomic writes, saved every minute and on sleep/shutdown).
 
+## Updates
+
+The app updates itself: once at startup it asks GitHub for the latest release, downloads the new `ResourceMonitor.exe`, checks its SHA-256 against the digest GitHub publishes, swaps it in and restarts (you get a “Updated to vX” notification). Nothing runs on a timer. Right-click → *Check for updates now* any time, or untick *Update automatically*. If the app lives in a folder it can't write to (e.g. Program Files), it tells you and opens the download page instead.
+
 ## Install
 
 1. Download `ResourceMonitor.exe` (portable) or `Setup_ResourceMonitor.exe` (per-user install, no admin) from [Releases](../../releases).
@@ -85,6 +89,7 @@ Most options are in the right-click menu. Everything is also in `%LOCALAPPDATA%\
 | `theme` | `auto`, `dark`, `light` |
 | `bg_opacity` | 0 (invisible) – 255 (solid) |
 | `warn_pct`, `crit_pct` | colour thresholds |
+| `auto_update` | 1 = check for a new version once at startup and install it |
 | `data_cap_gb`, `cap_reset_day` | monthly cap (0 = off) and billing day |
 
 ## Build
