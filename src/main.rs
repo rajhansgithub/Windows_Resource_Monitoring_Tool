@@ -11,6 +11,7 @@ mod render;
 mod report;
 mod sensors;
 mod settings;
+mod settings_ui;
 mod taskbar;
 mod tray;
 mod update;
@@ -80,6 +81,12 @@ fn main() {
 
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+            // Keyboard navigation (Tab, Enter, Esc) for the Settings window.
+            if let Some(a) = app::app() {
+                if !a.settings_win.is_null() && IsDialogMessageW(a.settings_win, &msg) != 0 {
+                    continue;
+                }
+            }
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }

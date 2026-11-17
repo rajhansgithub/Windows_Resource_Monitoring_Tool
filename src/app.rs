@@ -322,6 +322,8 @@ pub struct App {
     pub hwnd: HWND,
     pub popup: HWND,
     pub report: HWND,
+    /// The Settings window (one instance), null when closed.
+    pub settings_win: HWND,
     pub m: Model,
     settings_mtime: Option<SystemTime>,
     sensors: Sensors,
@@ -402,6 +404,7 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         popup::register(hinst);
         crate::update_ui::register(hinst);
         report::register(hinst);
+        crate::settings_ui::register(hinst);
 
         // Hidden top-level window (not message-only: those miss broadcasts
         // such as TaskbarCreated, WM_SETTINGCHANGE and WM_DISPLAYCHANGE).
@@ -430,6 +433,7 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
             hwnd,
             popup: std::ptr::null_mut(),
             report: std::ptr::null_mut(),
+            settings_win: std::ptr::null_mut(),
             m: Model {
                 s,
                 snap: Snapshot::default(),
@@ -683,6 +687,12 @@ impl App {
         self.settings_mtime = Settings::mtime();
     }
 
+    /// Network adapters currently present (refreshed on each call).
+    pub fn adapter_list(&mut self) -> Vec<AdapterInfo> {
+        self.adapters = self.sensors.adapters();
+        self.adapters.clone()
+    }
+
     /// Replace all settings (e.g. from the Settings window), save and apply.
     pub fn apply_new_settings(&mut self, s: Settings) {
         self.m.s = s;
@@ -869,6 +879,7 @@ impl App {
             AppendMenuW(hm, MF_STRING | MF_GRAYED, 0, title.as_ptr());
             sep(hm);
             add(hm, ID_VISIBLE, "Show widget", s.visible);
+            add(hm, ID_SETTINGS, "Settings\u{2026}", false);
 
             let mm = CreatePopupMenu();
             for (i, m) in Metric::ALL.iter().enumerate() {
@@ -1058,6 +1069,7 @@ impl App {
 
     fn command(&mut self, id: usize) {
         match id {
+            ID_SETTINGS => return crate::settings_ui::open(self),
             ID_REPORT => return report::open(self),
             ID_TASKMGR => return shell_open("taskmgr.exe", None),
             ID_UPDATE_NOW => {
@@ -1329,6 +1341,7 @@ const ID_AUTOSTART: usize = 702;
 const ID_EDIT: usize = 703;
 const ID_DATA: usize = 704;
 const ID_EXIT: usize = 705;
+const ID_SETTINGS: usize = 706;
 const ID_DISP_PRIMARY: usize = 800;
 const ID_DISP_ALL: usize = 801;
 const ID_DISP: usize = 810;
