@@ -421,6 +421,13 @@ mod darkmode {
     }
 }
 
+/// Make the app's native menus (tray / right-click menu) follow the theme from
+/// the very first time they open. Call at startup and when the theme changes.
+pub fn apply_menu_theme(theme: Theme, owner: HWND) {
+    darkmode::set_app_mode(theme);
+    darkmode::allow_window(owner, true);
+}
+
 // ------------------------------------------------------------------ fonts
 
 struct Fonts {

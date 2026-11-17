@@ -520,6 +520,9 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         SHAppBarMessage(ABM_NEW, &mut abd);
         crate::settings::watch(hwnd as isize, WM_SETTINGS_FILE);
 
+        // Dark/light native menus from the first right-click, not only after
+        // the Settings window has been opened.
+        crate::settings_ui::apply_menu_theme(a.m.s.theme, hwnd);
         a.popup = popup::create(hinst, hwnd);
         a.tray.add();
         if a.m.s.auto_update && !after_update {
@@ -905,6 +908,7 @@ impl App {
 
     fn apply_settings(&mut self) {
         set_accents(&self.m.s);
+        crate::settings_ui::apply_menu_theme(self.m.s.theme, self.hwnd);
         self.need_locate = true;
         self.m.dark = effective_dark(self.m.s.theme);
         let ct = self.m.s.click_through;
@@ -1824,6 +1828,7 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         WM_SETTINGCHANGE => {
             // Theme switch, taskbar moved/resized (work area), auto-hide toggled…
             a.m.dark = effective_dark(a.m.s.theme);
+            crate::settings_ui::apply_menu_theme(a.m.s.theme, hwnd);
             a.update_timer();
             a.need_locate = true;
             a.refresh(true);
