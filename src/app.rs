@@ -752,7 +752,21 @@ impl App {
             let dm = CreatePopupMenu();
             add(dm, ID_SPARK, "Sparklines", s.sparklines);
             add(dm, ID_LABELS, "Labels", s.labels);
-            add(dm, ID_STACKED, "Stacked (2 rows)", s.stacked);
+            // Stacked: one checkbox, or one per display when there are several.
+            if self.taskbars.len() > 1 {
+                let km = CreatePopupMenu();
+                for (i, t) in self.taskbars.iter().take(MAX_DISPLAYS).enumerate() {
+                    let label = format!("{}{}", t.label(), if t.primary { " \u{2014} main" } else { "" });
+                    add(km, ID_STACK_DISP + i, &label, s.stacked_for(&t.key()));
+                }
+                AppendMenuW(km, MF_SEPARATOR, 0, std::ptr::null());
+                add(km, ID_AUTOSTACK, "Stack automatically when crowded", s.auto_stack);
+                sub(dm, km, "Stacked (2 rows)");
+            } else {
+                let key = self.taskbars.first().map(|t| t.key()).unwrap_or_default();
+                add(dm, ID_STACKED, "Stacked (2 rows)", s.stacked_for(&key));
+                add(dm, ID_AUTOSTACK, "Stack automatically when crowded", s.auto_stack);
+            }
             let wm = CreatePopupMenu();
             for (i, (n, v)) in MAX_WIDTHS.iter().enumerate() {
                 radio(wm, ID_MAXW + i, n, s.max_width_pct == *v);
@@ -875,7 +889,11 @@ impl App {
         match id {
             ID_SPARK => Some(s.sparklines),
             ID_LABELS => Some(s.labels),
-            ID_STACKED => Some(s.stacked),
+            ID_STACKED => Some(s.stacked_for(&self.taskbars.first().map(|t| t.key()).unwrap_or_default())),
+            ID_AUTOSTACK => Some(s.auto_stack),
+            _ if (ID_STACK_DISP..ID_STACK_DISP + MAX_DISPLAYS).contains(&id) => {
+                self.taskbars.get(id - ID_STACK_DISP).map(|t| s.stacked_for(&t.key()))
+            }
             _ if (ID_METRIC..ID_METRIC + Metric::ALL.len()).contains(&id) => Some(s.show[id - ID_METRIC]),
             _ => None,
         }
@@ -943,7 +961,19 @@ impl App {
             ID_VISIBLE => s.visible = !s.visible,
             ID_SPARK => s.sparklines = !s.sparklines,
             ID_LABELS => s.labels = !s.labels,
-            ID_STACKED => s.stacked = !s.stacked,
+            ID_STACKED => {
+                // Single display: this is the default for every display.
+                s.stacked = !s.stacked;
+                s.stacked_on.clear();
+            }
+            ID_AUTOSTACK => s.auto_stack = !s.auto_stack,
+            _ if (ID_STACK_DISP..ID_STACK_DISP + MAX_DISPLAYS).contains(&id) => {
+                if let Some(t) = self.taskbars.get(id - ID_STACK_DISP) {
+                    let k = t.key();
+                    let on = !s.stacked_for(&k);
+                    s.set_stacked(&k, on);
+                }
+            }
             ID_FULLSCREEN => s.hide_fullscreen = !s.hide_fullscreen,
             ID_CLICKTHRU => s.click_through = !s.click_through,
             ID_DOCK => s.mode = Mode::Dock,
@@ -1148,6 +1178,8 @@ const ID_DOCK: usize = 605;
 const ID_FLOAT: usize = 606;
 const ID_RESET_POS: usize = 607;
 const ID_STACKED: usize = 608;
+const ID_AUTOSTACK: usize = 610;
+const ID_STACK_DISP: usize = 1000;
 const ID_MAXW: usize = 900;
 const ID_RECHECK: usize = 609;
 const MAX_WIDTHS: [(&str, u32); 5] =

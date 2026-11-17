@@ -459,7 +459,9 @@ impl Overlay {
         } else if horiz {
             // Try progressively more compact layouts until the widget fits the
             // free space next to the tray (budget), so it never covers app icons.
-            let start = if m.s.stacked && rpc > 1 { Pack::Groups } else { Pack::Flat };
+            // The user's choice for this display is always honoured; only with
+            // auto_stack may a one-line widget fall back to stacked rows.
+            let start = if m.s.stacked_for(&tb.key()) && rpc > 1 { Pack::Groups } else { Pack::Flat };
             let mut levels: Vec<(Pack, bool, bool)> = Vec::new();
             for (p, sp, lb) in [
                 (Pack::Flat, true, true),
@@ -470,7 +472,8 @@ impl Overlay {
                 (Pack::Full, false, false),
             ] {
                 let p = if rpc == 1 { Pack::Flat } else { p };
-                if p < start || levels.contains(&(p, sp, lb)) {
+                let allowed = if m.s.auto_stack { p >= start } else { p == start || (start == Pack::Groups && p == Pack::Full) };
+                if !allowed || levels.contains(&(p, sp, lb)) {
                     continue;
                 }
                 levels.push((p, sp, lb));
@@ -481,7 +484,8 @@ impl Overlay {
             let mut vis = rows.len();
             if let Some(b) = budget {
                 while vis > 2 {
-                    let l = self.layout_h(&rows[..vis], Pack::Full, rpc, false, m.s.labels, &geo, &pitch_for, dock, thickness);
+                    let tightest = if start == Pack::Flat && !m.s.auto_stack { Pack::Flat } else { Pack::Full };
+                    let l = self.layout_h(&rows[..vis], tightest, rpc, false, m.s.labels, &geo, &pitch_for, dock, thickness);
                     if l.1 + if vis < rows.len() { more_w } else { 0 } <= b {
                         break;
                     }
