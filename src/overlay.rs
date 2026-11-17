@@ -24,9 +24,8 @@ pub struct Overlay {
     pub owner: HWND,
     pub tb: Taskbar,
     canvas: Canvas,
-    font: HFONT,
-    font_px: u32,
-    sticky: [i32; Metric::ALL.len()],
+    /// [0] one-line layout (large), [1] stacked rows (fits two lines).
+    faces: [Face; 2],
     pub scale: f32,
     pub pos: Rect,
     pub shown: bool,
@@ -73,8 +72,24 @@ pub fn pack(rows: &[Metric], rpc: usize) -> Vec<Vec<Metric>> {
     cols
 }
 
-/// (row index, x, y, value_left, value_right, spark rect, draw label)
-type Cell = (usize, i32, i32, i32, i32, Option<Rect>, bool);
+/// (row index, x, y, value_left, value_right, spark rect, draw label, face)
+type Cell = (usize, i32, i32, i32, i32, Option<Rect>, bool, usize);
+
+/// A font size with its line metrics and reserved value widths.
+struct Face {
+    font: HFONT,
+    px: u32,
+    line_h: i32,
+    spark_h: i32,
+    /// Widest value seen per metric (keeps the layout from jittering).
+    sticky: [i32; Metric::ALL.len()],
+}
+
+impl Default for Face {
+    fn default() -> Self {
+        Face { font: std::ptr::null_mut(), px: 0, line_h: 1, spark_h: 4, sticky: [0; Metric::ALL.len()] }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Pack {
@@ -98,12 +113,10 @@ pub fn pack_groups(rows: &[Metric], rpc: usize) -> Vec<Vec<Metric>> {
 }
 
 struct Geo {
-    line_h: i32,
     gap: i32,
     col_gap: i32,
     pad: i32,
     spark_w: i32,
-    spark_h: i32,
     small_gap: i32,
 }
 
@@ -167,9 +180,7 @@ impl Overlay {
             owner,
             tb,
             canvas,
-            font: std::ptr::null_mut(),
-            font_px: 0,
-            sticky: [0; Metric::ALL.len()],
+            faces: [Face::default(), Face::default()],
             scale: tb.dpi as f32 / 96.0,
             pos: Rect::default(),
             shown: false,
@@ -190,21 +201,29 @@ impl Overlay {
     }
 
     pub fn reset_widths(&mut self) {
-        self.sticky = [0; Metric::ALL.len()];
+        for f in &mut self.faces {
+            f.sticky = [0; Metric::ALL.len()];
+        }
     }
 
-    fn ensure_font(&mut self, px: u32) {
-        if px == self.font_px && !self.font.is_null() {
-            return;
-        }
-        unsafe {
-            if !self.font.is_null() {
-                DeleteObject(self.font);
+    /// Create/resize face `i` and refresh its metrics.
+    fn ensure_face(&mut self, i: usize, px: u32, scale: f32) {
+        let f = &mut self.faces[i];
+        if px != f.px || f.font.is_null() {
+            unsafe {
+                if !f.font.is_null() {
+                    DeleteObject(f.font);
+                }
             }
+            // Regular weight: crisper and easier to read than semibold at a distance.
+            f.font = create_font(px as i32, 400, ui_face(), true);
+            f.px = px;
+            f.sticky = [0; Metric::ALL.len()];
         }
-        self.font = create_font(px as i32, 600, ui_face(), true);
-        self.font_px = px;
-        self.reset_widths();
+        let (_, lh) = self.canvas.measure(f.font, "Ag");
+        let f = &mut self.faces[i];
+        f.line_h = if lh == 0 { (px as f32 * 1.25) as i32 } else { lh - (scale).round() as i32 }.max(1);
+        f.spark_h = (f.line_h - (4.0 * scale).round() as i32).max(4);
     }
 
     /// `raise`: re-assert topmost (only after events, e.g. focus changed).
@@ -268,20 +287,23 @@ impl Overlay {
         sparks: bool,
         labels: bool,
         g: &Geo,
-        pitch_for: &dyn Fn(usize) -> i32,
+        pitch_for: &dyn Fn(usize, i32) -> i32,
         dock: bool,
         thickness: i32,
     ) -> (Vec<Cell>, i32, i32) {
-        let font = self.font;
+        let fi = if p == Pack::Flat { 0 } else { 1 };
+        let face = &self.faces[fi];
+        let font = face.font;
+        let (line_h, spark_h) = (face.line_h, face.spark_h);
         let cols = match p {
             Pack::Flat => pack(rows, 1),
             Pack::Groups => pack_groups(rows, rpc),
             Pack::Full => pack(rows, rpc),
         };
         let used_rows = cols.iter().map(|c| c.len()).max().unwrap_or(1);
-        let pitch = pitch_for(used_rows);
-        let hh = if dock { thickness.max(g.line_h + 2) } else { used_rows as i32 * pitch + 2 * g.pad };
-        let vw = |r: Metric| self.sticky[r.idx()];
+        let pitch = pitch_for(used_rows, line_h);
+        let hh = if dock { thickness.max(line_h + 2) } else { used_rows as i32 * pitch + 2 * g.pad };
+        let vw = |r: Metric| face.sticky[r.idx()];
         let spark_part = |r: Metric| if sparks && has_spark(r) { g.gap + g.spark_w } else { 0 };
         let mut cells = Vec::with_capacity(rows.len());
         let mut x = g.pad;
@@ -295,17 +317,17 @@ impl Overlay {
                 0
             };
             let lab_part = if lw > 0 { lw + g.gap } else { 0 };
-            let y0 = (hh - col.len() as i32 * pitch) / 2 + (pitch - g.line_h) / 2;
+            let y0 = (hh - col.len() as i32 * pitch) / 2 + (pitch - line_h) / 2;
             for (j, &r) in col.iter().enumerate() {
                 let y = y0 + j as i32 * pitch;
                 let vr = x + lab_part + val_w;
                 let spark = (spark_part(r) > 0).then(|| Rect {
                     l: vr + g.gap,
-                    t: y + (g.line_h - g.spark_h) / 2,
+                    t: y + (line_h - spark_h) / 2,
                     r: vr + g.gap + g.spark_w,
-                    b: y + (g.line_h - g.spark_h) / 2 + g.spark_h,
+                    b: y + (line_h - spark_h) / 2 + spark_h,
                 });
-                cells.push((idx, x, y, x + lab_part, vr, spark, lw > 0));
+                cells.push((idx, x, y, x + lab_part, vr, spark, lw > 0, fi));
                 idx += 1;
             }
             // Related metrics on one line (▲ then ▼) sit closer together.
@@ -339,38 +361,45 @@ impl Overlay {
         let sc = |v: f32| (v * scale).round() as i32;
 
         let thickness = if tb.edge.horizontal() { tb.rect.h() } else { tb.rect.w() };
-        let mut font_px = (13.0 * scale * ts).round() as u32;
+        // One-line text is 1.5x the old 13px base; stacked text is as large as
+        // two rows allow on this taskbar.
+        let big = (19.5 * scale * ts).round() as u32;
+        let line = |px: u32| (px as f32 * 1.25).ceil() as i32;
+        let avail = thickness - sc(4.0);
+        let mut flat_px = big;
+        let mut stack_px = big;
         // Most rows a column may hold on this taskbar: 2 (3 on tall taskbars, 1 on tiny ones).
         let mut rpc = 2usize;
         if dock && horiz {
-            let avail = thickness - sc(4.0);
-            let line = |px: u32| (px as f32 * 1.32).ceil() as i32;
-            if line(font_px) * 3 <= avail && thickness >= sc(64.0) {
+            flat_px = flat_px.min(((avail as f32) / 1.25).floor().max(9.0) as u32);
+            if line(stack_px) * 3 <= avail && thickness >= sc(64.0) {
                 rpc = 3;
-            } else if line(font_px) * 2 > avail {
-                let fit = ((avail / 2).max(0) as f32 / 1.32).floor() as u32;
+            } else if line(stack_px) * 2 > avail {
+                let fit = ((avail / 2).max(0) as f32 / 1.25).floor() as u32;
                 if fit as f32 >= 10.0 * scale {
-                    font_px = fit;
+                    stack_px = fit;
                 } else {
                     rpc = 1;
                 }
             }
         }
-        self.ensure_font(font_px);
-        let font = self.font;
+        // Vertical taskbars are narrow: use the stacked size there.
+        if dock && !horiz {
+            flat_px = stack_px.min((13.0 * 1.3 * scale * ts).round() as u32);
+            stack_px = flat_px;
+        }
+        self.ensure_face(0, flat_px, scale);
+        self.ensure_face(1, stack_px, scale);
         let rows = m.rows();
         let n = rows.len();
 
-        let (_, line_h) = self.canvas.measure(font, "Ag");
-        let line_h = if line_h == 0 { (font_px as f32 * 1.32) as i32 } else { line_h - sc(1.0) }.max(1);
         let gap = sc(6.0);
-        let col_gap = sc(14.0);
+        let col_gap = sc(16.0);
         let pad = sc(6.0);
         let spark_w = if m.s.sparklines { sc(30.0) } else { 0 };
-        let spark_h = (line_h - sc(4.0)).max(4);
         // Row pitch: use the taskbar's height for breathing room between rows
         // (up to 1.5x line height) instead of stacking lines edge to edge.
-        let pitch_for = |rows_n: usize| {
+        let pitch_for = |rows_n: usize, line_h: i32| {
             if dock && horiz {
                 let avail = thickness - 2 * sc(3.0);
                 (avail / rows_n.max(1) as i32).clamp(line_h, (line_h as f32 * 1.5) as i32)
@@ -378,31 +407,42 @@ impl Overlay {
                 line_h + sc(4.0)
             }
         };
-        let pitch = pitch_for(rpc);
 
         let values: Vec<(String, u8, &str)> = rows.iter().map(|&r| m.value(r)).collect();
+        for fi in 0..2 {
+            let font = self.faces[fi].font;
+            // Top-process name: up to ~9 characters' worth before "…".
+            let cap_w = (self.faces[fi].px as f32 * 8.5).round() as i32;
+            for (i, &r) in rows.iter().enumerate() {
+                let (v, _, tpl) = &values[i];
+                let tw = self.canvas.measure(font, tpl).0.max(self.canvas.measure(font, v).0);
+                let cap = if r == Metric::TopProc { cap_w } else { i32::MAX };
+                let st = &mut self.faces[fi].sticky[r.idx()];
+                *st = (*st).max(tw).min(cap);
+            }
+        }
+        // Vertical taskbars use the stacked face.
+        let vf = 1;
+        let font = self.faces[vf].font;
+        let line_h = self.faces[vf].line_h;
+        let spark_h = self.faces[vf].spark_h;
+        let pitch = pitch_for(1, line_h);
         let label_w = |c: &[Metric]| -> i32 {
             if !m.s.labels {
                 return 0;
             }
             c.iter().map(|&r| self.canvas.measure(font, short_label(r)).0).max().unwrap_or(0)
         };
-        for (i, &r) in rows.iter().enumerate() {
-            let (v, _, tpl) = &values[i];
-            let tw = self.canvas.measure(font, tpl).0.max(self.canvas.measure(font, v).0);
-            let cap = if r == Metric::TopProc { sc(110.0 * ts) } else { i32::MAX };
-            self.sticky[r.idx()] = self.sticky[r.idx()].max(tw).min(cap);
-        }
-        let vw = |r: Metric| self.sticky[r.idx()];
+        let vw = |r: Metric| self.faces[vf].sticky[r.idx()];
 
-        let geo = Geo { line_h, gap, col_gap, pad, spark_w, spark_h, small_gap: sc(8.0) };
+        let geo = Geo { gap, col_gap, pad, spark_w, small_gap: sc(10.0) };
         let mut cells: Vec<Cell> = Vec::with_capacity(n);
         // "+N" marker for metrics that only fit in the hover panel.
         let mut more: Option<(String, i32, i32)> = None;
-        let more_w = gap + self.canvas.measure(font, "+88").0;
+        let more_w = gap + self.canvas.measure(self.faces[1].font, "+88").0;
         let (w, h);
         if n == 0 {
-            (w, h) = (sc(24.0), if dock && horiz { thickness } else { line_h + 2 * pad });
+            (w, h) = (sc(24.0), if dock && horiz { thickness } else { self.faces[0].line_h + 2 * pad });
         } else if horiz {
             // Try progressively more compact layouts until the widget fits the
             // free space next to the tray (budget), so it never covers app icons.
@@ -448,7 +488,7 @@ impl Overlay {
             cells = c;
             if vis < rows.len() {
                 let t = format!("+{}", rows.len() - vis);
-                more = Some((t, ww - pad + gap, (hh - line_h) / 2));
+                more = Some((t, ww - pad + gap, (hh - self.faces[1].line_h) / 2));
                 ww += more_w;
             }
             (w, h) = (ww, hh);
@@ -474,7 +514,7 @@ impl Overlay {
                     b: y + (line_h - spark_h) / 2 + spark_h,
                 });
                 let vl = x + if with_label { lab_part } else { 0 };
-                cells.push((i, x, y, vl, vr, spark, with_label));
+                cells.push((i, x, y, vl, vr, spark, with_label, vf));
                 y += pitch;
             }
             (w, h) = (width, y + pad);
@@ -491,12 +531,13 @@ impl Overlay {
             let inset = if dock && horiz { sc(4.0) } else { 0 };
             self.canvas.fill_round(Rect { l: 0, t: inset, r: w, b: h - inset }, sc(6.0) as f32, bg);
         }
-        // Soft outline behind text when there's no solid background behind it.
-        self.canvas.halo = (opacity < 120).then(|| if m.dark { Rgba(0, 0, 0, 110) } else { Rgba(255, 255, 255, 150) });
+        // Crisp 1px shadow behind text when there's no solid background behind it.
+        self.canvas.halo = (opacity < 120).then(|| if m.dark { Rgba(0, 0, 0, 150) } else { Rgba(255, 255, 255, 170) });
         if let Some((t, x, y)) = &more {
-            self.canvas.text(font, t, *x, *y, fg.mix(Rgba(128, 128, 128, 255), 0.5));
+            self.canvas.text(self.faces[1].font, t, *x, *y, fg.mix(Rgba(128, 128, 128, 255), 0.5));
         }
-        for &(i, x, y, vl, vr, spark, with_label) in &cells {
+        for &(i, x, y, vl, vr, spark, with_label, fi) in &cells {
+            let font = self.faces[fi].font;
             let r = rows[i];
             let (v, lvl, _) = &values[i];
             let ac = accent(r, m.dark);
@@ -509,7 +550,7 @@ impl Overlay {
                 1 => C_WARN,
                 _ => fg,
             };
-            let max_w = vw(r);
+            let max_w = self.faces[fi].sticky[r.idx()];
             let mut v = v.clone();
             if self.canvas.measure(font, &v).0 > max_w {
                 while v.chars().count() > 2 && self.canvas.measure(font, &format!("{}\u{2026}", v)).0 > max_w {
@@ -562,8 +603,10 @@ impl Drop for Overlay {
     fn drop(&mut self) {
         unsafe {
             DestroyWindow(self.hwnd);
-            if !self.font.is_null() {
-                DeleteObject(self.font);
+            for f in &self.faces {
+                if !f.font.is_null() {
+                    DeleteObject(f.font);
+                }
             }
         }
     }
