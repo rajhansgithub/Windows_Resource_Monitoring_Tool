@@ -215,6 +215,33 @@ impl Canvas {
         }
     }
 
+    /// Anti-aliased 1px outline just inside `r` (leaves the interior untouched,
+    /// so translucent fills drawn over it don't pick up the border colour).
+    pub fn stroke_round(&mut self, r: Rect, rad: f32, c: Rgba) {
+        let rad = rad.min(r.w() as f32 / 2.0).min(r.h() as f32 / 2.0).max(0.0);
+        let inner = Rect { l: r.l + 1, t: r.t + 1, r: r.r - 1, b: r.b - 1 };
+        let irad = (rad - 1.0).max(0.0);
+        let cov = |px: f32, py: f32, q: Rect, rd: f32| -> f32 {
+            let cx = px.clamp(q.l as f32 + rd, q.r as f32 - rd);
+            let cy = py.clamp(q.t as f32 + rd, q.b as f32 - rd);
+            let d = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
+            (rd - d + 0.5).clamp(0.0, 1.0)
+        };
+        let (w, h) = (self.w, self.h);
+        let buf = self.buf();
+        for y in r.t.max(0)..r.b.min(h) {
+            for x in r.l.max(0)..r.r.min(w) {
+                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                let outer = cov(px, py, r, rad);
+                let inn = if inner.is_empty() { 0.0 } else { cov(px, py, inner, irad) };
+                let v = (outer - inn).clamp(0.0, 1.0);
+                if v > 0.0 {
+                    Self::blend_px(&mut buf[(y * w + x) as usize], c, (v * 255.0) as u32);
+                }
+            }
+        }
+    }
+
     pub fn measure(&self, font: HFONT, s: &str) -> (i32, i32) {
         measure_dc(self.mask.as_ref().map_or(std::ptr::null_mut(), |m| m.dc), font, s)
     }

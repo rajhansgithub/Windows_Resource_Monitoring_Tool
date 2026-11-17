@@ -354,7 +354,7 @@ pub struct App {
     hook: HWINEVENTHOOK,
     shut_down: bool,
     detail_until: Option<Instant>,
-    menu_open: bool,
+    pub menu_open: bool,
     /// Item under the mouse/keyboard in the open menu (from WM_MENUSELECT).
     menu_sel: (HMENU, usize),
     /// Update window and what it shows.
@@ -378,6 +378,17 @@ pub struct App {
     fg_hook_tid: u32,
     /// Fonts + canvas reused by the details panel between repaints.
     pub popup_cache: Option<(popup::Fonts, crate::render::Canvas)>,
+    /// Clickable / hoverable regions of the details panel from its last paint
+    /// (client coordinates, later entries sit on top of earlier ones).
+    pub popup_hits: Vec<(Rect, popup::PopupHit)>,
+    /// Chart time range of the details panel, in seconds (= samples at 1 s).
+    pub popup_range: usize,
+    /// Mouse position over the details panel (client coordinates).
+    pub popup_hover: Option<(i32, i32)>,
+    /// Panel uses the native acrylic backdrop (Windows 11).
+    pub popup_acrylic: bool,
+    /// A WM_MOUSELEAVE for the details panel is pending.
+    pub popup_tracking: bool,
 }
 
 impl Deref for App {
@@ -478,6 +489,11 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
             detail_until: None,
             menu_open: false,
             popup_cache: None,
+            popup_hits: Vec::new(),
+            popup_range: 60,
+            popup_hover: None,
+            popup_acrylic: false,
+            popup_tracking: false,
             icons: None,
             alerts: AlertState::default(),
             upd: std::ptr::null_mut(),
