@@ -166,6 +166,20 @@ impl Canvas {
         self.buf().fill(p);
     }
 
+    /// Overwrite (not blend) a rectangle with `c`, alpha included.
+    pub fn clear_rect(&mut self, r: Rect, c: Rgba) {
+        let p = premul(c);
+        let (w, h) = (self.w, self.h);
+        let (l, t, rr, b) = (r.l.max(0), r.t.max(0), r.r.min(w), r.b.min(h));
+        if l >= rr {
+            return;
+        }
+        let buf = self.buf();
+        for y in t..b {
+            buf[(y * w + l) as usize..(y * w + rr) as usize].fill(p);
+        }
+    }
+
     #[inline]
     fn blend_px(dst: &mut u32, c: Rgba, cov: u32) {
         // c is straight alpha; cov 0..255
