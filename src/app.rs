@@ -607,6 +607,12 @@ unsafe extern "system" fn on_taskbar_event(_: HWINEVENTHOOK, ev: u32, hwnd: HWND
         EVENT_OBJECT_CREATE | EVENT_OBJECT_SHOW => {
             ours || matches!(class_name(hwnd).as_str(), "Shell_TrayWnd" | "Shell_SecondaryTrayWnd")
         }
+        // The tray area inside a taskbar grew or shrank (icons added, the
+        // "Show hidden icons" arrow appeared): re-place the widget.
+        EVENT_OBJECT_LOCATIONCHANGE if !ours => {
+            let root = GetAncestor(hwnd, GA_ROOT);
+            a.taskbars.iter().any(|t| t.hwnd == root) && class_name(hwnd) == "TrayNotifyWnd"
+        }
         _ => ours,
     };
     if relevant {
@@ -971,8 +977,18 @@ impl App {
             if tbs.is_empty() {
                 tbs.extend(taskbar::fallback());
             }
+            // Tray area changed size: measure where its buttons start again
+            // (event-driven, not a timer).
+            let tray_moved = tbs.iter().any(|t| {
+                self.taskbars.iter().any(|o| o.hwnd == t.hwnd && o.tray != t.tray)
+            });
             self.taskbars = tbs;
             self.hook_taskbar_moves();
+            if tray_moved {
+                if let Some(w) = &self.icons {
+                    w.kick();
+                }
+            }
         }
         let check = std::mem::take(&mut self.need_check);
         let tbs = self.taskbars.clone();

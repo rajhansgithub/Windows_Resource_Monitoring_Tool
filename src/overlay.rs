@@ -10,6 +10,9 @@ use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 pub const CLASS: &str = "ResourceMonitor.Overlay";
+/// Clear space (DIP) between the widget and the tray, so the tray's first
+/// button ("Show hidden icons") is never covered and stays easy to click.
+const TRAY_GAP: f32 = 12.0;
 
 pub struct Drag {
     pub start: POINT,
@@ -271,10 +274,12 @@ impl Overlay {
     /// Where the tray/clock area starts: measured on secondary taskbars,
     /// the real tray window on the main one.
     fn tray_left(&self) -> i32 {
-        if self.tb.primary {
-            self.tb.tray.l
-        } else {
-            self.tray_l.unwrap_or(self.tb.tray.l)
+        match self.tray_l {
+            // Main taskbar: the tray window or its leftmost button (e.g. the
+            // "Show hidden icons" arrow), whichever starts first.
+            Some(x) if self.tb.primary => x.min(self.tb.tray.l),
+            Some(x) => x,
+            None => self.tb.tray.l,
         }
     }
 
@@ -287,7 +292,7 @@ impl Overlay {
         let scale = tb.dpi as f32 / 96.0;
         let sc = |v: f32| (v * scale).round() as i32;
         let off = (s.offset(&tb.key(), tb.primary) as f32 * scale) as i32;
-        let right = self.tray_left() - sc(4.0) - off;
+        let right = self.tray_left() - sc(TRAY_GAP) - off;
         let b = if s.max_width_pct > 0 {
             tb.rect.w() * s.max_width_pct as i32 / 100
         } else {
@@ -605,11 +610,11 @@ impl Overlay {
             let off = (m.s.offset(&tb.key(), tb.primary) as f32 * scale) as i32;
             match tb.edge {
                 Edge::Bottom | Edge::Top => {
-                    let x = (self.tray_left() - w - sc(4.0) - off).max(tb.rect.l);
+                    let x = (self.tray_left() - w - sc(TRAY_GAP) - off).max(tb.rect.l);
                     (x, tb.rect.t + (tb.rect.h() - h) / 2)
                 }
                 Edge::Left | Edge::Right => {
-                    let y = (tb.tray.t - h - sc(4.0) - off).max(tb.rect.t);
+                    let y = (tb.tray.t - h - sc(TRAY_GAP) - off).max(tb.rect.t);
                     (tb.rect.l + (tb.rect.w() - w) / 2, y)
                 }
             }
