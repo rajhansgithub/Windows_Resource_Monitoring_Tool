@@ -137,9 +137,17 @@ impl Uia {
                 }
                 buttons.push(r);
             }
-            let limit = if t.secondary { tray_l.unwrap_or(t.limit) } else { t.limit };
+            // Only trust tray items found on the right half of the taskbar.
+            let tray_l = tray_l.filter(|&x| x > tb.l + tb.w() / 2);
+            // Win11's tray buttons (incl. the "Show hidden icons" arrow) can sit
+            // left of the TrayNotifyWnd window; use whichever starts first.
+            let limit = match tray_l {
+                Some(x) if t.secondary => x,
+                Some(x) => x.min(t.limit),
+                None => t.limit,
+            };
             let right = buttons.iter().filter(|r| r.left < limit - 2).map(|r| r.right).max().unwrap_or(tb.l);
-            Some((right, if t.secondary { tray_l } else { None }))
+            Some((right, tray_l))
         }
     }
 }
@@ -178,8 +186,12 @@ fn worker(shared: Arc<(Mutex<Shared>, Condvar)>, notify: isize) {
             }
             s.kick = false;
             drop(s);
-            // At login the taskbar may still be populating; give it a moment.
-            std::thread::sleep(Duration::from_millis(400));
+            // Right after sign-in Explorer is still building the taskbar and
+            // tray (the "Show hidden icons" arrow appears late), so the
+            // startup check waits until it has settled; otherwise a moment.
+            let uptime_s = unsafe { windows_sys::Win32::System::SystemInformation::GetTickCount64() } / 1000;
+            let wait = if uptime_s < 180 { 20_000 } else { 400 };
+            std::thread::sleep(Duration::from_millis(wait));
             let Ok(s) = m.lock() else { return };
             s.targets.clone()
         };
