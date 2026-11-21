@@ -7,15 +7,17 @@ Source of that page: `docs/achievements-preview.html`.
 ## Mode and theme
 
 - **Mode: FREE.** Resource Monitor has no paid plan. No paid tags, no Welcome badge. Emulsion is earned (gate below).
-- **Theme: Case Badges** (picked 2026-11-21 over Uptime Medals and Hall of Fame Plaques).
-  Why: Resource Monitor's users build, tune and watch their own PCs. In that world people show off with the small
-  metal badges stuck on the front of the case (the CPU sticker, the GPU sticker, "Designed for Windows").
-  - Award = a case badge: landscape rounded-rect sticker (4:3), raised polished chrome rim, brushed metal face,
-    domed clear resin coat, the badge icon raised in the middle, "RESOURCE MONITOR" etched small along the bottom.
-  - Diamond / Ruby = a gunmetal badge with a border carved from one piece of the stone and a radiant-cut stone set in it.
-  - Emulsion = the shared soap bubble with the Resource Monitor mark (monitor + pulse line) inside.
-  - Set reward = a **Certified Build** plate: a case front panel with 4 badge slots. "Certified Gold · The Watchtower".
-  - Theme contract: `{ id: 'case-badge', shape: 'badge' (3), metalLabel: 'Certified', back: 'card' (spec sheet) }`.
+- **Theme: Uptime Medals** (picked 2026-11-21 over Case Badges and Hall of Fame Plaques; Case Badges was picked
+  first, then changed to this).
+  Why: Resource Monitor's users watch their machines the way sysadmins and data centres watch servers, and that world
+  celebrates uptime (99.9%, 99.99%, five nines). So every award is a struck medal, and a full set fills a server rack.
+  - Award = the round struck medal: polished raised rim, spun face with fine rings, the badge icon engraved
+    (frosted floor, bright cut walls). Metals 1-4 use the shared metal shader.
+  - Diamond / Ruby = the round brilliant cut (real gem shader).
+  - Emulsion = the shared soap bubble with only the **pulse line** of the Resource Monitor mark in the middle
+    (the monitor outline was removed at the owner's request).
+  - Set reward = a **1U rack plate**: a 19-inch rack faceplate holding the 4 medals. "Gold rack · Rack 01 · Watch".
+  - Theme contract: `{ id: 'uptime-medal', shape: 'round' (0), metalLabel: 'Uptime', back: 'card' (spec sheet) }`.
 
 ## Shared scoring (identical in every tool)
 
@@ -54,10 +56,10 @@ Thresholds are per tier: Bronze, Silver, Gold, Platinum, Diamond, Ruby, Emulsion
 | ritual | Weekly Ritual | weeks (Mon-Sun) with 3+ days of real use | 2, 8, 26, 52, 104, 208, 416 |
 | stillhere | Still Here | months with a day of real use | 2, 6, 12, 24, 36, 60, 120 |
 
-### Sets → Certified Build plates (3 × 4)
-- **The Watchtower**: watch, heavy, render, mover
-- **The Pipeline**: bandwidth, down, up, gameon
-- **The Caretaker**: responder, taskmaster, regular, ritual
+### Sets → 1U rack plates (3 × 4)
+- **Rack 01 · Watch** (`rack_watch`): watch, heavy, render, mover
+- **Rack 02 · Flow** (`rack_flow`): bandwidth, down, up, gameon
+- **Rack 03 · Care** (`rack_care`): responder, taskmaster, regular, ritual
 (Still Here sits outside the sets.)
 
 ### Getting started (25 XP each)
