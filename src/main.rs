@@ -1,6 +1,7 @@
 //! Resource Monitor — ultra-light taskbar resource monitor for Windows 10/11.
 #![windows_subsystem = "windows"]
 
+mod achievements;
 mod app;
 mod autostart;
 mod fmt;
