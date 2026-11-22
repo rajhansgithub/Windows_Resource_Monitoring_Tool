@@ -210,7 +210,8 @@ float4 main(float4 sv : SV_Position) : SV_Target {
 /// Metals, Diamond and Ruby (gem.js) as Uptime Medals: reference shape "round" (shape 0). Metals = `medal` (struck
 /// medal: polished raised rim, spun face with fine rings, icon engraved with a frosted floor and bright cut walls);
 /// Diamond / Ruby = `brill` (round brilliant, ik = -1: no etching on the stone). `envM`, `env`, `inner` as in gem.js.
-/// Only change: the viewer tilt (`uTilt`, 0 by default) also moves the medal's view vector, as it does for vplaque.
+/// Metals light from `envS` (a photo studio: softbox, strip light, dark room, horizon) with ACES tone mapping, as in the
+/// preview page (2026-11-22). The viewer tilt (`uTilt`, 0 by default) turns that studio.
 pub const GEM: &str = r#"
 // ---- studio light for stones: soft ceiling, strip lights round the side that turn slowly, hard spots for sparkle,
 // and the viewer's own dark head straight above
@@ -339,56 +340,74 @@ float icA(float2 p){
   return uIcon.SampleLevel(smp, float2(iu.x, 1. - iu.y), lod);
 }
 // ---- struck metal medals (tiers 1-4): polished raised rim, spun face with fine rings, icon engraved (frosted floor, bright cut walls)
+// studio for the metals: a dark room with a big softbox up left (close to the camera, so the face catches part of it),
+// a tall strip light right, a warm floor bounce, a thin horizon line and one hard glint. Moves with the full view's tilt.
+float envS(float3 d, float t){
+  d.xy = rotv(.12*sin(t*.21) + uTilt.x*.8, d.xy);
+  d.yz = rotv(uTilt.y*.6 + .04*sin(t*.17), d.yz);
+  float s = .09 + .12*smoothstep(-.2, .9, d.y);
+  float3 a = normalize(float3(-.42, .46, .78));
+  float3 ux = normalize(cross(float3(0., 0., 1.), a)), uy = cross(a, ux);
+  float ca = dot(d, a);
+  if (ca > 0.){ float2 q = float2(dot(d, ux), dot(d, uy))/ca; s += 2.6*smoothstep(.08, -.08, max(abs(q.x) - .55, abs(q.y) - .40))*(.8 + .2*smoothstep(-.3, .3, q.y)); }
+  float3 b = normalize(float3(.82, 0., .57)); float cb = dot(d, b);
+  if (cb > 0.){ float3 bx = normalize(cross(float3(0., 1., 0.), b)); float2 q = float2(dot(d, bx), d.y)/cb; s += 1.8*smoothstep(.05, -.05, max(abs(q.x) - .08, abs(q.y) - 1.)); }
+  s += .32*smoothstep(-.05, -.7, d.y)*smoothstep(-.4, .2, d.z);
+  s += .25*exp(-pow((d.y + .1)/.03, 2.))*smoothstep(-.5, .2, d.z);
+  s += 9.*pow(max(dot(d, normalize(float3(.3, .62, .72))), 0.), 700.);
+  return s;
+}
+float3 aces(float3 x){ return saturate((x*(2.51*x + .03))/(x*(2.43*x + .59) + .14)); }
 float4 medal(float2 p, float r, float aa, float t){
   float3 base = uMetal;
-  float3 v = normalize(float3(-p*.32 + float2(.06*sin(t*.5), .05*sin(t*.37 + 1.)) + uTilt*.9, 1.));   // a near camera: the light slides across the face
+  float3 v = normalize(float3(-p*.30, 1.));                // a near camera
   float2 rd = r > 1e-4 ? p/r : float2(1., 0.);
-  float3 n = float3(0., 0., 1.);
   float RIM = .83;
-  float rough = 1.;
-  if (r > RIM){
-    float x = clamp((r - RIM)/(.975 - RIM), 0., 1.);
-    float sl = cos(x*PI)*1.1;                        // rounded raised rim
-    sl = lerp(sl, -2.4, smoothstep(.972, .99, r));   // and a crisp outer edge
-    n = normalize(float3(-rd*sl, 1.));
-    rough = 0.;
-  } else {
-    // spun face: very fine concentric rings
-    float ring = sin(r*uPx*.9)*.5 + .5;
-    n = normalize(float3(rd*(ring - .5)*.04, 1.));
-  }
-  float3 R = reflect(-v, n);
-  float e = envM(R, t);
-  // spun metal: a soft bright streak through the middle, lined up with the main light (anisotropic sheen)
-  float la = t*.25 + atan2(.45, .5);
-  float2 L2 = float2(cos(la), sin(la));
-  float sheen = pow(abs(dot(rd, L2)), 14.)*smoothstep(.0, .25, r)*(1. - rough*0.) + .0;
-  float la2 = t*.25 + atan2(-.25, -.65);
-  sheen += .5*pow(abs(dot(rd, float2(cos(la2), sin(la2)))), 18.)*smoothstep(.0, .25, r);
   float3 col;
-  if (r > RIM){ col = base*e*1.25 + v3(e*e*.04); }
-  else { col = base*(e*.85 + sheen*.55*(1. - r*.3)); }
+  if (r > RIM){
+    // polished raised rim: a rounded bead, then a crisp outer edge. Mirror finish: one sharp reflection.
+    float x = clamp((r - RIM)/(.975 - RIM), 0., 1.);
+    float sl = cos(x*PI)*1.25;
+    sl = lerp(sl, -2.6, smoothstep(.972, .99, r));
+    float3 n = normalize(float3(-rd*sl, 1.));
+    float3 R = reflect(-v, n);
+    float cv = saturate(dot(n, v));
+    float3 F = base + (1. - base)*pow(1. - cv, 5.);
+    col = F*envS(R, t);
+    col *= 1. - .45*smoothstep(.16, 0., x);              // the face's shadow where the bead rises
+  } else {
+    // spun face, very slightly domed: the rings smear each reflection along the radius (the bow-tie of real spun metal)
+    float3 n = normalize(float3(p*.22, 1.));
+    float ring = sin(r*uPx*.9)*.5 + .5;
+    n = normalize(n + float3(rd*(ring - .5)*.012, 0.));
+    float e = 0.;
+    [unroll] for (int k = 0; k < 4; k++){ float o = (float(k) - 1.5)/1.5; e += envS(reflect(-v, normalize(n + float3(rd*o*.28, 0.))), t); }
+    e *= .25;
+    float cv = saturate(dot(n, v));
+    float3 F = base + (1. - base)*pow(1. - cv, 5.);
+    col = F*e*.92;
+    col *= 1. - .35*smoothstep(RIM - .12, RIM, r);      // occlusion under the rim
+  }
   // a fine groove where the rim meets the face
-  float gr = smoothstep(aa*1.5, 0., abs(r - RIM));
-  col *= 1. - gr*.55;
-  // engraved icon: sunken, sandblasted floor (matte) and polished walls that catch the light
+  col *= 1. - smoothstep(aa*1.5, 0., abs(r - RIM))*.7;
+  // engraved icon: sunken, sandblasted floor (matte, darker) and polished walls that catch the studio
   if (uIconOn > 0. && r < RIM){
     float d = 1.6/max(uPx, 40.);
     float m = icA(p);
     float gx = icA(p + float2(d, 0.)) - icA(p - float2(d, 0.));
     float gy = icA(p + float2(0., d)) - icA(p - float2(0., d));
     if (m + abs(gx) + abs(gy) > 0.){
-      float grain = .82 + .36*hash(floor(gFrag));
-      float3 floorC = base*(.40 + .14*envM(float3(0., 0., 1.), t))*grain;
+      float grain = .85 + .3*hash(floor(gFrag));
+      float diff = .10 + .10*envS(float3(-.35, .4, .85), t);
+      float3 floorC = base*diff*grain;
       col = lerp(col, floorC, smoothstep(.15, .85, m));
       float3 nw = normalize(float3(float2(gx, gy)*2.2, 1.));
-      float w = clamp(length(float2(gx, gy))*1.6, 0., 1.);
-      float ew = envM(reflect(-v, nw), t);
-      col = lerp(col, base*ew*1.3, w*.9);
+      float w = saturate(length(float2(gx, gy))*1.6);
+      col = lerp(col, base*envS(reflect(-v, nw), t)*1.1, w*.9);
     }
   }
   float inside = smoothstep(1. + aa, 1. - aa, r);
-  col = 1. - exp(-col*1.6);
+  col = aces(col*1.1);
   return float4(col*inside, inside);
 }
 
