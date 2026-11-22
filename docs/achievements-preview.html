@@ -1093,10 +1093,8 @@ void main(){
 (function (root) {
   'use strict';
   /* The bubble's look, shared by the flat badge and the 3D bubble and set by the tuner (v4). Defaults = Rajhans's saved values
-     (tuning/bubble v7, 2026-11-20). */
-  const LOOK_DEFAULTS = { edgeWidth: 0.59, edgeVary: 0.85, edgeColour: 1.13, rimLine: 0.3, saturation: 0.8, filmInside: 1, filmThick: 497, flowSpeed: 2, reflection: 0.6,
-    dotRefr: 0.3, dotRing: 0.3, refrPeriod: 20, glow: 0.43, breath: 15, motionAmt: 1, motionTime: 10.5,
-    lqRefr: 0.5, lqRefl: 0.5, lqFilm: 0.35, lqTint: 0.2, lqWobble: 0.5, lqDrops: 0.6, lqDropSize: 1, lqMove: 0.5, turn: 8 };
+     (tuning/bubble, saved 2026-11-22 04:43 UTC). */
+  const LOOK_DEFAULTS = { edgeWidth: 0.61, edgeVary: 1, edgeColour: 0.61, rimLine: 1, saturation: 1.1, filmInside: 1, filmThick: 540, flowSpeed: 2, reflection: 0.51, dotRefr: 0.1, dotRing: 0.75, refrPeriod: 20, glow: 0, breath: 4, motionAmt: 1, motionTime: 30, lqRefr: 0, lqRefl: 0, lqFilm: 0.5, lqTint: 1, lqWobble: 0.56, lqDrops: 0, lqDropSize: 0.4, lqMove: 0.2, turn: 0 };
   root.YTPMLookDefaults = Object.freeze(Object.assign({}, LOOK_DEFAULTS));
   root.YTPMLook = Object.assign({}, LOOK_DEFAULTS);
   const LOOK_U = { edgeWidth: 'uEdgeW', edgeVary: 'uEdgeVary', edgeColour: 'uEdgeCol', rimLine: 'uRim', saturation: 'uSat', filmInside: 'uFilmIn', filmThick: 'uThick', flowSpeed: 'uFlow', reflection: 'uRefl',

@@ -62,32 +62,32 @@ float seg(float2 p, float2 a, float2 b){ float2 pa = p - a, ba = b - a; float h 
 /// Not ported: the optional reflection of the app behind (uEnv, RK) and the see-through alpha (uSee = 0 there too
 /// when no reflection is asked for), so alpha = `inside`.
 pub const BUBBLE: &str = r#"
-#define uEdgeW 0.59
-#define uEdgeVary 0.85
-#define uEdgeCol 1.13
-#define uSat 0.8
+#define uEdgeW 0.61
+#define uEdgeVary 1.0
+#define uEdgeCol 0.61
+#define uSat 1.1
 #define uFilmIn 1.0
-#define uRefl 0.6
+#define uRefl 0.51
 #define uFlow 2.0
-#define uThick 497.0
-#define uRim 0.3
-#define uDotRefr 0.3
-#define uDotRing 0.3
+#define uThick 540.0
+#define uRim 1.0
+#define uDotRefr 0.1
+#define uDotRing 0.75
 #define uRefrT 20.0
-#define uGlow 0.43
-#define uBreath 15.0
+#define uGlow 0.0
+#define uBreath 4.0
 #define uMotAmt 1.0
-#define uMotT 10.5
+#define uMotT 30.0
 #define uVar 2.0
 // the liquid pulse (water + tiny bubbles), tuner defaults
-#define uLqRefr 0.5
-#define uLqRefl 0.5
-#define uLqFilm 0.35
-#define uLqTint 0.2
-#define uLqWob 0.5
-#define uLqDrops 0.6
-#define uLqDropS 1.0
-#define uLqMove 0.5
+#define uLqRefr 0.0
+#define uLqRefl 0.0
+#define uLqFilm 0.5
+#define uLqTint 1.0
+#define uLqWob 0.56
+#define uLqDrops 0.0
+#define uLqDropS 0.4
+#define uLqMove 0.2
 
 float fbm(float2 p){
   float v = 0., a = .5;
