@@ -119,6 +119,33 @@ float3 glow(float2 q, float k){
   g += float3(1., .36, .16)*exp(-dot((q - float2(.45, -.2))*float2(2.4, 3.4), (q - float2(.45, -.2))*float2(2.4, 3.4)))*.55;
   return g*k*uGlow;
 }
+// the pulse as a tube of liquid seen from the front (as in the preview's 3D bubble): distance to its centre line, icon units
+float pulseD(float2 p){
+  return min(min(min(seg(p, float2(4., 9.8), float2(7.6, 9.8)), seg(p, float2(7.6, 9.8), float2(9.6, 6.1))), min(seg(p, float2(9.6, 6.1), float2(11.4, 13.4)), seg(p, float2(11.4, 13.4), float2(13.2, 4.8)))), min(seg(p, float2(13.2, 4.8), float2(14.9, 9.8)), seg(p, float2(14.9, 9.8), float2(20., 9.8))));
+}
+// rgb = the liquid's colour, a = its coverage. dc = its colour at this height.
+float4 liquid(float2 q, float aa, float3 dc, float k){
+  float cs = 1. + uMotAmt*.05*sin(uTime*TAU/uMotT);
+  q /= cs;
+  float2 p = float2(12. + q.x*9., 9.4 - q.y*9.);
+  float xw = q.x*.62, yw = q.y*.62;
+  float R = .95*(1. + (.006*sin(xw*14. - uTime*2.1) + .003*sin(xw*33. + yw*9. + uTime*3.3))/.062);
+  float d0 = pulseD(p);
+  float a = aa*9.;
+  float m = smoothstep(a, -a, d0 - R);
+  if (m <= 0.) return float4(0., 0., 0., 0.);
+  float e = .06;
+  float2 gr = float2(pulseD(p + float2(e, 0.)) - pulseD(p - float2(e, 0.)), pulseD(p - float2(0., e)) - pulseD(p + float2(0., e)))/(2.*e);   // icon y runs down
+  float x = clamp(d0/R, 0., .999);
+  float3 n = normalize(float3(gr*x, sqrt(1. - x*x)));
+  float ndv = n.z;
+  float Fl = .04 + .96*pow(1. - ndv, 5.);
+  float3 Rr = reflect(float3(0., 0., -1.), n);
+  float3 body = dc*dc*(.12 + .85*pow(ndv, 1.6))*(.85 + .25*k);
+  float3 sk = film(uThick*.6 + 180.*n.y, ndv)*Fl*1.1;
+  float spec = Fl*.9*(.35 + uRefl) + pow(max(dot(Rr, normalize(float3(-.45, .55, .7))), 0.), 90.)*2.2 + pow(max(dot(Rr, normalize(float3(.6, .35, .72))), 0.), 300.)*1.6;
+  return float4(body + sk + v3(spec), m*(.65 + .35*(1. - ndv)));
+}
 float3 content(float2 q, float k, float aa){
   float4 L = logo(q, aa);
   float3 dotc = v3(.95);
@@ -130,6 +157,10 @@ float3 content(float2 q, float k, float aa){
   } else if (uVar > 2.5){
     g = (v3(1.)*exp(-dot(q, q)*9.)*1.1 + float3(1., .82, .3)*exp(-dot(q, q)*3.5)*.55 + float3(.2, .7, 1.)*exp(-dot(q, q)*1.4)*.25)*k*uGlow;
     dotc = v3(1.)*(.45 + .55*exp(-dot(q, q)*1.6));
+  }
+  if (uVar > 1.5 && uVar < 2.5){
+    float4 lq = liquid(q, aa, dotc, k);
+    return g*(1. - .65*lq.a) + lq.rgb*smoothstep(0., .3, lq.a);
   }
   return g + L.a*dotc*(1. - .15*k);
 }
