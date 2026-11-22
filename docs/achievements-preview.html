@@ -1421,12 +1421,27 @@ void main(){
   /* ------------------------------------------------------------------ versions: each stores only its settings; engines load once.
      To add a version: add an entry here (newest first) and a builder in BUILDERS. Earlier versions stay in the page, live. */
   const VERSIONS = [
-    { id: 'v2', label: 'v2 · Uptime Medals picked', note: 'Current. The theme is picked; the pieces below are the living spec of what gets built.' },
+    { id: 'v3', label: 'v3 · Built into the app', note: 'Current. Core, observer, window, pop-ups and full view are in the app (v2.13.0). Build status below.' },
+    { id: 'v2', label: 'v2 · Uptime Medals picked', note: 'The theme is picked; the build status as it stood then.' },
     { id: 'v1', label: 'v1 · Theme options', note: 'Earlier options: the three themes shown before the pick (Case Badges, Uptime Medals, Hall of Fame Plaques).' }
   ];
 
   /* ------------------------------------------------------------------ BUILD STATUS (the lead updates statuses here: 'done' | 'wip' | 'missing') */
   const BUILD_STATUS = [
+    { name: 'Theme picked', st: 'done', note: 'Uptime Medals (round struck medal + 1U rack plates). Bubble keeps only the pulse line.' },
+    { name: 'Catalog spec', st: 'done', note: '32 badges: 13 ladders, 3 rack sets, 5 start, 4 mastery, 6 accidents, 4 secrets. docs/ACHIEVEMENTS.md.' },
+    { name: 'Core logic + storage + merge', st: 'done', note: 'src/achievements/core.rs, store.rs, json.rs. %APPDATA% mirrored to %LOCALAPPDATA%. Runs in Windows CI.' },
+    { name: 'Observer hooks', st: 'done', note: 'Active minutes on the existing sample tick, alerts fired/cleared, End task, update installed, billing cycle. No new timers.' },
+    { name: 'Native shaders (HLSL / D3D11 port)', st: 'wip', note: 'Written; compiled by Windows at run time only. Not yet seen on a real PC. Flat medal fallback if the GPU path fails.' },
+    { name: 'Badge tab window', st: 'wip', note: 'Built (tray menu: Achievements…). Header, rack plates, gate card, category cards, rows, pips. Not yet seen on a real PC.' },
+    { name: 'Moments + level-up', st: 'wip', note: 'Pop-up near the tray, +XP pill, 6 s bar; level-up with 18 rays. One moment at a time. Not yet seen on a real PC.' },
+    { name: 'Full view + 3D award + spec-sheet back', st: 'wip', note: 'Tilt, idle sway, flip to the spec sheet, arrows. Simpler than here: no blur, no edge thickness, no glare.' },
+    { name: 'Emulsion gate', st: 'done', note: 'Level 30, 180 days in 6 months, 3 ladders at Ruby, 2,000 hours + 5 TB. Sticky once open.' },
+    { name: 'Settings (pop-ups, level-up, bubble sliders)', st: 'wip', note: 'Achievements on/off is in Settings. Separate pop-up and level-up toggles and bubble sliders are still missing.' },
+    { name: 'Tests', st: 'wip', note: '56 unit tests run in Windows CI (core, store, JSON, observer). Shader pixel checks still missing.' },
+    { name: 'docs/ACHIEVEMENTS.md', st: 'done', note: 'Mode, theme and why, scoring, catalog, gate numbers, storage.' }
+  ];
+  const BUILD_STATUS_V2 = [
     { name: 'Theme picked', st: 'done', note: 'Uptime Medals (round struck medal + 1U rack plates). Chosen over Case Badges and Hall of Fame Plaques.' },
     { name: 'Catalog spec', st: 'done', note: '13 ladders, 3 sets, singles, secrets: written in docs/ACHIEVEMENTS.md.' },
     { name: 'Core logic + storage + merge', st: 'wip', note: 'apply / merge / normalize / levelOf / rankOf / tierFor, JSON in %APPDATA% mirrored to %LOCALAPPDATA%.' },
@@ -1623,24 +1638,27 @@ void main(){
         ${gateHtml()}
         <div class="cats">${cats}</div></div></div></div>`;
   }
-  function statusHtml() {
+  function statusHtml(list, sfx) {
+    const BUILD_STATUS = list;
     const n = { done: 0, wip: 0, missing: 0 }; BUILD_STATUS.forEach((b) => { n[b.st]++; });
     const tot = BUILD_STATUS.length;
-    return `<section class="card" aria-labelledby="h-bs"><div class="sec-h"><div class="eyebrow">Build status</div><h2 id="h-bs">Gaps for the Windows app</h2><p>Every part the achievements skill requires, and where it stands. Statuses live in one list (<code>BUILD_STATUS</code>) so they are easy to update.</p></div>
+    return `<section class="card" aria-labelledby="h-bs${sfx}"><div class="sec-h"><div class="eyebrow">Build status</div><h2 id="h-bs${sfx}">Gaps for the Windows app</h2><p>Every part the achievements skill requires, and where it stands. Statuses live in one list (<code>BUILD_STATUS</code>) so they are easy to update.</p></div>
       <div class="bs-sum"><span style="color:var(--ok)">${n.done} done</span><span style="color:var(--warn)">${n.wip} in progress</span><span style="color:var(--bad)">${n.missing} missing</span><span style="color:var(--dim)">of ${tot}</span></div>
       <div class="bs-bar" aria-hidden="true"><i style="width:${n.done / tot * 100}%;background:var(--ok)"></i><i style="width:${n.wip / tot * 100}%;background:var(--warn)"></i><i style="width:${n.missing / tot * 100}%;background:var(--bad)"></i></div>
       <ul class="bs-list">${BUILD_STATUS.map((b) => `<li><b>${esc(b.name)}</b><span class="st ${b.st}">${ST_LABEL[b.st]}</span><span class="nt">${esc(b.note)}</span></li>`).join('')}</ul></section>`;
   }
-  function buildV2() {
+  function buildV2(list, sfx) {
+    list = list || BUILD_STATUS_V2; sfx = sfx || '';
     return `${heroHtml()}
-      <section aria-labelledby="h-rack"><div class="sec-h"><div class="eyebrow">Set reward</div><h2 id="h-rack">1U rack plates</h2><p>All four medals of a rack at one tier certify it. A rack plate never shows a higher tier than the medals hold. <span class="demo">demo progress</span></p></div><div class="plates">${rackHtml()}</div></section>
-      <section aria-labelledby="h-tab"><div class="sec-h"><div class="eyebrow">Badge tab</div><h2 id="h-tab">What the user sees</h2><p>Category cards, a live medal per row, progress, seven pips, and the next goal. Tap an earned row for the full view. <span class="demo">demo progress, not real data</span></p></div>${tabHtml()}</section>
-      <section class="card" aria-labelledby="h-mo"><div class="sec-h"><div class="eyebrow">Moments</div><h2 id="h-mo">The pop-up and the level-up</h2><p>One pop-up per batch, closes after 6 seconds or on click, Esc, Enter or Space. A level-up with no badge gets a full-screen burst of 18 rays.</p></div>
+      <section aria-labelledby="h-rack${sfx}"><div class="sec-h"><div class="eyebrow">Set reward</div><h2 id="h-rack${sfx}">1U rack plates</h2><p>All four medals of a rack at one tier certify it. A rack plate never shows a higher tier than the medals hold. <span class="demo">demo progress</span></p></div><div class="plates">${rackHtml()}</div></section>
+      <section aria-labelledby="h-tab${sfx}"><div class="sec-h"><div class="eyebrow">Badge tab</div><h2 id="h-tab${sfx}">What the user sees</h2><p>Category cards, a live medal per row, progress, seven pips, and the next goal. Tap an earned row for the full view. <span class="demo">demo progress, not real data</span></p></div>${tabHtml()}</section>
+      <section class="card" aria-labelledby="h-mo${sfx}"><div class="sec-h"><div class="eyebrow">Moments</div><h2 id="h-mo${sfx}">The pop-up and the level-up</h2><p>One pop-up per batch, closes after 6 seconds or on click, Esc, Enter or Space. A level-up with no badge gets a full-screen burst of 18 rays.</p></div>
         <div class="moments"><button class="btn pri" type="button" id="btnMoment">Play an unlock moment</button><button class="btn" type="button" id="btnLevel">Play the level-up burst</button></div></section>
-      ${statusHtml()}
-      <section class="card" aria-labelledby="h-th"><div class="sec-h"><div class="eyebrow">Theme contract</div><h2 id="h-th">Uptime Medals</h2><p>Chosen over Case Badges and Hall of Fame Plaques, which stay live under Earlier options. Reason: Resource Monitor users watch their machines the way operators watch servers, and uptime is the number they are proud of.</p></div><div class="theme-line">${esc(THEME)}</div>
+      ${statusHtml(list, sfx)}
+      <section class="card" aria-labelledby="h-th${sfx}"><div class="sec-h"><div class="eyebrow">Theme contract</div><h2 id="h-th${sfx}">Uptime Medals</h2><p>Chosen over Case Badges and Hall of Fame Plaques, which stay live under Earlier options. Reason: Resource Monitor users watch their machines the way operators watch servers, and uptime is the number they are proud of.</p></div><div class="theme-line">${esc(THEME)}</div>
         <div class="moments" style="margin-top:14px"><button class="btn" type="button" id="btnV1">Open earlier options (v1)</button></div></section>`;
   }
+  function buildV3() { return buildV2(BUILD_STATUS, '-3'); }
 
   /* ------------------------------------------------------------------ v1: the three theme options (settings only) */
   const OPTIONS = [
@@ -1665,7 +1683,7 @@ void main(){
   }
 
   /* ------------------------------------------------------------------ versions bar + panels */
-  const BUILDERS = { v2: buildV2, v1: buildV1 };
+  const BUILDERS = { v3: buildV3, v2: () => buildV2(), v1: buildV1 };
   const panelsEl = $('#panels'), tabsEl = $('#vtabs');
   let cur = null;
   function renderTabs() {
