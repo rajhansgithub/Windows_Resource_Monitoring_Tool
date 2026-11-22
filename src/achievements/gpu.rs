@@ -74,6 +74,8 @@ pub struct Params<'a> {
     pub time_s: f32,
     pub seed: f32,
     pub tilt: (f32, f32),
+    /// Age: dust, scratches, cobweb, each 0..1 (`core::Wear`). Zero = a new medal. Ignored by the bubble.
+    pub wear: [f32; 3],
     /// ICON_N x ICON_N alpha, row 0 = top. Engraved into metal medals.
     pub icon_mask: Option<&'a [u8]>,
     /// NxN alpha, currently ignored (see module docs).
@@ -646,6 +648,9 @@ impl Gpu {
                 c[12] = p.tilt.0;
                 c[13] = p.tilt.1;
                 c[14] = if icons[i].is_some() { 1.0 } else { 0.0 };
+                c[16] = p.wear[0];
+                c[17] = p.wear[1];
+                c[18] = p.wear[2];
                 let mut ms = D3D11_MAPPED_SUBRESOURCE::default();
                 ctx.Map(&self.cb, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut ms)).map_err(|e| self.fail("map cb", e))?;
                 std::ptr::copy_nonoverlapping(c.as_ptr(), ms.pData as *mut f32, 20);
@@ -734,7 +739,7 @@ mod tests {
     }
 
     fn params<'a>(m: Material, t: f32, tilt: (f32, f32), ic: &'a [u8]) -> Params<'a> {
-        Params { material: m, size_px: PX, time_s: t, seed: 0.0, tilt, icon_mask: Some(ic), detail_mask: None }
+        Params { material: m, size_px: PX, time_s: t, seed: 0.0, tilt, wear: [0.0; 3], icon_mask: Some(ic), detail_mask: None }
     }
 
     fn render(gpu: &mut Gpu, items: &[Params]) -> Vec<Vec<u32>> {
@@ -826,6 +831,39 @@ mod tests {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("medal-shots");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("medals.png"), png_rgb(w, h, &img)).unwrap();
+    }
+
+    /// Age (dust, scratches, cobweb) changes metals and stones: duller, greyer; the bubble never ages.
+    #[test]
+    fn wear_shows_on_metals_and_stones() {
+        let mut gpu = match Gpu::new() {
+            Ok(g) => g,
+            Err(e) => panic!("GPU path unavailable: {e}"),
+        };
+        let ic = icon();
+        for m in [Material::Gold, Material::Diamond, Material::Emulsion] {
+            let clean = params(m, still_time(m), (0.0, 0.0), &ic);
+            let mut old = params(m, still_time(m), (0.0, 0.0), &ic);
+            old.wear = [0.85, 0.4, 1.0];
+            let r = render(&mut gpu, &[clean, old]);
+            let (c0, sd0, m0) = stats(&r[0]);
+            let (c1, sd1, m1) = stats(&r[1]);
+            let sat = |c: [f32; 3]| c[0].max(c[1]).max(c[2]) - c[0].min(c[1]).min(c[2]);
+            println!("{m:?} wear: covered {:.0}% -> {:.0}%, sd {sd0:.1} -> {sd1:.1}, saturation {:.1} -> {:.1}", c0 * 100.0, c1 * 100.0, sat(m0), sat(m1));
+            assert!((c0 - c1).abs() < 0.01, "{m:?}: wear changed the outline");
+            assert!(r[1].iter().all(|&p| {
+                let al = p >> 24;
+                ((p >> 16) & 0xff) <= al && ((p >> 8) & 0xff) <= al && (p & 0xff) <= al
+            }), "{m:?}: worn medal not premultiplied");
+            if m == Material::Emulsion {
+                assert_eq!(r[0], r[1], "the bubble must not age");
+            } else {
+                assert_ne!(r[0], r[1], "{m:?}: wear changes nothing");
+                if m == Material::Gold {
+                    assert!(sat(m1) < sat(m0), "gold: dust should grey the colour ({:.1} -> {:.1})", sat(m0), sat(m1));
+                }
+            }
+        }
     }
 
     /// Minimal PNG writer (8-bit RGB, stored deflate blocks), test use only.

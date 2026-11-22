@@ -29,7 +29,7 @@ cbuffer C : register(b0) {
   float  uTime; float  uSeed; float uKind; float uShape;
   float3 uMetal; float uPx;                // metal colour, item size in px
   float2 uTilt; float uIconOn; float uP4;
-  float  uP0; float uP1; float uP2; float uP3;     // spare
+  float3 uWear; float uP3;                // age: dust, scratches, cobweb (0..1); uP3 spare
 };
 SamplerState smp : register(s0);
 Texture2D<float> uIcon : register(t0);     // 512x512 alpha (white-on-clear icon), mip chain
@@ -479,6 +479,87 @@ float4 medal(float2 p, float r, float aa, float t){
   return float4(col*inside, inside);
 }
 
+// ---- age: dust, scratches and cobwebs (uWear, 0..1). 1 real hour = 1 day on the shelf; polishing removes it.
+// Dust settles most on what faces up and in sheltered corners, in patches, with grit of several sizes and the odd lint
+// fibre. Cobwebs are abandoned tangle webs: sagging threads strung from a sheltered corner, sticky silk that catches
+// dust (grey beads along it), a faint sheet where threads crowd; the silk glints where a thread runs across the light.
+float wN(float2 p){ return vnoise(p); }
+float wF(float2 p){ return .5*wN(p) + .25*wN(p*2.03 + 3.1) + .125*wN(p*4.01 + 7.7); }
+float wScr(float2 p, float amt, float aa){
+  float m = 0.;
+  [unroll] for (int i = 0; i < 3; i++){
+    float a = float(i)*2.1 + .7;
+    float2 q = rotv(a, p)*float2(3., 16.) + float2(float(i)*7.3, float(i)*3.1);
+    float2 id = floor(q), f = frac(q);
+    if (hash(id + float(i)*17.) < amt*.55){
+      float y0 = .2 + .6*hash(id + 3.1), x0 = hash(id + 5.7)*.5, x1 = x0 + .25 + .5*hash(id + 9.2);
+      float w = max(.05, aa*16.*.6);
+      float l = smoothstep(w, 0., abs(f.y - y0))*smoothstep(x0, x0 + .05, f.x)*smoothstep(x1, x1 - .05, f.x);
+      m = max(m, l*(.4 + .6*hash(id + 1.3)));
+    }
+  }
+  return m;
+}
+float2 wSeg(float2 p, float2 a, float2 b){ float2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba)/dot(ba, ba), 0., 1.); return float2(length(pa - ba*h), h); }
+float4 wWeb(float2 p, float amt, float aa){
+  if (amt <= .001) return float4(0., 0., 0., 0.);
+  const float A0 = 2.3;
+  float2 cn = float2(cos(A0), sin(A0));
+  if (dot(p - cn*.7, p - cn*.7) > .45) return float4(0., 0., 0., 0.);
+  float2 L2 = normalize(float2(-.42, .46));
+  float cov = 0., glint = 0., grey = 0.; float3 iri = float3(0., 0., 0.);
+  [loop] for (int i = 0; i < 28; i++){
+    float fi = float(i);
+    float h1 = hash(float2(fi, 1.3)), h2 = hash(float2(fi, 7.1)), h3 = hash(float2(fi, 4.7)), h4 = hash(float2(fi, 9.9));
+    if (h4 > amt*1.15) continue;
+    float aA = A0 + (h1 - .5)*1.25, aB = A0 + (h2 - .5)*1.6;
+    float2 a = float2(cos(aA), sin(aA))*(.85 + .07*h3);
+    float2 b = fi < 9. ? float2(cos(aB), sin(aB))*(.84 + .08*h1) : cn*.86 + float2(cos(fi*2.4), sin(fi*2.4))*(.18 + .32*h3);
+    float Ls = length(b - a);
+    float2 k = (a + b)*.5 - float2(0., 1.)*Ls*(.06 + .16*h2)*2.;
+    float2 P0 = a, P1 = lerp(lerp(a, k, .25), lerp(k, b, .25), .25), P2 = lerp(lerp(a, k, .5), lerp(k, b, .5), .5), P3 = lerp(lerp(a, k, .75), lerp(k, b, .75), .75);
+    float2 d1 = wSeg(p, P0, P1), d2 = wSeg(p, P1, P2), d3 = wSeg(p, P2, P3), d4 = wSeg(p, P3, b);
+    float2 dd = d1; float tt = d1.y*.25; float2 sd = P1 - P0;
+    if (d2.x < dd.x){ dd = d2; tt = .25 + d2.y*.25; sd = P2 - P1; }
+    if (d3.x < dd.x){ dd = d3; tt = .5 + d3.y*.25; sd = P3 - P2; }
+    if (d4.x < dd.x){ dd = d4; tt = .75 + d4.y*.25; sd = b - P3; }
+    float clump = smoothstep(.62, .95, wN(float2(tt*Ls*55., fi*5.3)))*(.3 + .7*amt);
+    float w = .0016 + .006*clump;
+    float c = smoothstep(w + aa, w - aa*.5, dd.x)*min(1., (w*2.)/(aa*1.5 + 1e-4))*(.55 + .45*smoothstep(0., .15, amt - h4*.8));
+    if (c > 0.){
+      float g = pow(1. - abs(dot(normalize(sd), L2)), 2.);
+      cov = max(cov, c);
+      glint = max(glint, c*g*(1. - clump));
+      grey = max(grey, c*clump);
+      iri = max(iri, c*g*(.5 + .5*cos(6.283*(tt*2. + h1 + float3(0., .33, .67)))));
+    }
+  }
+  float sh = amt*smoothstep(.40, 0., length(p - cn*.86))*(.35 + .65*smoothstep(.3, .8, wF(p*22. + 4.)))*.42;
+  float al = saturate(max(cov*.75, sh));
+  float3 rgb = float3(.78, .77, .74)*(cov*.35 + glint*.65) + iri*.10 + float3(.50, .48, .44)*(grey*.75 + sh*.9);
+  return float4(rgb, al);
+}
+// age a premultiplied colour. p: on the face (radius 1, +y up). recess: how sheltered. metal: 1 metal, 0 stone.
+float3 aged(float3 col, float a, float2 p, float recess, float metal, float aa){
+  float dust = uWear.x, scr = uWear.y, web = uWear.z;
+  if (dust + scr + web < .002 || a <= 0.) return col;
+  float lum = dot(col, float3(.299, .587, .114))/max(a, .01);
+  float film = smoothstep(.15, .85, wF(p*3.2 + 11.))*.65 + .35;
+  float up = smoothstep(-.4, .95, p.y);
+  float dd = dust*(.22 + .55*recess + .3*up)*film;
+  float grit = smoothstep(.82, .97, wN(p*170. + 3.)) + .7*smoothstep(.9, .99, wN(p*60. + 9.));
+  float lint = smoothstep(.012, 0., abs(wN(p*7. + 31.) - .5))*smoothstep(.78, .86, wN(p*2.3 + 5.));
+  float3 dc = float3(.60, .57, .52)*a;
+  col = lerp(col, v3(lum)*.8*a + .03*a, dust*(metal > .5 ? .2 : .32));
+  col = lerp(col, dc*(.42 + .38*lum), clamp(dd*1.15, 0., .72));
+  col = lerp(col, dc*.9, clamp(grit*dust*.55 + lint*dust*.5, 0., .6));
+  float sc = wScr(p, scr, aa);
+  col += float3(.9, .88, .85)*sc*a*(metal > .5 ? .16 : .12)*(.3 + .7*lum);
+  float4 wb = wWeb(p, web, aa);
+  col = col*(1. - wb.a) + wb.rgb*a;
+  return col;
+}
+
 float4 main(float4 sv : SV_Position) : SV_Target {
   gFrag = float2(sv.x - uOff.x, uRes.y - (sv.y - uOff.y));
   float S = min(uRes.x, uRes.y);
@@ -487,8 +568,16 @@ float4 main(float4 sv : SV_Position) : SV_Target {
   float aa = 2./S*1.04;
   float t = uTime + uSeed;
   if (r > 1. + aa) return float4(0., 0., 0., 0.);
-  if (uKind > 1.5) return medal(p, r, aa, t);
-  return brill(p, r, aa, t);
+  float4 c; float rec;
+  if (uKind > 1.5){
+    c = medal(p, r, aa, t);
+    rec = (uIconOn > 0. && r < .83 ? icA(p) : 0.) + smoothstep(.1, 0., abs(r - .83))*.8 + smoothstep(.62, .83, r)*step(r, .83)*.3;
+  } else {
+    c = brill(p, r, aa, t);
+    rec = smoothstep(.86, 1., r)*.6;
+  }
+  c.rgb = aged(c.rgb, c.a, p, rec, uKind > 1.5 ? 1. : 0., aa);
+  return c;
 }
 "#;
 

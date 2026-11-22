@@ -799,7 +799,49 @@ fn seed_of(id: &str, tier: u8) -> f32 {
     }
 }
 
-type MedalKey = (&'static str, u8, u32);
+/// (badge id, tier, pixel size, wear code). The wear code packs dust, scratches and cobweb in 16 steps each, so a
+/// list tile is drawn again only when its age visibly changes (about once a day of wear = once a real hour).
+type MedalKey = (&'static str, u8, u32, u16);
+
+fn wear_code(w: &Wear) -> u16 {
+    let q = |x: f32| (x.clamp(0.0, 1.0) * 15.0).round() as u16;
+    q(w.dust) | q(w.scratch) << 4 | q(w.web) << 8
+}
+
+fn wear_of_code(c: u16) -> [f32; 3] {
+    let f = |sh: u16| ((c >> sh) & 15) as f32 / 15.0;
+    [f(0), f(4), f(8)]
+}
+
+fn wear_words(w: &Wear) -> String {
+    if w.clean {
+        return "Spotless. It shines like the day you earned it.".to_string();
+    }
+    let dust = if w.dust < 0.08 { "" } else if w.dust < 0.3 { "a little dust" } else if w.dust < 0.6 { "dusty" } else { "thick with dust" };
+    let web = if w.web < 0.02 { "" } else if w.web < 0.35 { "a cobweb starting" } else if w.web < 0.75 { "cobwebs" } else { "thick with cobwebs" };
+    let scr = if w.scratch < 0.04 { "" } else if w.scratch < 0.15 { "a few hairline scratches" } else if w.scratch < 0.35 { "scratched" } else { "well worn" };
+    let days = w.days.floor() as u32;
+    let when = if w.polishes > 0 {
+        match days {
+            0 => "Polished today".to_string(),
+            1 => "Polished 1 day ago".to_string(),
+            d => format!("Polished {d} days ago"),
+        }
+    } else {
+        format!("On the shelf {days} days")
+    };
+    let parts: Vec<&str> = [dust, web, scr].into_iter().filter(|x| !x.is_empty()).collect();
+    format!("{when} \u{b7} {}", if parts.is_empty() { "nearly clean".to_string() } else { parts.join(", ") })
+}
+
+fn wear_rgba(c: u8) -> Rgba {
+    match c {
+        90..=100 => Rgba::rgb(0x6f, 0xd3, 0x8a),
+        70..=89 => Rgba::rgb(0xc9, 0xd4, 0x6a),
+        50..=69 => Rgba::rgb(0xe0, 0xa8, 0x4f),
+        _ => Rgba::rgb(0xd9, 0x78, 0x5a),
+    }
+}
 
 /// Cache of medal tiles by (badge id, tier, pixel size) and of icon masks by name.
 #[derive(Default)]
@@ -836,12 +878,13 @@ impl Medals {
         if gpu::available() {
             let params: Vec<gpu::Params> = need
                 .iter()
-                .map(|&(id, t, px)| gpu::Params {
+                .map(|&(id, t, px, wc)| gpu::Params {
                     material: material_of(t),
                     size_px: px,
                     time_s: gpu::still_time(material_of(t)),
                     seed: seed_of(id, t),
                     tilt: (0.0, 0.0),
+                    wear: if t >= 7 { [0.0; 3] } else { wear_of_code(wc) },
                     icon_mask: self.masks.get(icon_of(id)).map(|m| &m[..]),
                     detail_mask: None,
                 })
@@ -860,7 +903,7 @@ impl Medals {
     }
 
     /// One live frame (full view): GPU at time `t` and `tilt`; the flat medal when there is no GPU.
-    fn frame(&mut self, id: &'static str, tier: u8, px: u32, t: f32, tilt: (f32, f32)) -> Vec<u32> {
+    fn frame(&mut self, id: &'static str, tier: u8, px: u32, t: f32, tilt: (f32, f32), wear: [f32; 3]) -> Vec<u32> {
         let icon = icon_of(id);
         self.ensure_mask(icon);
         if gpu::available() {
@@ -870,6 +913,7 @@ impl Medals {
                 time_s: t,
                 seed: seed_of(id, tier),
                 tilt,
+                wear,
                 icon_mask: self.masks.get(icon).map(|m| &m[..]),
                 detail_mask: None,
             }];
@@ -1125,6 +1169,8 @@ struct Fv {
     reduced: bool,
     frame: Vec<u32>,
     frame_key: Option<MedalKey>,
+    /// Polish feedback ("+1 shine") and when it was shown (now_s).
+    pop: Option<(String, f64)>,
 }
 
 struct FvGeom {
@@ -1178,6 +1224,8 @@ struct Ui {
     snap_ok: bool,
     medals: Medals,
     fv: Option<Fv>,
+    /// The full view's Polish button, as last drawn (empty when there is none).
+    polish_r: std::cell::Cell<Rect>,
 }
 
 static mut MAIN: *mut Ui = std::ptr::null_mut();
@@ -1240,6 +1288,7 @@ impl Ui {
             snap_ok: false,
             medals: Medals::default(),
             fv: None,
+            polish_r: std::cell::Cell::new(Rect::default()),
         }
     }
 
@@ -1647,7 +1696,7 @@ impl Ui {
         for row in &self.rows {
             let r = shift(row.r, dy);
             if row.d.tier > 0 && r.b > 0 && r.t < self.ch {
-                v.push(Slot { key: (row.d.id, row.d.tier, rp), cx: r.l + self.sc(6) + self.sc(32), cy: r.t + r.h() / 2 });
+                v.push(Slot { key: (row.d.id, row.d.tier, rp, self.wear_key(row.d.id, row.d.tier)), cx: r.l + self.sc(6) + self.sc(32), cy: r.t + r.h() / 2 });
             }
         }
         for rk in &self.racks {
@@ -1656,7 +1705,7 @@ impl Ui {
                 let tier = self.state.tier(id).min(7);
                 let r = shift(*w, dy);
                 if tier > 0 && r.b > 0 && r.t < self.ch {
-                    v.push(Slot { key: (id, tier, wp), cx: (r.l + r.r) / 2, cy: r.t + self.sc(8) + self.sc(36) });
+                    v.push(Slot { key: (id, tier, wp, self.wear_key(id, tier)), cx: (r.l + r.r) / 2, cy: r.t + self.sc(8) + self.sc(36) });
                 }
             }
         }
@@ -2050,6 +2099,10 @@ enum Cl {
     T(String, HFONT, Rgba, i32),
     Pips(u8, i32),
     Rule(i32),
+    /// Condition: label, percent and bar.
+    Cond(u8, i32),
+    /// The Polish button.
+    Btn(bool, i32),
 }
 
 impl Ui {
@@ -2073,6 +2126,51 @@ impl Ui {
             next: Rect { l: self.cw - sc(12) - sc(46), t: self.ch / 2 - sc(32), r: self.cw - sc(12), b: self.ch / 2 + sc(32) },
             close: Rect { l: self.cw - sc(16) - sc(42), t: sc(14), r: self.cw - sc(16), b: sc(14) + sc(42) },
         }
+    }
+
+    /// How worn the medal looks now (the bubble never ages).
+    fn wear_now(&self, id: &str, tier: u8) -> Wear {
+        if tier >= 7 {
+            return Wear { condition: 100, clean: true, ..Wear::default() };
+        }
+        self.state.wear(id, super::observer::unix_ms())
+    }
+
+    fn wear_key(&self, id: &str, tier: u8) -> u16 {
+        if tier >= 7 {
+            0
+        } else {
+            wear_code(&self.wear_now(id, tier))
+        }
+    }
+
+    /// One rub of the polishing cloth on the medal in the full view. Saved right away (merged with the file).
+    fn fv_polish(&mut self) {
+        let Some(fv) = self.fv.as_ref() else { return };
+        let id = fv.ids[fv.i];
+        if self.fv_tier() >= 7 {
+            return;
+        }
+        let (w, gain) = self.state.polish(id, super::observer::unix_ms());
+        let msg = if gain == 0 {
+            "Already spotless".to_string()
+        } else if w.clean {
+            format!("Spotless! +{gain} shine")
+        } else {
+            format!("+{gain} shine")
+        };
+        if gain > 0 {
+            if let Ok(m) = store::save(&self.state) {
+                self.state = m;
+            }
+        }
+        if let Some(fv) = self.fv.as_mut() {
+            fv.pop = if fv.reduced { None } else { Some((msg, now_s())) };
+            fv.frame_key = None;
+        }
+        self.snap_ok = false;
+        self.fv_render();
+        invalidate(self.hwnd);
     }
 
     fn fv_tier(&self) -> u8 {
@@ -2099,6 +2197,7 @@ impl Ui {
             reduced,
             frame: Vec::new(),
             frame_key: None,
+            pop: None,
         });
         self.hover = None;
         self.snap_ok = false;
@@ -2125,14 +2224,16 @@ impl Ui {
         let (id, reduced, rx, ry, t0, key_old) = (fv.ids[fv.i], fv.reduced, fv.rx, fv.ry, fv.t0, fv.frame_key);
         let tier = self.fv_tier();
         let px = self.fv_geom(tier).stage.w() as u32;
-        let key = (id, tier, px);
+        let w = self.wear_now(id, tier);
+        let key = (id, tier, px, wear_code(&w));
         if !gpu::available() && key_old == Some(key) {
             return;
         }
         // metals and stones move at a third of real time (calm); the bubble keeps its own pace
         let pace = if tier >= 7 { 1.0 } else { 1.0 / 3.0 };
         let t = if reduced { gpu::still_time(material_of(tier)) } else { (now_s() - t0) as f32 * pace };
-        let frame = self.medals.frame(id, tier, px, t, (ry / 22.0 * 0.5, rx / 16.0 * 0.5));
+        let wear = if tier >= 7 { [0.0; 3] } else { [w.dust, w.scratch, w.web] };
+        let frame = self.medals.frame(id, tier, px, t, (ry / 22.0 * 0.5, rx / 16.0 * 0.5), wear);
         if let Some(fv) = self.fv.as_mut() {
             fv.frame = frame;
             fv.frame_key = Some(key);
@@ -2224,6 +2325,9 @@ impl Ui {
         if (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r {
             return 1;
         }
+        if self.polish_r.get().contains(x, y) {
+            return 6;
+        }
         if x >= g.card_l && x < g.card_l + g.card_w {
             return 5; // the info card: inert
         }
@@ -2296,6 +2400,21 @@ impl Ui {
             items.push(Cl::T(cv.ellipsize(f.normal, nline, inner), f.normal, if i + 1 == e.notes.len() { soft } else { ink }, if i == 0 { sc(10) } else { sc(2) }));
         }
         items.push(Cl::Rule(sc(12)));
+        if e.tier < 7 {
+            let w = self.wear_now(e.id, e.tier);
+            items.push(Cl::Cond(w.condition, sc(10)));
+            for (i, l) in wrap_dc(mdc, f.small, &wear_words(&w), inner, 2).into_iter().enumerate() {
+                items.push(Cl::T(l, f.small, soft, if i == 0 { sc(6) } else { 0 }));
+            }
+            items.push(Cl::Btn(w.clean, sc(10)));
+            let note = format!("Ages like the real thing: 1 hour here is 1 day on the shelf. Cobwebs come after 10 days. One rub clears the webs, dust goes next, scratches take the most rubs. Shine {}", self.state.sh);
+            for (i, l) in wrap_dc(mdc, f.small, &note, inner, 4).into_iter().enumerate() {
+                items.push(Cl::T(l, f.small, soft, if i == 0 { sc(8) } else { 0 }));
+            }
+            items.push(Cl::Rule(sc(12)));
+        } else {
+            self.polish_r.set(Rect::default());
+        }
         let hint = "Tilt with the pointer. Click, Enter or Space turns the medal to its spec sheet. \u{2190} \u{2192} go through the list, Esc closes.";
         for (i, l) in wrap_dc(mdc, f.small, hint, inner, 4).into_iter().enumerate() {
             items.push(Cl::T(l, f.small, soft, if i == 0 { sc(8) } else { 0 }));
@@ -2307,6 +2426,8 @@ impl Ui {
                 Cl::T(_, font, _, gap) => gap + th(*font),
                 Cl::Pips(_, gap) => gap + sc(8),
                 Cl::Rule(gap) => gap + 1,
+                Cl::Cond(_, gap) => gap + th(self.x.title) + sc(4) + sc(8),
+                Cl::Btn(_, gap) => gap + sc(42),
             })
             .sum::<i32>()
             + 2 * pad;
@@ -2332,6 +2453,43 @@ impl Ui {
                     y += gap;
                     cv.fill_rect(Rect { l: card.l + pad, t: y, r: card.r - pad, b: y + 1 }, Rgba(255, 255, 255, 0x22));
                     y += 1;
+                }
+                Cl::Cond(c, gap) => {
+                    y += gap;
+                    let hh = th(self.x.title);
+                    cv.text(f.caps, "CONDITION", card.l + pad, y + hh - th(f.caps) - sc(2), soft);
+                    let pct = format!("{c}%");
+                    let pw = measure_dc(mdc, self.x.title, &pct).0;
+                    cv.text(self.x.title, &pct, card.r - pad - pw, y, ink);
+                    y += hh + sc(4);
+                    let track = Rect { l: card.l + pad, t: y, r: card.r - pad, b: y + sc(8) };
+                    cv.fill_round(track, sc(4) as f32, Rgba(255, 255, 255, 0x1c));
+                    let fw = (track.w() as f32 * *c as f32 / 100.0) as i32;
+                    if fw > sc(4) {
+                        cv.fill_round(Rect { r: track.l + fw, ..track }, sc(4) as f32, wear_rgba(*c));
+                    }
+                    y += sc(8);
+                }
+                Cl::Btn(clean, gap) => {
+                    y += gap;
+                    let r = Rect { l: card.l + pad, t: y, r: card.r - pad, b: y + sc(42) };
+                    self.polish_r.set(r);
+                    let hot = fv.hover == 6;
+                    cv.fill_round(r, sc(10) as f32, if hot { Rgba(52, 60, 72, 245) } else { Rgba(36, 42, 50, 240) });
+                    cv.stroke_round(r, sc(10) as f32, if *clean { Rgba(0x6f, 0xd3, 0x8a, 255) } else if hot { accent } else { Rgba(0x5c, 0x66, 0x75, 255) });
+                    text_c(cv, f.bold, if *clean { "Spotless" } else { "Polish" }, (r.l + r.r) / 2, (r.t + r.b) / 2, if *clean { Rgba::rgb(0x9f, 0xf0, 0xb4) } else { ink });
+                    if fv.focus == 4 && self.focus_visible {
+                        focus_ring(cv, inflate(r, sc(2)), sc(12) as f32, accent);
+                    }
+                    if let Some((msg, at)) = &fv.pop {
+                        let age = (now_s() - at) as f32;
+                        if age < 0.9 {
+                            let a = (255.0 * (1.0 - age / 0.9)) as u8;
+                            let mw = measure_dc(mdc, f.bold, msg).0;
+                            cv.text(f.bold, msg, r.r - mw, r.t - th(f.bold) - (age * sc(30) as f32) as i32, Rgba(0xff, 0xe0, 0x8a, a));
+                        }
+                    }
+                    y += sc(42);
                 }
             }
         }
@@ -2450,7 +2608,10 @@ fn on_key(hwnd: HWND, key: u16) {
             VK_RIGHT => u.fv_step(1),
             VK_TAB => {
                 let n = u.fv.as_ref().map_or(0, |f| f.ids.len());
-                let order: Vec<u8> = if n > 1 { vec![0, 1, 2, 3] } else { vec![0, 3] };
+                let mut order: Vec<u8> = if n > 1 { vec![0, 1, 2, 3] } else { vec![0, 3] };
+                if u.fv_tier() < 7 {
+                    order.insert(1, 4); // the Polish button
+                }
                 let cur = u.fv.as_ref().map_or(0, |f| f.focus);
                 let i = order.iter().position(|x| *x == cur).unwrap_or(0) as i32;
                 let next = order[(i + if shift_down { -1 } else { 1 }).rem_euclid(order.len() as i32) as usize];
@@ -2465,6 +2626,7 @@ fn on_key(hwnd: HWND, key: u16) {
                     0 => u.fv_flip(),
                     1 => u.fv_step(-1),
                     2 => u.fv_step(1),
+                    4 => u.fv_polish(),
                     _ => u.close_fv(),
                 }
             }
@@ -2572,6 +2734,12 @@ fn on_button_down(hwnd: HWND, x: i32, y: i32) {
             4 => u.close_fv(),
             2 => u.fv_step(-1),
             3 => u.fv_step(1),
+            6 => {
+                if let Some(fv) = u.fv.as_mut() {
+                    fv.focus = 4;
+                }
+                u.fv_polish();
+            }
             1 => {
                 if let Some(fv) = u.fv.as_mut() {
                     fv.focus = 0;
@@ -2839,6 +3007,7 @@ pub fn register(hinst: HINSTANCE) {
 /// Open the Achievements window, or focus the open one (it keeps its own copy of the state).
 pub fn open(_owner: HWND, state: &State, dark: bool) {
     unsafe {
+        let state = &merge(state, &store::load()); // polishing is saved by this window; the app's copy may lag
         if let Some(u) = ui() {
             let hwnd = u.hwnd;
             u.state = state.clone();
@@ -2874,7 +3043,7 @@ pub fn open(_owner: HWND, state: &State, dark: bool) {
 /// Update an open Achievements window with a new state (nothing happens when it is closed).
 pub fn refresh(state: &State) {
     let Some(u) = ui() else { return };
-    u.state = state.clone();
+    u.state = merge(state, &u.state); // keep polishing done here since the app last saved
     u.layout();
     u.snap_ok = false;
     if let Some(fv) = u.fv.as_ref() {
@@ -3059,7 +3228,7 @@ impl Pop {
             } else {
                 6.0
             };
-            self.medals.ensure(&[(cur.medal_id, cur.tier, cur.mpx)]);
+            self.medals.ensure(&[(cur.medal_id, cur.tier, cur.mpx, 0)]);
             let (dur, hwnd) = (cur.dur, self.hwnd);
             self.cur = Some(cur);
             self.place();
@@ -3236,7 +3405,7 @@ impl Pop {
         let scale = if self.reduced { 1.0 } else { 0.35 + 0.65 * rise };
         let scale = if is_level && !self.reduced { scale * (1.0 + 0.06 * ((t / 0.45).clamp(0.0, 1.0) as f32 * std::f32::consts::PI).sin()) } else { scale };
         let off_y = if self.reduced { 0.0 } else { 40.0 * dpi_scale(self.dpi) * (1.0 - rise) };
-        if let Some(tile) = self.medals.get((cur.medal_id, cur.tier, cur.mpx)) {
+        if let Some(tile) = self.medals.get((cur.medal_id, cur.tier, cur.mpx, 0)) {
             let (sw, sh) = (surf.w, surf.h);
             let n = cur.mpx as i32;
             draw_tile(surf.px(), sw, sh, tile, n, (mcx - n / 2) as f32 + n as f32 / 2.0, (mcy - n / 2) as f32 + n as f32 / 2.0 + off_y, scale, scale, all, (0, sh));
