@@ -307,6 +307,31 @@ canvas { display: block; }
   .lu .ray { opacity: .5; transform: rotate(var(--a)) scaleY(.8); }
   .lu-c { opacity: 1; }
 }
+.tuner { display: grid; grid-template-columns: minmax(0, 250px) minmax(0, 1fr); gap: 18px; }
+.tuner > * { min-width: 0; }
+.tn-prev { background: #000; border-radius: 12px; display: grid; justify-items: center; gap: 12px; padding: 16px 8px; align-self: start; position: sticky; top: calc(var(--vbar-h, 60px) + 8px); }
+.tn-prev .c3 { width: 210px; height: 210px; display: block; touch-action: none; cursor: grab; }
+.tn-prev .sm { display: flex; gap: 12px; align-items: center; }
+.tn-prev .cap { font-family: var(--mono); font-size: 11px; color: var(--dim); text-align: center; }
+.tn-sliders { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.tn-group { border: 1px solid var(--line); border-radius: 10px; padding: 6px 12px 12px; margin: 0; min-width: 0; }
+.tn-group legend { font: 600 11.5px var(--mono); color: var(--dim); padding: 0 4px; text-transform: uppercase; letter-spacing: .06em; }
+.tn-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; margin-top: 8px; font-size: 13.5px; }
+.tn-row input { grid-column: 1 / -1; width: 100%; accent-color: #b49cff; margin: 2px 0 0; }
+.tn-row output { font: 500 12px var(--mono); color: #b49cff; }
+.tn-actions { grid-column: 1 / -1; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.tn-save { background: var(--m7); color: #120d22; border: 0; padding: 10px 18px; border-radius: 99px; font: 700 14px var(--display); cursor: pointer; }
+.tn-save:disabled { opacity: .5; cursor: default; }
+.tn-reset, .tn-open { background: transparent; border: 1px solid var(--line); padding: 9px 16px; border-radius: 99px; font: 600 14px var(--display); cursor: pointer; }
+.tn-reset:hover, .tn-open:hover { border-color: var(--m7); }
+.tn-status { font-size: 13px; color: var(--dim); }
+@media (max-width: 700px) {
+  .tuner { grid-template-columns: minmax(0, 1fr); }
+  .tn-prev { top: var(--vbar-h, 60px); z-index: 3; padding: 10px; grid-template-columns: auto auto; justify-content: center; align-items: center; }
+  .tn-prev .c3 { width: 130px; height: 130px; }
+  .tn-prev .sm { flex-direction: column; gap: 8px; }
+  .tn-prev .cap { grid-column: 1 / -1; }
+}
 </style>
 <div class="wrap">
 <div class="vbar-wrap"><div class="vbar-in"><span class="vlabel" id="vlab">Versions</span><div id="vtabs" role="tablist" aria-labelledby="vlab" style="display:contents"></div><p class="vnote" id="vnote"></p></div></div>
@@ -1035,28 +1060,22 @@ void main(){
    No WebGL: the canvas gets class "nogl". */
 (function (root) {
   'use strict';
+  /* The bubble's look, shared by the flat badge and the 3D bubble and set by the tuner (v4). Defaults = Rajhans's saved values
+     (tuning/bubble v7, 2026-11-20). */
+  const LOOK_DEFAULTS = { edgeWidth: 0.59, edgeVary: 0.85, edgeColour: 1.13, rimLine: 0.3, saturation: 0.8, filmInside: 1, filmThick: 497, flowSpeed: 2, reflection: 0.6,
+    dotRefr: 0.3, dotRing: 0.3, refrPeriod: 20, glow: 0.43, breath: 15, motionAmt: 1, motionTime: 10.5 };
+  root.YTPMLookDefaults = Object.freeze(Object.assign({}, LOOK_DEFAULTS));
+  root.YTPMLook = Object.assign({}, LOOK_DEFAULTS);
+  const LOOK_U = { edgeWidth: 'uEdgeW', edgeVary: 'uEdgeVary', edgeColour: 'uEdgeCol', rimLine: 'uRim', saturation: 'uSat', filmInside: 'uFilmIn', filmThick: 'uThick', flowSpeed: 'uFlow', reflection: 'uRefl',
+    dotRefr: 'uDotRefr', dotRing: 'uDotRing', refrPeriod: 'uRefrT', glow: 'uGlow', breath: 'uBreath', motionAmt: 'uMotAmt', motionTime: 'uMotT' };
+  let LU = {};
 
   const VS = 'attribute vec2 a;void main(){gl_Position=vec4(a,0.,1.);}';
   const FS = `
 precision highp float;
 uniform vec2 uRes; uniform float uTime; uniform float uSeed;
 uniform sampler2D uEnv; uniform float uEnvOn; uniform vec4 uEnvR; uniform vec4 uEnvK; uniform float uSee;   // uEnvK: front, back, distance, film tint; uSee: how see-through the bubble is   // the page behind, for a faint mirror reflection
-#define uEdgeW 0.59
-#define uEdgeVary 0.85
-#define uEdgeCol 1.13
-#define uSat 0.8
-#define uFilmIn 1.0
-#define uRefl 0.6
-#define uFlow 2.0
-#define uThick 497.0
-#define uRim 0.3
-#define uDotRefr 0.3
-#define uDotRing 0.3
-#define uRefrT 20.0
-#define uGlow 0.43
-#define uBreath 15.0
-#define uMotAmt 1.0
-#define uMotT 10.5
+uniform float uEdgeW, uEdgeVary, uEdgeCol, uSat, uFilmIn, uRefl, uFlow, uThick, uRim, uDotRefr, uDotRing, uRefrT, uGlow, uBreath, uMotAmt, uMotT;   // the look (YTPMLook, the tuner)
 #define uVar 2.0
 float hash(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }
 float noise(vec2 p){ vec2 i=floor(p), f=fract(p); vec2 u=f*f*(3.-2.*f);
@@ -1233,6 +1252,7 @@ void main(){
     const loc = gl.getAttribLocation(pr, 'a'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
     uRes = gl.getUniformLocation(pr, 'uRes'); uTime = gl.getUniformLocation(pr, 'uTime'); uSeed = gl.getUniformLocation(pr, 'uSeed');
     uEnvOn = gl.getUniformLocation(pr, 'uEnvOn'); uEnvR = gl.getUniformLocation(pr, 'uEnvR'); uEnvK = gl.getUniformLocation(pr, 'uEnvK'); uSee = gl.getUniformLocation(pr, 'uSee');
+    LU = {}; for (const k in LOOK_U) LU[k] = gl.getUniformLocation(pr, LOOK_U[k]);
     gl.uniform1i(gl.getUniformLocation(pr, 'uEnv'), 0);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
@@ -1253,6 +1273,7 @@ void main(){
       if (off && (gc.width !== it.px || gc.height !== it.px)) { gc.width = it.px; gc.height = it.px; }
       gl.viewport(0, 0, it.px, it.px);
       gl.uniform2f(uRes, it.px, it.px); gl.uniform1f(uTime, t); gl.uniform1f(uSeed, it.seed);
+      for (const k in LU) gl.uniform1f(LU[k], +root.YTPMLook[k]);
       const er = it.reflect && env && envRect(it.c);
       gl.uniform1f(uEnvOn, er ? RK.amount : 0);
       gl.uniform1f(uSee, it.reflect ? RK.see : 0);
@@ -1364,7 +1385,9 @@ void main(){
 
   /** Draw only this canvas (the full view); null = back to all. */
   function only(c) { solo = c || null; items.forEach((it) => { it.fresh = true; }); if (still()) draw(performance.now()); else if (!raf && items.length) raf = requestAnimationFrame(loop); }
-  const api = { mount, reflect, setReflect, only, supported: () => setup() };
+  /** Draw every bubble again now (after a look change, when motion is reduced and nothing animates). */
+  function redraw() { items.forEach((it) => { it.fresh = true; }); if (gl && still()) draw(performance.now()); }
+  const api = { mount, reflect, setReflect, only, redraw, supported: () => setup() };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.YTPMBubble = api;
 })(typeof window !== 'undefined' ? window : globalThis);
@@ -1497,12 +1520,7 @@ void main(){
 }`;
 
   const BUBBLE = COMMON + `
-#define uSat 0.8
-#define uThick 497.0
-#define uGlow 0.43
-#define uBreath 15.0
-#define uMotAmt 1.0
-#define uMotT 10.5
+uniform float uEdgeW, uEdgeVary, uEdgeCol, uSat, uFilmIn, uRefl, uFlow, uThick, uRim, uGlow, uBreath, uMotAmt, uMotT;   // the look (YTPMLook)
 float h3(vec3 p){ p=fract(p*vec3(.1031,.1030,.0973)); p+=dot(p,p.yxz+33.33); return fract((p.x+p.y)*p.z); }
 float n3(vec3 p){ vec3 i=floor(p), f=fract(p); f=f*f*(3.-2.*f);
   return mix(mix(mix(h3(i),h3(i+vec3(1,0,0)),f.x),mix(h3(i+vec3(0,1,0)),h3(i+vec3(1,1,0)),f.x),f.y),
@@ -1518,7 +1536,7 @@ vec3 film(float d, float cosT){
 // film thickness (nm) at a point of the sphere: swirls that turn with the bubble, thinner at the top where the film drains
 float thick(vec3 pw){
   vec3 q=uRT*pw;
-  float ft=uTime*.12;
+  float ft=uTime*.06*uFlow;
   vec3 w=vec3(fbm3(q*1.1+vec3(0.,ft,0.)), fbm3(q*1.1+vec3(5.2,1.3,-ft)), 0.);
   float n=fbm3(q*1.4+w*1.3+vec3(ft*.4,-ft*.3,ft*.2));
   return max(uThick+430.*(n-.5)-260.*pw.y, 15.);
@@ -1567,27 +1585,30 @@ void main(){
   float k=.62+.38*sin(uTime*TAU/uBreath);
   // front film: Fresnel reflection, coloured by interference
   float c1=clamp(-dot(d,n1),0.,1.);
-  float F1=.02+.98*pow(1.-c1,5.);
+  // edge band: wider or narrower (edge width), uneven round the outline (unevenness), stronger colour (edge colour)
+  float ew=uEdgeW/.59*mix(1.,.25+1.7*n3(n1*2.3+vec3(uTime*.03*uFlow)),uEdgeVary);
+  float F1=.02+.98*pow(1.-c1,5./max(ew,.05));
   float ct1=sqrt(1.-(1.-c1*c1)/1.77);
   vec3 f1=film(thick(p1),ct1);
-  vec3 col=f1*(env(reflect(d,n1))*(.18+2.4*F1)+.05);
+  vec3 col=f1*(env(reflect(d,n1))*(.18*uRefl/.6+2.4*F1*uEdgeCol/1.13)+.05*uFilmIn);
   // the inside of the back wall: a second, upside-down reflection, dimmer (the light crossed the front film twice)
   float c2=clamp(dot(d,n2),0.,1.);
-  float F2=.02+.98*pow(1.-c2,5.);
+  float F2=.02+.98*pow(1.-c2,5./max(ew,.05));
   float ct2=sqrt(1.-(1.-c2*c2)/1.77);
   vec3 f2=film(thick(p2),ct2);
-  col+=f2*(env(reflect(d,-n2))*(.10+1.4*F2)+.03)*(1.-F1)*.75;
+  col+=f2*(env(reflect(d,-n2))*(.10*uRefl/.6+1.4*F2*uEdgeCol/1.13)+.03*uFilmIn)*(1.-F1)*.75;
   // the mark inside, seen through the front film (bent a little near the rim)
   float tz=(0.-o.z)/d.z; vec2 q=(o+d*tz).xy;
   q+=n1.xy*(1.-c1)*.06;
   col+=mark(q/.62,k,pxw*1.6/.62)*(1.-F1)*.95;
   // a thin bright rim where the film is seen edge-on
-  col+=f1*smoothstep(.25,0.,c1)*.35;
+  col+=f1*smoothstep(.25,0.,c1)*.35*uRim/.3;
   col=1.-exp(-col*1.15);
   float a=clamp(max(col.r,max(col.g,col.b))*1.25,.06,1.);
   gl_FragColor=vec4(col*cover,a*cover);
 }`;
 
+  const LOOK3 = { edgeWidth: 'uEdgeW', edgeVary: 'uEdgeVary', edgeColour: 'uEdgeCol', rimLine: 'uRim', saturation: 'uSat', filmInside: 'uFilmIn', filmThick: 'uThick', flowSpeed: 'uFlow', reflection: 'uRefl', glow: 'uGlow', breath: 'uBreath', motionAmt: 'uMotAmt', motionTime: 'uMotT' };
   let cv = null, gl = null, progs = {}, cur = null, raf = 0, t0 = 0, kind = 'dia', R = [1, 0, 0, 0, 1, 0, 0, 0, 1], dirty = true, still = false;
   function prog(src) {
     const sh = (type, s) => { const x = gl.createShader(type); gl.shaderSource(x, s); gl.compileShader(x); if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) { console.info('[RM] 3d shader:', gl.getShaderInfoLog(x)); return null; } return x; };
@@ -1596,7 +1617,8 @@ void main(){
     const p = gl.createProgram(); gl.attachShader(p, v); gl.attachShader(p, f); gl.bindAttribLocation(p, 0, 'a'); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) return null;
     const U = {}; for (const k of ['uRes', 'uTime', 'uR', 'uRT', 'uKind']) U[k] = gl.getUniformLocation(p, k);
-    return { p, U };
+    const L = {}; for (const k in LOOK3) L[k] = gl.getUniformLocation(p, LOOK3[k]);
+    return { p, U, L };
   }
   function frame(now) {
     raf = 0;
@@ -1609,6 +1631,8 @@ void main(){
       // column-major for GL: R maps object -> world
       gl.uniformMatrix3fv(cur.U.uR, false, [R[0], R[3], R[6], R[1], R[4], R[7], R[2], R[5], R[8]]);
       gl.uniformMatrix3fv(cur.U.uRT, false, R);
+      const look = root.YTPMLook || {};
+      for (const k in cur.L) if (cur.L[k]) gl.uniform1f(cur.L[k], +(look[k] != null ? look[k] : 0));
       gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       dirty = false;
@@ -1642,7 +1666,7 @@ void main(){
     dirty = true;
   }
   function stop() { if (raf) cancelAnimationFrame(raf); raf = 0; cur = null; if (gl) { const ext = gl.getExtension('WEBGL_lose_context'); if (ext) ext.loseContext(); } gl = null; cv = null; }
-  root.YTPM3D = { start, rot, stop, active: () => !!cur };
+  root.YTPM3D = { start, rot, stop, redraw: () => { dirty = true; }, active: () => !!cur, canvas: () => cv };
 })(typeof window !== 'undefined' ? window : globalThis);
 </script>
 <script>
@@ -2004,7 +2028,107 @@ void main(){
       <ul class="vf-checks">${checks}</ul>
       <div class="vf-links"><a href="${PR}" target="_blank" rel="noopener">PR #26</a><a href="${RUN}" target="_blank" rel="noopener">Windows CI run</a></div></section>`;
   }
-  function buildV4() { return verifyHtml() + buildV2(BUILD_STATUS, '-4'); }
+
+  /* ------------------------------------------------------------------ v4: bubble tuner (drives YTPMLook: flat badges + 3D bubble) */
+  const TN_SPEC = [
+    ['Edge', [['edgeWidth', 'Edge width', 0.05, 1.5, 0.01], ['edgeVary', 'Edge unevenness', 0, 1, 0.01], ['edgeColour', 'Edge colour strength', 0, 1.5, 0.01], ['rimLine', 'Thin outline', 0, 1, 0.01]]],
+    ['Film', [['saturation', 'Colour saturation', 0, 1.2, 0.01], ['filmInside', 'Film colour in the middle', 0, 1, 0.01], ['filmThick', 'Film thickness (nm)', 80, 700, 1], ['flowSpeed', 'Swirl speed', 0, 2, 0.01], ['reflection', 'Reflections', 0, 1, 0.01]]],
+    ['Dots at the edge (flat badge)', [['dotRefr', 'Dot copies left and right', 0, 1, 0.01], ['dotRing', 'Dot ring all round', 0, 1, 0.01], ['refrPeriod', 'Sway time (seconds)', 20, 240, 1]]],
+    ['Centre', [['glow', 'Centre light', 0, 1.6, 0.01], ['breath', 'Breath time (seconds)', 4, 40, 0.5]]],
+    ['Pulse motion', [['motionAmt', 'Amount', 0, 1, 0.01], ['motionTime', 'Cycle time (seconds)', 4, 40, 0.5]]]
+  ];
+  const TN_KEY = 'rm-bubble-look', TN_DOC = 'tuning/bubble';
+  try { const ls = JSON.parse(store.get(TN_KEY) || 'null'); if (ls) for (const k in YTPMLookDefaults) if (typeof ls[k] === 'number') YTPMLook[k] = ls[k]; } catch (e) { /* ignore */ }
+  const TN = { el: null, c3: null, on: false, raf: 0, yaw: 0, pitch: 8, drag: null, dirty: false, db: null, inputs: {} };
+  function tunerHtml() {
+    return `<section class="card" id="bubble-tuner" aria-labelledby="h-tn"><div class="sec-h"><div class="eyebrow">Emulsion · tune it live</div><h2 id="h-tn">Tune the bubble yourself</h2>
+      <p>Move a slider and every Emulsion bubble on this page changes live: the flat badges and the 3D sphere in the full view. Drag the sphere to turn it. Press Save when you like it: I read the saved numbers and put them in the Windows app.</p></div>
+      <div class="tuner"><div class="tn-prev"><canvas class="c3" aria-label="Emulsion bubble in 3D, drag to turn"></canvas><div class="sm">${cv({ tier: 7, size: 64 })}${cv({ tier: 7, size: 44 })}</div><div class="cap">3D sphere · badge 64 · list 44</div></div>
+      <div class="tn-sliders"></div>
+      <div class="tn-actions"><button type="button" class="tn-save">Save for Claude</button><button type="button" class="tn-reset">Reset</button><button type="button" class="tn-open">Open full view</button><span class="tn-status" role="status">Not changed yet</span></div></div></section>`;
+  }
+  const tnStep = (k) => TN_SPEC.flatMap((g) => g[1]).find((x) => x[0] === k)[4];
+  const tnFmt = (k, v) => (tnStep(k) >= 1 ? String(Math.round(v)) : (+v).toFixed(tnStep(k) >= .5 ? 1 : 2));
+  function tnRedraw() { try { YTPMBubble.redraw(); } catch (e) { /* ignore */ } try { YTPM3D.redraw(); } catch (e) { /* ignore */ } }
+  function tnSync() { for (const k in TN.inputs) { TN.inputs[k].inp.value = YTPMLook[k]; TN.inputs[k].val.textContent = tnFmt(k, YTPMLook[k]); } tnRedraw(); }
+  function tnStatus(t) { const s = TN.el && $('.tn-status', TN.el); if (s) s.textContent = t; }
+  function tnDirty() { TN.dirty = true; tnStatus(TN.db ? 'Changed, not saved yet' : 'Changed. Kept in this browser.'); store.set(TN_KEY, JSON.stringify(YTPMLook)); }
+  function tnTick(now) {
+    TN.raf = 0;
+    if (!TN.on) return;
+    if (!TN.drag && !reduced()) TN.yaw += .12;
+    try { YTPM3D.rot(TN.yaw, TN.pitch, 0); } catch (e) { /* ignore */ }
+    TN.raf = requestAnimationFrame(tnTick);
+  }
+  function tnStart() {
+    if (!TN.el || !TN.el.isConnected || TN.el.closest('[hidden]') || !fv.hidden) return;
+    tnStop();
+    const old = $('.c3', TN.el), c = old.cloneNode(false);   // fresh canvas: stop() loses the old context
+    old.replaceWith(c); TN.c3 = c; tnBindDrag(c);
+    const px = Math.round(Math.min(c.clientWidth || 210, 420) * Math.min(window.devicePixelRatio || 1, 2));
+    c.width = c.height = px;
+    TN.on = YTPM3D.start(c, 'bubble', reduced());
+    if (TN.on) { YTPM3D.rot(TN.yaw, TN.pitch, 0); TN.raf = requestAnimationFrame(tnTick); }
+    else c.replaceWith(Object.assign(document.createElement('div'), { className: 'c3 is-nogl' }));
+  }
+  function tnStop() { if (!TN.on) return; TN.on = false; cancelAnimationFrame(TN.raf); TN.raf = 0; try { if (YTPM3D.canvas() === TN.c3) YTPM3D.stop(); } catch (e) { /* ignore */ } }
+  function tnBindDrag(c) {
+    c.addEventListener('pointerdown', (ev) => { TN.drag = { x: ev.clientX, y: ev.clientY }; try { c.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ } });
+    c.addEventListener('pointermove', (ev) => { const g = TN.drag; if (!g) return; TN.yaw += (ev.clientX - g.x) * .7; TN.pitch = clamp(TN.pitch - (ev.clientY - g.y) * .7, -85, 85); g.x = ev.clientX; g.y = ev.clientY; });
+    const end = () => { TN.drag = null; };
+    c.addEventListener('pointerup', end); c.addEventListener('pointercancel', end);
+  }
+  function tnVbar() { const w = $('.vbar-wrap'); if (w) document.documentElement.style.setProperty('--vbar-h', w.offsetHeight + 'px'); }
+  window.addEventListener('resize', tnVbar);
+  function bindTuner(p) {
+    tnVbar();
+    const el = $('#bubble-tuner', p); if (!el) return;
+    TN.el = el;
+    const box = $('.tn-sliders', el);
+    for (const [group, list] of TN_SPEC) {
+      const g = document.createElement('fieldset'); g.className = 'tn-group';
+      const lg = document.createElement('legend'); lg.textContent = group; g.appendChild(lg);
+      for (const [k, label, min, max, step] of list) {
+        const row = document.createElement('label'); row.className = 'tn-row';
+        const name = document.createElement('span'); name.textContent = label;
+        const val = document.createElement('output');
+        const inp = document.createElement('input'); Object.assign(inp, { type: 'range', min, max, step, value: YTPMLook[k] });
+        val.textContent = tnFmt(k, YTPMLook[k]);
+        inp.addEventListener('input', () => { YTPMLook[k] = parseFloat(inp.value); val.textContent = tnFmt(k, YTPMLook[k]); tnRedraw(); tnDirty(); });
+        row.append(name, val, inp); g.appendChild(row); TN.inputs[k] = { inp, val };
+      }
+      box.appendChild(g);
+    }
+    $('.tn-reset', el).addEventListener('click', () => { Object.assign(YTPMLook, YTPMLookDefaults); tnSync(); tnDirty(); });
+    const openB = $('.tn-open', el);
+    openB.addEventListener('click', () => openFV(showcaseList(), 6, openB));
+    const save = $('.tn-save', el);
+    save.disabled = true; tnStatus('Connecting…');
+    (async () => {
+      let db = null;
+      try { db = window.claude && window.claude.use ? await window.claude.use('db') : null; } catch (e) { db = null; }
+      if (!db) { tnStatus(TN.dirty ? 'Changed. Kept in this browser (saving for Claude is not available here).' : 'Saving for Claude is not available here. Changes stay in this browser.'); return; }
+      TN.db = db; save.disabled = false;
+      try {
+        const snap = await db.doc(TN_DOC).get();
+        if (snap.exists && !TN.dirty) { const v = snap.data() || {}; for (const k in YTPMLookDefaults) if (typeof v[k] === 'number') YTPMLook[k] = v[k]; tnSync(); tnStatus('Showing your saved settings'); return; }
+      } catch (e) { /* keep current */ }
+      tnStatus(TN.dirty ? 'Changed, not saved yet' : 'Not changed yet');
+    })();
+    save.addEventListener('click', async () => {
+      if (!TN.db) return;
+      save.disabled = true; tnStatus('Saving…');
+      try {
+        const out = {}; for (const k in YTPMLookDefaults) out[k] = +YTPMLook[k];
+        out.savedAt = new Date().toISOString();
+        await TN.db.doc(TN_DOC).set(out);
+        TN.dirty = false; tnStatus('Saved. Claude will use these settings.');
+      } catch (e) { tnStatus('Could not save (' + ((e && e.code) || 'error') + '). Changes stay in this browser.'); }
+      save.disabled = false;
+    });
+    requestAnimationFrame(tnStart);
+  }
+  function buildV4() { return verifyHtml() + tunerHtml() + buildV2(BUILD_STATUS, '-4'); }
 
   /* ------------------------------------------------------------------ v1: the three theme options (settings only) */
   const OPTIONS = [
@@ -2044,6 +2168,7 @@ void main(){
       t.setAttribute('aria-selected', sel ? 'true' : 'false'); t.tabIndex = sel ? 0 : -1; p.hidden = !sel;
       if (sel && !p.dataset.built) { p.innerHTML = BUILDERS[v.id](); p.dataset.built = '1'; mountIn(p); bindPanel(p); }
     });
+    if (id === 'v4') { if (TN.el && !TN.on) requestAnimationFrame(tnStart); } else tnStop();
     $('#vnote').textContent = VERSIONS.find((v) => v.id === id).note;
     if (focusTab) $('#vt-' + id).focus();
     store.set('rm-ach-version', id);
@@ -2064,6 +2189,7 @@ void main(){
     const m = $('#btnMoment', p); if (m) m.addEventListener('click', () => openMoment(m));
     const l = $('#btnLevel', p); if (l) l.addEventListener('click', () => openLevel(l));
     const v1 = $('#btnV1', p); if (v1) v1.addEventListener('click', () => show('v1', true));
+    bindTuner(p);
   }
   function expand(btn) {
     const C = CATS.find((c) => c.id === btn.dataset.more), card = btn.closest('.cat'), rows = $('.rows', card);
@@ -2205,7 +2331,7 @@ void main(){
     if (reduced()) { FV.flip = FV.flipT; apply(); }
   }
   function openFV(list, i, opener) {
-    closeOverlays();
+    closeOverlays(); tnStop();
     FV.list = list; FV.i = clamp(i, 0, list.length - 1); FV.opener = opener || document.activeElement; FV.openedAt = Date.now();
     fv.hidden = false; document.documentElement.setAttribute('data-ach-hold', '');
     document.body.style.overflow = 'hidden';
@@ -2222,6 +2348,7 @@ void main(){
     FV.is3d = false; stage.classList.remove('is3d');
     front.innerHTML = ''; back.innerHTML = ''; edge.innerHTML = ''; FV.canvas = null;
     if (FV.opener && FV.opener.isConnected) FV.opener.focus();
+    if (cur === 'v4') requestAnimationFrame(tnStart);
   }
   function stepFV(d) { if (FV.list.length < 2) return; FV.i = (FV.i + d + FV.list.length) % FV.list.length; renderFV(); }
   fv.addEventListener('pointermove', (ev) => { FV.px = ev.clientX; FV.py = ev.clientY; FV.moved = performance.now(); });
