@@ -366,6 +366,8 @@ pub struct App {
     /// Background UI Automation watcher for taskbar app-icon positions.
     icons: Option<crate::icons::Watcher>,
     alerts: AlertState,
+    /// Achievements observer (fed from the sample tick and existing events).
+    pub ach: crate::achievements::observer::Observer,
     /// Set by events: re-read taskbar geometry on the next refresh.
     need_locate: bool,
     /// Set by events: re-evaluate full-screen state and z-order.
@@ -498,6 +500,7 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
             popup_tracking: false,
             icons: None,
             alerts: AlertState::default(),
+            ach: crate::achievements::observer::Observer::new(),
             upd: std::ptr::null_mut(),
             upd_text: String::new(),
             upd_pct: None,
@@ -561,6 +564,7 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         a.update_timer();
         a.refresh(true);
         if after_update {
+            a.ach_event(crate::achievements::Event::UpdateInstalled { now_ms: crate::achievements::observer::unix_ms() });
             crate::update_ui::show(
                 a,
                 concat!("Updated successfully. You're now on v", env!("CARGO_PKG_VERSION"), "."),
@@ -783,6 +787,78 @@ impl App {
             self.update_tip();
         }
         self.check_alerts();
+        if self.m.s.achievements {
+            self.ach_sample(opts.gpu);
+        } else {
+            self.ach.pause();
+        }
+    }
+
+    /// Feed the achievements observer from the sample just taken (no extra timers).
+    fn ach_sample(&mut self, gpu_queried: bool) {
+        use crate::achievements::observer as ob;
+        let now_ms = ob::unix_ms();
+        let snap = &self.m.snap;
+        let vis = self.m.s.visible && self.display_on;
+        let present = |o: &&Overlay| vis && (o.shown || o.fullscreen);
+        let input = ob::SampleInput {
+            now_ms,
+            cpu: snap.cpu,
+            gpu: snap.gpu,
+            gpu_temp: snap.gpu_temp,
+            net_down: snap.net_recv_delta,
+            net_up: snap.net_sent_delta,
+            disk_bytes: ((snap.disk_read + snap.disk_write) * snap.elapsed) as u64,
+            ram_pct: snap.ram_pct,
+            disk_used_pct: snap.disk_used_pct,
+            battery: snap.battery.map(|b| (b.percent, b.on_ac)),
+            uptime_s: snap.uptime_secs,
+            taskbars: self.overlays.iter().filter(present).count().min(255) as u8,
+            fullscreen: vis && self.overlays.iter().any(|o| o.fullscreen),
+            input_recent: ob::input_recent(),
+            gpu_queried,
+            cap_set: self.m.s.data_cap_gb > 0.0,
+        };
+        let mut moments = self.ach.on_sample(&input);
+        if self.ach.cycle_due(now_ms) {
+            let reset = self.m.s.cap_reset_day;
+            let start = UsageStore::cycle_start(reset, usage::today());
+            if let Some(old) = self.ach.cycle_seen(start, reset) {
+                if self.m.s.data_cap_gb > 0.0 {
+                    let used = self.m.usage.range(old, usage::prev_day(start)).total();
+                    let cap = self.m.s.data_cap_gb * 1024.0 * 1024.0 * 1024.0;
+                    moments.extend(self.ach.event(crate::achievements::Event::CycleClosed {
+                        under_cap: (used as f64) < cap,
+                        now_ms,
+                    }));
+                }
+            }
+        }
+        if !moments.is_empty() {
+            self.ach_unlocked(moments);
+        }
+    }
+
+    /// Send one event to the achievements observer (does nothing when switched off).
+    pub fn ach_event(&mut self, ev: crate::achievements::Event) {
+        if !self.m.s.achievements {
+            return;
+        }
+        let moments = self.ach.event(ev);
+        if !moments.is_empty() {
+            self.ach_unlocked(moments);
+        }
+    }
+
+    /// End task attempt finished (`ok` false = Windows refused).
+    pub fn ach_task_ended(&mut self, ok: bool) {
+        self.ach_event(crate::achievements::Event::TaskEnded { ok, now_ms: crate::achievements::observer::unix_ms() });
+    }
+
+    /// New achievement moments are ready to show.
+    fn ach_unlocked(&mut self, moments: Vec<crate::achievements::Moment>) {
+        let _ = moments;
+        // TODO(lead): show moment UI
     }
 
     /// Alert rules evaluated on the samples we already take (no extra work).
@@ -796,7 +872,9 @@ impl App {
         let now = Instant::now();
         let secs = s.alert_secs as u64;
         let mut fire: Vec<(String, String)> = Vec::new();
-        let mut sustained = |v: f32, lim: f32, since: &mut Option<Instant>, done: &mut bool, what: &str| {
+        // Achievement events: (alert kind, fired?) in the order they happened.
+        let mut ach: Vec<(u8, bool)> = Vec::new();
+        let mut sustained = |kind: u8, v: f32, lim: f32, since: &mut Option<Instant>, done: &mut bool, what: &str| {
             if lim <= 0.0 {
                 return;
             }
@@ -804,6 +882,7 @@ impl App {
                 let t = *since.get_or_insert(now);
                 if !*done && now.duration_since(t).as_secs() >= secs {
                     *done = true;
+                    ach.push((kind, true));
                     fire.push((
                         format!("{} is at {:.0}%", what, v),
                         format!("It has stayed above {:.0}% for {}.", lim, fmt::duration(secs)),
@@ -811,43 +890,53 @@ impl App {
                 }
             } else if v < lim - 5.0 {
                 *since = None;
-                *done = false;
+                if std::mem::take(done) {
+                    ach.push((kind, false));
+                }
             }
         };
         let al = &mut self.alerts;
-        sustained(snap.cpu, s.alert_cpu_pct, &mut al.cpu_since, &mut al.cpu_done, "CPU");
-        sustained(snap.ram_pct, s.alert_ram_pct, &mut al.ram_since, &mut al.ram_done, "Memory");
+        sustained(crate::achievements::observer::kind::CPU, snap.cpu, s.alert_cpu_pct, &mut al.cpu_since, &mut al.cpu_done, "CPU");
+        sustained(crate::achievements::observer::kind::RAM, snap.ram_pct, s.alert_ram_pct, &mut al.ram_since, &mut al.ram_done, "Memory");
         if let Some(used) = snap.disk_used_pct {
             let free = 100.0 - used;
             if s.alert_disk_free_pct > 0.0 && free < s.alert_disk_free_pct {
                 if !al.disk_done {
                     al.disk_done = true;
+                    ach.push((crate::achievements::observer::kind::DISK, true));
                     fire.push((
                         format!("System drive almost full ({:.0}% free)", free),
                         format!("{} free of {}.", fmt::bytes(snap.disk_total - snap.disk_used), fmt::bytes(snap.disk_total)),
                     ));
                 }
             } else if free > s.alert_disk_free_pct + 2.0 {
-                al.disk_done = false;
+                if std::mem::take(&mut al.disk_done) {
+                    ach.push((crate::achievements::observer::kind::DISK, false));
+                }
             }
         }
         if let Some(b) = snap.battery {
             let low = !b.on_ac && !b.charging && s.alert_battery_pct > 0 && (b.percent as u32) <= s.alert_battery_pct;
             if low && !al.battery_done {
                 al.battery_done = true;
+                ach.push((crate::achievements::observer::kind::BATTERY, true));
                 fire.push((format!("Battery low ({}%)", b.percent), "Plug in your charger.".into()));
-            } else if !low {
-                al.battery_done = false;
+            } else if !low && std::mem::take(&mut al.battery_done) {
+                ach.push((crate::achievements::observer::kind::BATTERY, false));
             }
         }
         if s.alert_cap {
             if let Some((used, pct)) = self.m.cycle_usage() {
                 let level = if pct >= 100.0 { 2 } else if pct >= 90.0 { 1 } else { 0 };
                 if level > al.cap_level {
+                    ach.push((crate::achievements::observer::kind::CAP, true));
                     fire.push((
                         if level == 2 { "Monthly data cap reached".into() } else { "90% of your data cap used".into() },
                         format!("{} of {:.0} GB this billing cycle.", fmt::bytes(used), s.data_cap_gb),
                     ));
+                }
+                if level == 0 && al.cap_level > 0 {
+                    ach.push((crate::achievements::observer::kind::CAP, false));
                 }
                 al.cap_level = level;
             }
@@ -855,6 +944,14 @@ impl App {
         for (title, text) in fire {
             crate::util::diag(&format!("alert: {} \u{2014} {}", title, text));
             self.tray.balloon(&title, &text);
+        }
+        for (kind, fired) in ach {
+            let now_ms = crate::achievements::observer::unix_ms();
+            self.ach_event(if fired {
+                crate::achievements::Event::AlertFired { kind, now_ms }
+            } else {
+                crate::achievements::Event::AlertCleared { kind, now_ms }
+            });
         }
     }
 
@@ -1555,6 +1652,7 @@ impl App {
         }
         self.shut_down = true;
         self.m.usage.save();
+        self.ach.flush();
         self.tray.remove();
         unsafe {
             if !self.hook.is_null() {
@@ -1852,7 +1950,10 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         }
         WM_POWERBROADCAST => {
             match w as u32 {
-                PBT_APMSUSPEND => a.m.usage.save(),
+                PBT_APMSUSPEND => {
+                    a.m.usage.save();
+                    a.ach.flush();
+                }
                 PBT_POWERSETTINGCHANGE => {
                     let p = l as *const POWERBROADCAST_SETTING;
                     if !p.is_null() && guid_eq(&(*p).PowerSetting, &GUID_CONSOLE_DISPLAY_STATE) {
@@ -1874,6 +1975,7 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         }
         WM_QUERYENDSESSION => {
             a.m.usage.save();
+            a.ach.flush();
             1
         }
         WM_ENDSESSION => {
