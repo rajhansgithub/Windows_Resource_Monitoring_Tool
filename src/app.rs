@@ -1244,7 +1244,7 @@ impl App {
             AppendMenuW(m, MF_SEPARATOR, 0, std::ptr::null());
         };
         unsafe {
-            let title = wide(concat!("Resource Monitor ", env!("CARGO_PKG_VERSION")));
+            let title = wide(concat!("Resource Monitor ", env!("CARGO_PKG_VERSION"), " \u{b7} Emulsion Labs"));
             AppendMenuW(hm, MF_STRING | MF_GRAYED, 0, title.as_ptr());
             sep(hm);
             add(hm, ID_VISIBLE, "Show widget", s.visible);

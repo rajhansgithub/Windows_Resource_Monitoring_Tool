@@ -2,6 +2,7 @@
 name = "resmon"
 version = "2.13.0"
 edition = "2021"
+authors = ["Emulsion Labs"]
 description = "Ultra-light taskbar resource monitor for Windows 10/11"
 license = "MIT"
 build = "build.rs"

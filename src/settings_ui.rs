@@ -1021,6 +1021,8 @@ impl Ui {
                 toggle_card("Update automatically", "Install new versions when they are released", ID_AUTOUPDATE),
                 toggle_card("Start with Windows", "Launch Resource Monitor when you sign in", ID_AUTOSTART),
                 toggle_card("Achievements", "Earn medals for real use. Nothing leaves this PC", ID_ACHIEVE),
+                Def::Heading("About"),
+                Def::Note(concat!("Resource Monitor v", env!("CARGO_PKG_VERSION"), " by Emulsion Labs.")),
             ],
             1 => {
                 let mut v = vec![Def::Note("Choose which metrics appear on the widget, and move them to change their order.")];
