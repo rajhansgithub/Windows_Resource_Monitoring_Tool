@@ -480,96 +480,168 @@ float4 medal(float2 p, float r, float aa, float t){
 }
 
 // ---- age: dust and cobwebs (uWear.x dust, .z cobweb, 0..1; .y unused). 1 real hour = 1 day on the shelf; polishing removes it.
-// Same as the preview page (docs/achievements-preview.html, 2026-11-22). Dust: first on what faces up and in sheltered
-// corners, in patches; as it builds the patches join into a grey felt over the whole medal (a year). Cobweb: an old
-// tangle web in the top-left corner: a thin felt of silk with holes, straight silk threads crossing every way, one
-// sagging border thread (broken in places), two guy threads down to the face. Look numbers = the preview's tuner defaults.
+// Same as the preview page (docs/achievements-preview.html, 2026-11-22), line for line.
+// Dust is grains, not a film: a few grains first, more as it builds, until they join into a grainy grey layer (a year).
+// It lies thick on flat surfaces and piles up in hollows; steep walls stay almost clean; the top gets it before the bottom.
+// Cobweb: it grows, it never scales. Every thread has a fixed place and a birth time (from a hash); time only reveals
+// them: hair-thin threads from the rim, more between them, beaded drop lines, then torn gauze. Dust turns them into
+// grey furry ropes that sag. Look numbers = the preview's tuner defaults.
 static const float4 AGE0 = float4(1., .65, 1., 1.);    // dust amount, patchiness, top first, hides reflections
-static const float4 AGE1 = float4(.55, .5, 1., 1.);    // grit, lint, web amount, web size
-static const float4 AGE2 = float4(1., .65, .42, 1.);   // thread width, glint, silk felt, dust on silk
+static const float4 AGE1 = float4(.55, .5, 1., 1.);    // grit, lint, web amount, how many threads
+static const float4 AGE2 = float4(1., .65, .42, 1.);   // thread thickness, glint, gauze, dust on silk
 static const float  AGE_RAINBOW = .1;
 float wN(float2 p){ return vnoise(p); }
-float wF(float2 p){ return .5*wN(p) + .25*wN(p*2.03 + 3.1) + .125*wN(p*4.01 + 7.7); }
-float2 wSeg(float2 p, float2 a, float2 b){ float2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba)/dot(ba, ba), 0., 1.); return float2(length(pa - ba*h), h); }
-float wTangle(float2 p, float sc, float aa, float dens){
-  float2 q = p*sc, id = floor(q);
-  float m = 0., w = .0019*AGE2.x, cw = (min(1., w*2.4/(aa*1.5 + 1e-4)) + .1)*.6;   // soft, dusty strands
-  [unroll] for (int j = -1; j <= 1; j++) [unroll] for (int i = -1; i <= 1; i++) [unroll] for (int k = 0; k < 2; k++){
-    float2 c = id + float2(float(i), float(j)); float fk = float(k);
-    if (hash(c + fk*13.7) <= dens){
-      float2 o = c + float2(hash(c + 3.1 + fk), hash(c + 5.3 + fk));
-      float an = hash(c + 7.9 + fk*2.)*3.1416;
-      float2 dir = float2(cos(an), sin(an))*(.5 + .5*hash(c + 11. + fk));
-      float d = wSeg(q, o - dir, o + dir).x/sc;
-      m = max(m, smoothstep(w + aa*1.2, 0., d)*cw*(.35 + .65*hash(c + 17. + fk)));
+float wF(float2 p){ return .5*wN(p)+.25*wN(p*2.03+3.1)+.125*wN(p*4.01+7.7); }
+float2 wSeg(float2 p, float2 a, float2 b){ float2 pa=p-a, ba=b-a; float h=clamp(dot(pa,ba)/dot(ba,ba),0.,1.); return float2(length(pa-ba*h),h); }
+// short curled fibres, one per cell of size 1/sc. dens = how many of them exist yet (each has its own fixed place).
+float wHair(float2 p, float sc, float w, float aa, float dens){
+  float2 q=(p+(float2(wN(p*11.+2.),wN(p*11.+8.))-.5)*.07)*sc, id=floor(q);
+  float m=0.;
+  [unroll] for(int j=-1;j<=1;j++) [unroll] for(int i=-1;i<=1;i++){
+    float2 c=id+float2(float(i),float(j));
+    if(hash(c+13.7)<dens){
+      float2 o=c+float2(hash(c+3.1),hash(c+5.3));
+      float an=hash(c+7.9)*3.1416;
+      float2 dir=float2(cos(an),sin(an))*(.25+.45*hash(c+11.));
+      float d=wSeg(q,o-dir,o+dir).x/sc;
+      m=max(m,(1.-smoothstep(max(w-aa,0.)*.4,w+aa,d))*(.5+.5*hash(c+17.)));
     }
   }
-  return m;
+  return m*min(1.,w*2.4/(aa*1.5+1e-4));
 }
-float4 wWeb(float2 p, float amt, float aa){
-  if (amt <= .001) return float4(0., 0., 0., 0.);
-  float A = min(amt, 1.5), A1 = min(A, 1.);
-  const float A0 = 2.3;
-  float span = (.32 + .38*A1)*AGE1.w;
-  float2 P1 = float2(cos(A0 - span), sin(A0 - span))*.965, P2 = float2(cos(A0 + span), sin(A0 + span))*.965, C = float2(cos(A0), sin(A0));
-  float2 ch = P2 - P1; float L = length(ch); float2 cu = ch/L; float2 nn = float2(-cu.y, cu.x); if (dot(nn, C) > 0.) nn = -nn;
-  float t = dot(p - P1, cu)/L, h = dot(p - P1, nn);
-  float depth = L*(.14 + .2*A1);
-  if (t < -.1 || t > 1.1 || h > depth*1.4 + .35) return float4(0., 0., 0., 0.);
-  float tc = clamp(t, 0., 1.);
-  float sag = depth*4.*tc*(1. - tc);
-  float tear = sag*(.5 + .5*smoothstep(.2, .8, wF(float2(tc*5., 1.7) + 3.)));
-  float ins = smoothstep(tear + aa*3., tear - aa*3., h)*smoothstep(-.01, .03, t)*smoothstep(1.01, .97, t);
-  float2 pc = p - C; float rr = length(pc), th = atan2(pc.y, pc.x);
-  float veil = smoothstep(.22, .72, wF(p*6. + 2.))*(.45 + .55*wF(p*21. + 9.));
-  float fib = 0.;
-  if (ins > 0.) fib = max(wTangle(p, 5., aa, .8), wTangle(p + 3.7, 11., aa, .35)*.6)*(.55 + .45*smoothstep(.75, .05, rr));
-  float dens = ins*min(A*1.3, 1.)*(veil*AGE2.z*1.6 + fib*.6);
-  float bw = .0022*AGE2.x, cw = min(1., bw*2.4/(aa*1.5 + 1e-4)) + .15;
-  float border = smoothstep(bw + aa, max(bw - aa*.5, 0.), abs(h - sag))*smoothstep(-.02, .08, t)*smoothstep(1.02, .92, t)*min(A*2., 1.)*cw*.7*smoothstep(.25, .45, wN(float2(t*9., 4.1)));
-  float guy = 0.;
-  [unroll] for (int i = 0; i < 2; i++){
-    float ti = i == 0 ? .3 : .72;
-    float2 a = P1 + cu*L*ti + nn*depth*4.*ti*(1. - ti);
-    float2 b = a + nn*(.2 + .08*float(i)) + cu*(float(i) - .5)*.14;
-    float2 k = (a + b)*.5 + float2(0., -.03) + cu*.02;
-    float2 q1 = lerp(lerp(a, k, .33), lerp(k, b, .33), .33), q2 = lerp(lerp(a, k, .66), lerp(k, b, .66), .66);
-    float d = min(min(wSeg(p, a, q1).x, wSeg(p, q1, q2).x), wSeg(p, q2, b).x);
-    guy = max(guy, smoothstep(bw*.8 + aa, max(bw*.8 - aa*.5, 0.), d)*cw);
+// rope i of the web: where it is tied (a on the rim; b on the rim for even i, on the face for odd i) and how far it sags
+void wRope(float i, float G, out float2 a, out float2 b, out float sg){
+  float h1=hash(float2(i*1.31+.7,2.9)), h2=hash(float2(i*2.17+4.1,7.3)), h3=hash(float2(i*.73+9.2,1.1));
+  float a1=1.0+2.35*frac(i*.381966+.13);
+  a=float2(cos(a1),sin(a1))*.955;
+  float a2=clamp(a1+(h1>.5?1.:-1.)*(.6+.8*h2),.75,3.6);
+  b=fmod(i,2.)<.5 ? float2(cos(a2),sin(a2))*.955 : float2(-.55+.7*h1,.6-.7*h2);
+  sg=(.05+.11*h3)*length(b-a)*(.5+.9*clamp((G-i*.055)*1.2,0.,1.));   // dust loads it: it sags more with age
+}
+// the point at t along rope i
+float2 wOn(float i, float t, float G){
+  float2 a,b; float sg; wRope(i,G,a,b,sg);
+  float2 cu=normalize(b-a), nn=float2(-cu.y,cu.x); if(dot(nn,float2(.35,-1.))<0.) nn=-nn;
+  return lerp(a,b,t)+nn*sg*4.*t*(1.-t);
+}
+// one thin sagging thread from a to b: uneven width, beads of dust, a soft fuzz. grow: 0..1+ how much of it is spun yet.
+float wLine(float2 p, float2 a, float2 b, float sg, float w, float aa, float seed, float grow, float fuzz){
+  float2 ch=b-a; float L=length(ch); float2 cu=ch/L, nn=float2(-cu.y,cu.x); if(dot(nn,float2(.35,-1.))<0.) nn=-nn;
+  float u=dot(p-a,cu)/L, h=dot(p-a,nn);
+  float uc=clamp(u,0.,1.), s=sg*4.*uc*(1.-uc), ds=sg*4.*(1.-2.*uc)/L;
+  float d=abs(h-s)/sqrt(1.+ds*ds);
+  if(u<-.03||u>1.03||d>w*9.+aa*3.) return 0.;
+  float ww=w*(.55+.9*wN(float2(uc*L*26.,seed)))*(1.+1.6*smoothstep(.78,.95,wN(float2(uc*L*64.,seed+3.))));
+  float core=(1.-smoothstep(max(ww-aa,0.)*.4,ww+aa,d))*min(1.,ww*2.4/(aa*1.5+1e-4));
+  float halo=(1.-smoothstep(0.,ww*4.5+aa*2.,d))*.22*fuzz*(.6+.8*wN(p*110.+seed));
+  return max(core,halo)*smoothstep(-.02,.01,u)*(1.-smoothstep(.99,1.02,u))*(1.-smoothstep(grow-.08,grow,uc));
+}
+// the cobweb: rgb = its light (premultiplied, never above a), a = how much it covers
+float4 wWeb(float2 p, float amt, float dust, float aa){
+  if(amt<=.001 || dot(p,float2(-.62,.78))<-.5) return float4(0., 0., 0., 0.);   // it lives in the upper left, under the light
+  float G=min(amt,1.3), keep=.75*AGE1.w, W=AGE2.x;
+  float rope=0., fine=0., gz=0., shd=0.;
+  float thrH=.24+.18*smoothstep(.55,1.,G);                      // old gauze tears: the holes only grow
+  [unroll] for(int i=0;i<8;i++){
+    float fi=float(i), age=G-fi*.055;
+    if(age>0. && (i<2 || hash(float2(fi,3.3))<keep)){
+      float2 a,b; float sg; wRope(fi,G,a,b,sg);
+      float2 ch=b-a; float L=length(ch); float2 cu=ch/L, nn=float2(-cu.y,cu.x); if(dot(nn,float2(.35,-1.))<0.) nn=-nn;
+      float u=dot(p-a,cu)/L, h=dot(p-a,nn);
+      if(u>-.03 && u<1.03){
+        float uc=clamp(u,0.,1.), s=sg*4.*uc*(1.-uc), ds=sg*4.*(1.-2.*uc)/L;
+        float e=h-s, d=abs(e)/sqrt(1.+ds*ds);
+        float w=(i<2?.016:.006+.008*hash(float2(fi,8.8)))*W*(.12+.88*smoothstep(0.,.6,age))*(.6+.6*dust*AGE2.w);
+        shd=max(shd,(1.-smoothstep(0.,w*5.+.01,abs(e-.014-w)))*smoothstep(-.02,.03,u)*(1.-smoothstep(.97,1.02,u))*min(age*8.,1.));   // its soft shadow on the medal
+        if(d<w*9.+aa*3.){
+          float ww=w*(.55+.9*wN(float2(uc*L*26.,fi*7.+1.)))*(1.+1.6*smoothstep(.78,.95,wN(float2(uc*L*64.,fi*5.+3.))));
+          float dr=d+(wN(p*75.+fi*3.)-.5)*ww*1.3;                // a ragged, furry outline
+          float core=(1.-smoothstep(ww*.25,ww*1.15+aa,dr))*min(1.,ww*2.4/(aa*1.5+1e-4))*(.62+.3*wN(float2(uc*L*40.,e*160.)+fi));
+          float halo=(1.-smoothstep(ww*.5,ww*3.4+aa*2.,dr))*.42*smoothstep(0.,.4,age)*(.35+1.1*wN(p*130.+fi));   // fur
+          rope=max(rope,max(core,halo)*smoothstep(-.02,.01,u)*(1.-smoothstep(.99,1.02,u))*(1.-smoothstep(age/.07-.08,age/.07,uc)));
+        }
+        float gage=age-.2-.2*hash(float2(fi,6.1));               // gauze: later, on the rim-to-rim ropes
+        if(gage>0. && u>0. && u<1.){
+          float skirt=(.03+.16*wF(float2(uc*L*6.,fi*3.+2.)))*min(gage*3.,1.);   // a ragged hem hangs below the rope
+          float reg=e<0. ? (fmod(fi,2.)<.5 ? smoothstep(0.,.05,.955-length(p)) : 0.) : 1.-smoothstep(skirt*.3,skirt,e);
+          if(reg>0.){
+            float holes=smoothstep(thrH-.12,thrH+.1,wF(p*5.5+fi*3.7));
+            float fibre=(.55+.45*wN(float2(uc*L*9.+fi,e*85.)))*(.7+.3*wN(p*70.));
+            gz=max(gz,reg*holes*(.4+.6*fibre)*smoothstep(0.,.35,gage)*smoothstep(0.,.05,uc)*(1.-smoothstep(.95,1.,uc)));
+          }
+        }
+      }
+    }
   }
-  guy *= smoothstep(.35, .7, A);
-  float2 L2 = normalize(float2(-.42, .46)), rd = rr > 1e-4 ? pc/rr : float2(1., 0.);
-  float glint = ins*min(A*1.3, 1.)*fib*AGE2.y*(.6 + .4*(1. - abs(dot(rd, L2)))) + border*.5 + guy*.4;
-  float al = saturate(min(dens*.75 + border*.7 + guy*.5, .9));
-  float3 silk = float3(.80, .79, .76), dusty = float3(.56, .54, .50);
-  float3 rgb = lerp(silk, dusty, saturate(AGE2.w*.7*(.5 + .5*veil)))*al*.62 + silk*glint*.35
-             + AGE_RAINBOW*glint*(.5 + .5*cos(6.283*(th*3. + rr*4. + float3(0., .33, .67))));
-  return float4(min(rgb, v3(al)), al);
+  [unroll] for(int k=0;k<12;k++){                                       // fine threads from rope to rope
+    float fk=float(k);
+    float ia=floor(hash(float2(fk,1.2))*7.99), ib=fmod(ia+1.+floor(hash(float2(fk,2.6))*2.99),8.);
+    float age=G-max(.08+.065*fk,max(ia,ib)*.055+.03);
+    if(age>0. && hash(float2(fk,4.4))<keep && (ia<1.5||hash(float2(ia,3.3))<keep) && (ib<1.5||hash(float2(ib,3.3))<keep)){
+      float2 a=wOn(ia,.15+.7*hash(float2(fk,5.5)),G), b=wOn(ib,.15+.7*hash(float2(fk,6.6)),G);
+      float m=wLine(p,a,b,.03*length(b-a),.0017*W*(.45+.55*smoothstep(0.,.5,age)),aa,fk*3.1,age/.06,smoothstep(0.,.5,age));
+      if(G>.8 && hash(float2(fk,9.9))>.7){ float u=wSeg(p,a,b).y; m*=smoothstep(.0,.1,abs(u-.5)-.1*smoothstep(.8,1.,G)); }   // an old one snaps
+      fine=max(fine,m);
+    }
+  }
+  [unroll] for(int k=0;k<6;k++){                                        // drop lines hanging from the ropes, beaded with dust
+    float fk=float(k), ia=floor(hash(float2(fk,11.2))*7.99);
+    float age=G-max(.05+.08*fk,ia*.055+.02);
+    if(age>0. && hash(float2(fk,14.4))<keep && (ia<1.5||hash(float2(ia,3.3))<keep)){
+      float2 a=wOn(ia,.2+.6*hash(float2(fk,15.5)),G);
+      float2 b=a+float2((hash(float2(fk,16.6))-.5)*.1,-(.09+.2*hash(float2(fk,17.7))));
+      fine=max(fine,wLine(p,a,b,.004,.0016*W*(.45+.55*smoothstep(0.,.5,age)),aa,fk*5.3+40.,age/.05,smoothstep(0.,.5,age)));
+    }
+  }
+  float gza=clamp(gz*AGE2.z*2.3,0.,.8);
+  float al=clamp(max(rope,fine*.5)+gza*(1.-rope),0.,.94);
+  float3 silk=float3(.86,.85,.83), dusty=float3(.70,.69,.66);
+  float lite=.86+.14*smoothstep(-1.,1.,p.y)+.12*AGE2.y*fine*(1.-dust*.6)-.14*gza*(1.-rope);   // fresh silk glints; dusty silk does not
+  float3 rgb=lerp(silk,dusty,clamp(AGE2.w*(.45+.55*dust),0.,1.))*al*lite
+          +AGE_RAINBOW*max(rope,fine)*(1.-dust)*.3*(.5+.5*cos(6.283*(p.x*5.+p.y*3.+float3(0.,.33,.67))));
+  return float4(min(rgb,v3(al)),al+(1.-al)*max(shd*.4,gza*.15));
 }
-// age a premultiplied colour. p: on the face (radius 1, +y up). recess: how sheltered. metal: 1 metal, 0 stone.
-float3 aged(float3 col, float a, float2 p, float recess, float metal, float aa){
-  float dust = min(uWear.x*AGE0.x, 1.), web = uWear.z*AGE1.z;   // dust and cobwebs only (no scratches: the owner 11-22)
-  if (dust + web < .002 || a <= 0.) return col;
-  float lum = dot(col, float3(.299, .587, .114))/max(a, .01);
-  // gravity: the top gets dust first, the bottom lags (its share = dust^(1+2*how low)) but a year covers all of it
-  float low = 1. - smoothstep(-1., 1., p.y + (wF(p*2.5 + 3.) - .5)*.3);
-  float dl = pow(max(dust, 1e-4), 1. + 2.*low*AGE0.z);
-  float film = lerp(smoothstep(.15, .85, wF(p*3.2 + 11.))*AGE0.y + (1. - AGE0.y), 1., dl*dl);
-  float T = dl*film*(1. + .35*min(recess, 1.));
-  // a thin layer: the mirror goes hazy at once (no reflections under dust), the colour still shows, pale and flat
-  float mx = max(max(col.r, col.g), max(col.b, .001));
-  float3 matte = (col/mx*(.17 + .07*smoothstep(-1., 1., p.y)) + float3(.15, .145, .135))*a*(1. - .12*min(recess, 1.));
-  col = lerp(col, matte, smoothstep(0., .55, T)*AGE0.w);
-  // a thick layer: soft light-grey felt hides the metal; the relief only reads faintly (dust fills the hollows)
-  float grain = .92 + .08*wN(p*90. + 1.) + .06*(wF(p*14. + 5.) - .5);
-  float grit = smoothstep(.82, .97, wN(p*170. + 3.)) + .7*smoothstep(.9, .99, wN(p*60. + 9.));
-  float lint = smoothstep(.012, 0., abs(wN(p*7. + 31.) - .5))*smoothstep(.78, .86, wN(p*2.3 + 5.));
-  float3 dc = float3(.62, .60, .56)*a;
-  float3 felt = dc*(.62 + .10*smoothstep(-1., 1., p.y))*grain*(1. - .12*min(recess, 1.));
-  col = lerp(col, felt, clamp(pow(smoothstep(.12, 1., T), 1.3), 0., .97));
-  col = lerp(col, dc*.85, clamp((grit*AGE1.x + lint*AGE1.y)*smoothstep(.1, .6, T), 0., .5));
-  float4 wb = wWeb(p, web, aa);
-  col = col*(1. - wb.a) + wb.rgb*a;
+// age a (premultiplied) colour. p: on the face (radius 1, +y up). recess: how sheltered (dust piles up there).
+// flt: 1 on a flt surface, lower on a steep wall (dust slides off). metal: 1 metal, 0 stone.
+float3 aged(float3 col, float a, float2 p, float recess, float flt, float metal, float aa){
+  float dust=min(uWear.x*AGE0.x,1.), web=uWear.z*AGE1.z;
+  if(dust+web<.002 || a<=0.) return col;
+  float rc=min(recess,1.);
+  // how much has settled here: the top first (the bottom's share = dust^(1+2*how low)), little on steep walls, more in hollows
+  float low=1.-smoothstep(-1.,1.,p.y+(wF(p*2.5+3.)-.5)*.3);
+  float dl=pow(max(dust,1e-4),1.+2.*low*AGE0.z);
+  float wall=1.-smoothstep(.72,.97,flt);
+  float T=dl*lerp(1.,lerp(.05,.7,dl*dl),wall)*(1.+1.3*rc);
+  float Tc=min(T,1.);
+  // grains: clumps, coarse grains, fine grains. A grain is there once the layer passes its own threshold, so more dust =
+  // more grains (none ever moves). Small tiles cannot show the fine ones (f1, f2 fade them out: no shimmer).
+  float f1=clamp(2.-aa*38.,0.,1.), f2=clamp(2.-aa*95.,0.,1.), f3=clamp(1.6-aa*170.,0.,1.);
+  float clump=wF(p*4.3+11.)/.875;
+  float g1=wN(p*38.+1.), g2=wN(p*95.+7.), g3=wN(p*170.+4.);
+  float n=lerp(.5,clump,AGE0.y)*.42+lerp(.5,g1,f1)*.2+lerp(.5,g2,f2)*.24+lerp(.5,g3,f3)*.14;
+  float thr=.80-.72*Tc;
+  float cov=smoothstep(thr-.03,thr+.05,n)*smoothstep(0.,.04,T);
+  float thick=smoothstep(0.,.3,n-thr);
+  float2 Ld=float2(-.6,.8)*.006;                                  // towards the light
+  float sh=clamp(1.+((g1-wN((p+Ld)*38.+1.))*.35*f1+(g2-wN((p+Ld*.5)*95.+7.))*.65*f2)*1.1,.78,1.22);
+  // a thin layer: the mirror goes hazy (dust scatters the light), the colour still shows through
+  float mx=max(max(col.r,col.g),max(col.b,.001));
+  float3 matte=(col/mx*(.17+.07*smoothstep(-1.,1.,p.y))+float3(.15,.145,.135))*a*(1.-.12*rc);
+  col=lerp(col,matte,smoothstep(0.,.6,T)*AGE0.w);
+  // the grains themselves: light grey, each a little different, lit from the top left; dark specks and pale grains
+  float3 dc=float3(.60,.585,.55);
+  float tone=(.50+.10*smoothstep(-1.,1.,p.y)+.16*thick)*(.80+.22*lerp(.5,g2,f2)+.22*lerp(.5,g3,f3)+.25*(clump-.5)+.3*(wF(p*13.+2.)-.44))*sh*(1.-.18*rc);
+  float3 dustc=dc*tone;
+  dustc*=1.-.5*smoothstep(.86,.95,wN(p*150.+3.))*f2*AGE1.x;
+  dustc+=dc*.22*smoothstep(.9,.97,wN(p*60.+9.))*f1*AGE1.x;
+  col=lerp(col,dustc*a,cov*(.45+.52*thick));
+  // lint: long fibres lie anywhere (on clean metal too), short fuzz grows in the thick dust
+  float lint=wHair(p,8.,.0022,aa,.4*smoothstep(.05,.7,dl)*AGE1.y);
+  float fuzz=wHair(p+5.3,19.,.0017,aa,.8*smoothstep(.3,.9,T)*AGE1.y);
+  col=lerp(col,float3(.72,.71,.68)*a,lint*.5);
+  col=lerp(col,float3(.70,.69,.66)*a,fuzz*.4);
+  float4 wb=wWeb(p,web,dust,aa);
+  col=col*(1.-wb.a)+wb.rgb*a;
   return col;
 }
 
@@ -589,7 +661,17 @@ float4 main(float4 sv : SV_Position) : SV_Target {
     c = brill(p, r, aa, t);
     rec = smoothstep(.86, 1., r)*.6;
   }
-  c.rgb = aged(c.rgb, c.a, p, rec, uKind > 1.5 ? 1. : 0., aa);
+  float fl = 1. - .3*smoothstep(.5, 1., r);            // how flat it is here: dust slides off the steep parts
+  if (uKind > 1.5){
+    fl = 1.;
+    if (r > .83){ float sl = cos(clamp((r - .83)/(.975 - .83), 0., 1.)*PI)*1.25; fl = 1./sqrt(1. + sl*sl); }   // the flanks of the rim bead
+    else if (uIconOn > 0. && uWear.x > 0.){                                                                  // the walls of the engraving
+      float e = max(aa, .008);
+      float2 gi = float2(icA(p + float2(e, 0.)) - icA(p - float2(e, 0.)), icA(p + float2(0., e)) - icA(p - float2(0., e)));
+      fl = 1./sqrt(1. + dot(gi, gi)*5.);
+    }
+  }
+  c.rgb = aged(c.rgb, c.a, p, rec, fl, uKind > 1.5 ? 1. : 0., aa);
   return c;
 }
 "#;

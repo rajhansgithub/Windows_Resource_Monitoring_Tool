@@ -396,7 +396,7 @@ pub struct Care {
 }
 
 /// How worn a medal looks now. Medals age with real time, 1 real hour = 1 day on the shelf: dust settles over months
-/// (63% at 120 days, a grey felt over the whole medal by a year), cobwebs start after 10 days and are full by 50. Polishing: every rub clears the webs and
+/// (63% at 120 days, a grey felt over the whole medal by a year), cobwebs start after a week and keep growing for most of a year. Polishing: every rub clears the webs and
 /// takes half the dust. `scratch` stays 0 (scratches were dropped).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Wear {
@@ -503,7 +503,7 @@ impl State {
         let dust = 1.0 - (1.0 - d0) * (-days / 120.0).exp(); // a year on the shelf covers it
         let _ = s0;
         let scratch = 0.0; // dust and cobwebs only: scratches looked wrong (the owner, 2026-11-22)
-        let web = if days < 10.0 { 0.0 } else { ((days - 10.0) / 40.0).min(1.0).powf(0.8) };
+        let web = if days < 7.0 { 0.0 } else { ((days - 7.0) / 300.0).min(1.0).powf(0.8) }; // it grows thread by thread, for most of a year
         let condition = (100.0 * (1.0 - (0.7 * dust + 0.3 * web))).round().clamp(0.0, 100.0) as u8;
         Wear { dust, scratch, web, days, condition, clean: dust < 0.02 && scratch < 0.03 && web < 0.01, polishes: n }
     }
@@ -2137,7 +2137,7 @@ mod tests {
         let w5 = s.wear("watch", at + 5 * WEAR_DAY_MS);
         assert!(w5.dust > 0.02 && w5.dust < 0.08 && w5.web == 0.0, "{w5:?}");
         let w30 = s.wear("watch", at + 30 * WEAR_DAY_MS);
-        assert!((w30.dust - 0.221).abs() < 0.01 && w30.web > 0.3 && w30.scratch == 0.0, "{w30:?}");
+        assert!((w30.dust - 0.221).abs() < 0.01 && w30.web > 0.1 && w30.web < 0.2 && w30.scratch == 0.0, "{w30:?}");
         assert!(s.wear("watch", at + 365 * WEAR_DAY_MS).dust > 0.94, "a year covers it");
         assert!(w30.condition < w5.condition);
         assert!(s.wear("nope", at + 99 * WEAR_DAY_MS).clean);
