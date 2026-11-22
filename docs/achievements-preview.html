@@ -2482,18 +2482,18 @@ void main(){
     applyWear(el);
   }
 
-  /* ------------------------------------------------------------------ age: dust and scratches build up with real time, 1 real hour = 1 day on the shelf.
-     Dust settles in about a month (63% at 30 days), scratches in about five (63% at 150 days). Polishing: each rub takes half the dust and
-     a quarter of the scratches, so dust comes off first and scratches need more rubs. The bubble never ages. Kept per badge in this browser
-     (rm-wear-v1); the app keeps the same record per badge in achievements.json. */
-  const HOUR_MS = 3600e3, WEAR_KEY = 'rm-wear-v1';
+  /* ------------------------------------------------------------------ age (achievements plugin v4): 1 real hour = 1 day on the shelf.
+     Per medal: [start, dust left, web cleared] (the app keeps the same per "badgeId:tier" in achievements.json, key "ag").
+     Dust shown = dust left x the dust curve from start (full at a year). A rub clears the cobweb (it regrows from that day) and
+     keeps 70% of the dust; the dust clock keeps running. Spotless: the clocks start again, + bonus. The bubble never ages. */
+  const HOUR_MS = 3600e3, WEAR_KEY = 'rm-wear-v2';
   const WEAR = (() => { try { const o = JSON.parse(store.get(WEAR_KEY) || '{}'); return o && typeof o === 'object' ? o : {}; } catch (e) { return {}; } })();
   if (!WEAR._) WEAR._ = { shine: 0 };
   const saveWear = () => store.set(WEAR_KEY, JSON.stringify(WEAR));
   const hid = (str) => { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0) / 4294967296; };
   function wearRec(id) {
     let r = WEAR[id];
-    if (!r) { r = WEAR[id] = { d: 0, s: 0, t: Date.now() - (4 + 36 * hid(id)) * HOUR_MS, n: 0 }; saveWear(); }   // DEMO: last cleaned 4 to 40 days ago
+    if (!r) { const t = Date.now() - (4 + 36 * hid(id)) * HOUR_MS; r = WEAR[id] = { a: t, l: 1, w: t }; saveWear(); }   // DEMO: earned 4 to 40 days ago
     return r;
   }
   /** This medal's own seed for its cobweb and dust (0..1). FNV-1a of the id, then a murmur3 finish so ids one letter apart
@@ -2503,21 +2503,22 @@ void main(){
     h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16;
     return (h >>> 0) / 4294967296;
   }
+  const dustCurve = (days) => Math.min(1, YTPMAge.dustAmt * (1 - Math.exp(-Math.max(0, days) / YTPMAge.dustDays)));
+  const webCurve = (days) => days < YTPMAge.webStart ? 0 : Math.min(1, Math.pow((days - YTPMAge.webStart) / YTPMAge.webSpan, .8));
   function wearOf(id) {
-    const r = wearRec(id), days = Math.max(0, (Date.now() - r.t) / HOUR_MS);
-    const A = window.YTPMAge;
-    const d = Math.min(1, A.dustAmt * (1 - (1 - r.d) * Math.exp(-days / A.dustDays))), s = 0;   // dust and cobwebs only: no scratches (the owner 11-22). r.d is before the dust amount
-    const w = days < A.webStart ? 0 : Math.min(1, Math.pow((days - A.webStart) / A.webSpan, .8));   // cobwebs: start after 20 days, grow for most of a year
-    return { d, s, sd: webSeed(id), w, days, n: r.n || 0, cond: Math.round(100 * (1 - (.7 * d + .3 * w))), clean: d < .02 && w < .01 };
+    const r = wearRec(id), now = Date.now(), ds = Math.max(0, (now - r.a) / HOUR_MS), dw = Math.max(0, (now - Math.max(r.w, r.a)) / HOUR_MS);
+    const d = r.l * dustCurve(ds), s = 0, w = webCurve(dw);   // dust and cobwebs only: no scratches (the owner 11-22)
+    return { d, s, sd: webSeed(id), w, days: dw, n: r.w > r.a ? 1 : 0, cond: Math.round(100 * (1 - (.7 * d + .3 * w))), clean: d < .02 && w < .01 };
   }
+  /** One rub: clears the cobweb (it regrows from now), keeps 70% of the dust (the tuner's "dust off per rub"). Spotless: start again. */
   function polish(id) {
-    const w = wearOf(id), r = WEAR[id];
-    r.d = w.d * (1 - window.YTPMAge.rubDust) / Math.max(window.YTPMAge.dustAmt, .01); r.s = 0;
-    if (r.d * window.YTPMAge.dustAmt < .015) r.d = 0;
-    r.t = Date.now(); r.n = (r.n || 0) + 1; saveWear();
+    const w = wearOf(id), r = wearRec(id), now = Date.now(), keep = 1 - YTPMAge.rubDust;
+    r.l *= keep; r.w = now;
+    if (r.l < .05 || w.d * keep < .02) { r.a = now; r.l = 1; r.w = now; }
+    saveWear();
     return wearOf(id);
   }
-  function ageDay(id) { wearRec(id).t -= HOUR_MS; saveWear(); return wearOf(id); }   // test: one more day on the shelf
+  function ageDay(id) { const r = wearRec(id); r.a -= HOUR_MS; r.w -= HOUR_MS; saveWear(); return wearOf(id); }   // test: one more day on the shelf
   function applyWear(scope) {
     $$('canvas.ach-gemgl[data-wid]', scope || document).forEach((c) => { const w = wearOf(c.dataset.wid); try { YTPMGem.set(c, { wear: [w.d, w.sd, w.w] }); } catch (e) { /* ignore */ } });
   }
@@ -2528,7 +2529,8 @@ void main(){
   /* ------------------------------------------------------------------ versions: each stores only its settings; engines load once.
      To add a version: add an entry here (newest first) and a builder in BUILDERS. Earlier versions stay in the page, live. */
   const VERSIONS = [
-    { id: 'v4', label: 'v4 · Shaders verified on Windows', note: 'Current. The HLSL medal, stone and bubble shaders compiled and rendered on Windows (CI, 22 Nov 2026). No fallback to flat medals. In the full view every medal is a real 3D object: drag it. Medals age with real time (1 hour = 1 day): grainy dust that piles up in the hollows, and cobwebs that grow thread by thread after 20 days. Every medal gets its own web. Polish them in the full view.' },
+    { id: 'v5', label: 'v5 · Aging per plugin v0.6.0', note: 'Current. Aging follows the achievements plugin v0.6.0: each medal keeps [start, dust left, web cleared] per tier. The dust clock runs from the day the tier was earned; a rub clears the cobweb (it grows back from that day) and takes 30% of the dust. Spotless starts the clocks again, with a bonus. Your saved look (366 days) is the default; every medal has its own web. Tests cover the dust curve at 10 to 365 days, cobweb from day 20 to 350, rubs, new tiers, the bubble, and the same seed in the page and the app.' },
+    { id: 'v4', label: 'v4 · Shaders verified on Windows', note: 'The HLSL medal, stone and bubble shaders compiled and rendered on Windows (CI, 22 Nov 2026). No fallback to flat medals. In the full view every medal is a real 3D object: drag it. Medals age with real time (1 hour = 1 day): grainy dust that piles up in the hollows, and cobwebs that grow thread by thread after 20 days. Every medal gets its own web. Polish them in the full view.' },
     { id: 'v3', label: 'v3 · Built into the app', note: 'Core, observer, window, pop-ups and full view are in the app (v2.13.0). Build status as it stood before the Windows run.' },
     { id: 'v2', label: 'v2 · Uptime Medals picked', note: 'The theme is picked; the build status as it stood then.' },
     { id: 'v1', label: 'v1 · Theme options', note: 'Earlier options: the three themes shown before the pick (Case Badges, Uptime Medals, Hall of Fame Plaques).' }
@@ -2863,7 +2865,7 @@ void main(){
     const age = $('.ag-age', d), out = $('.ag-days', d);
     age.addEventListener('input', () => {
       const n = +age.value, r = wearRec(e.id);
-      r.d = 0; r.s = 0; r.n = 0; r.t = Date.now() - n * HOUR_MS; saveWear();
+      r.a = r.w = Date.now() - n * HOUR_MS; r.l = 1; saveWear();
       out.textContent = n; wearRefresh(e, wearOf(e.id));
     });
     const set = { box: d, inputs: {} };
@@ -3032,7 +3034,7 @@ void main(){
   }
 
   /* ------------------------------------------------------------------ versions bar + panels */
-  const BUILDERS = { v4: buildV4, v3: buildV3, v2: () => buildV2(), v1: buildV1 };
+  const BUILDERS = { v5: buildV4, v4: buildV4, v3: buildV3, v2: () => buildV2(), v1: buildV1 };
   const panelsEl = $('#panels'), tabsEl = $('#vtabs');
   let cur = null;
   function renderTabs() {
@@ -3130,7 +3132,7 @@ void main(){
       <div class="wr-bar" role="progressbar" aria-label="Condition" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${w.cond}" id="wrBarR"><i id="wrBar" style="width:${w.cond}%;--wc:${wearColour(w.cond)}"></i></div>
       <div class="wr-sub" id="wrSub" aria-live="polite">${esc(wearWords(w))}</div>
       <div class="wr-row"><button type="button" class="wr-btn${w.clean ? ' done' : ''}" id="wrPolish">${w.clean ? 'Spotless ✦' : 'Polish ✦'}</button><button type="button" class="wr-ff" id="wrAge" title="Test: one more day on the shelf">+1 day</button><button type="button" class="wr-ff" id="wrAge10" title="Test: ten more days on the shelf">+10 days</button></div>
-      <div class="wr-note">Ages like the real thing: 1 hour here is 1 day on the shelf. Cobwebs come after 10 days. One rub clears the webs, the dust takes a few more. Shine <b id="wrShine">${WEAR._.shine || 0}</b> ✦</div></div>`;
+      <div class="wr-note">Ages like the real thing: 1 hour here is 1 day on the shelf. Cobwebs start after 20 days. One rub clears the web (it grows back), each rub takes 30% of the dust. Shine <b id="wrShine">${WEAR._.shine || 0}</b> ✦</div></div>`;
   }
   function wearUI(w) {
     const set = (id, f) => { const el = document.getElementById(id); if (el) f(el); };

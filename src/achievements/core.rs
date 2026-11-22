@@ -383,17 +383,18 @@ pub struct Run {
     pub i: u32,
 }
 
-/// Care of one medal: when it was last polished and how worn it still was right after (permille).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Care {
-    /// Last polish (unix ms).
-    pub t: u64,
-    /// Dust and scratches left after that polish, 0..=1000.
-    pub d: u16,
-    pub s: u16,
-    /// Polishes so far.
-    pub n: u32,
+/// Aging of one medal (achievements plugin v4 `ag`): key "badgeId:tier" -> [startMs, dustLeft, webClearedMs].
+/// The dust clock runs from `start` (when that tier was earned, or the last spotless polish); a rub only scales it
+/// (`left`). The cobweb regrows from `web` (the last rub).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Age {
+    pub start: u64,
+    /// 0..=1: how much of the dust curve is still on it.
+    pub left: f32,
+    pub web: u64,
 }
+// `left` is always finite (normalize and from_json make sure), so equality is total.
+impl Eq for Age {}
 
 /// The age clock. Look = the owner's saved tuning (preview "Save for Claude" at 366 days, 2026-11-22), timed so that look
 /// arrives at a year: dust = min(1, 2 * (1 - e^(-days/527))) is full at 365; the cobweb starts at day 20 and is full at 350.
@@ -404,6 +405,16 @@ const WEB_SPAN: f32 = 330.0;
 /// One rub keeps 70% of the dust (a few rubs to get it spotless).
 const RUB_KEEP: f32 = 0.7;
 
+/// Dust on a medal left alone for `days`: min(1, 2(1 - e^(-days/527))), full at a year.
+pub fn dust_curve(days: f32) -> f32 {
+    (DUST_AMT * (1.0 - (-days.max(0.0) / DUST_DAYS).exp())).min(1.0)
+}
+
+/// The cobweb, `days` after it was last cleared: none before day 20, full at day 350.
+pub fn web_curve(days: f32) -> f32 {
+    if days < WEB_START { 0.0 } else { ((days - WEB_START) / WEB_SPAN).min(1.0).powf(0.8) }
+}
+
 /// How worn a medal looks now. Medals age with real time, 1 real hour = 1 day on the shelf: dust settles over months
 /// (a grey layer over the whole medal at a year), cobwebs start after 20 days and keep growing for most of a year. Polishing: every rub clears the webs and
 /// takes 30% of the dust. `scratch` stays 0 (scratches were dropped).
@@ -412,7 +423,7 @@ pub struct Wear {
     pub dust: f32,
     pub scratch: f32,
     pub web: f32,
-    /// Days on the shelf (real hours) since it was struck or last polished.
+    /// Days (real hours) since the last rub, or since it was struck if never polished.
     pub days: f32,
     /// 0..=100.
     pub condition: u8,
@@ -460,8 +471,8 @@ pub struct State {
     pub al: BTreeMap<u8, u64>,
     /// Emulsion gate is open (FREE mode). Never closes again.
     pub g: bool,
-    /// Medal care (polishing): badge id -> last polish.
-    pub cl: BTreeMap<String, Care>,
+    /// Aging per medal: "badgeId:tier" -> its clocks (see `Age`).
+    pub ag: BTreeMap<String, Age>,
     /// Shine points from polishing.
     pub sh: u64,
 }
@@ -486,7 +497,7 @@ impl Default for State {
             tm: (0, 0),
             al: BTreeMap::new(),
             g: false,
-            cl: BTreeMap::new(),
+            ag: BTreeMap::new(),
             sh: 0,
         }
     }
@@ -498,46 +509,50 @@ impl State {
         self.kd.get(id).and_then(|v| v.last().copied()).filter(|&t| t > 0).or_else(|| self.u.get(id).copied()).unwrap_or(0)
     }
 
-    /// How worn the medal `id` looks at `now_ms` (see `Wear`). A new tier is a new medal: it starts clean.
+    /// The aging key of the medal on show: "badgeId:tier".
+    fn age_key(&self, id: &str) -> String {
+        format!("{id}:{}", self.tier(id))
+    }
+
+    /// The clocks of the medal on show: (start, dust left, web cleared). A new tier is a new medal: it starts clean.
+    fn age_of(&self, id: &str) -> (u64, f32, u64) {
+        let struck = self.struck_ms(id);
+        match self.ag.get(&self.age_key(id)) {
+            Some(a) if a.start >= struck => (a.start, a.left, a.web.max(a.start)),
+            _ => (struck, 1.0, struck),
+        }
+    }
+
+    /// How worn the medal `id` looks at `now_ms` (see `Wear`). The Emulsion bubble never ages.
     pub fn wear(&self, id: &str, now_ms: u64) -> Wear {
-        if !self.earned(id) {
+        if !self.earned(id) || self.tier(id) >= 7 {
             return Wear { condition: 100, clean: true, ..Wear::default() };
         }
-        let struck = self.struck_ms(id);
-        let (t, d0, s0, n) = match self.cl.get(id) {
-            Some(c) if c.t >= struck => (c.t, c.d as f32 / 1000.0, c.s as f32 / 1000.0, c.n),
-            _ => (struck, 0.0, 0.0, 0),
-        };
-        let days = now_ms.saturating_sub(t) as f32 / WEAR_DAY_MS as f32;
-        let dust = (DUST_AMT * (1.0 - (1.0 - d0) * (-days / DUST_DAYS).exp())).min(1.0); // d0 is before the dust amount; full at a year
-        let _ = s0;
-        let scratch = 0.0; // dust and cobwebs only: scratches looked wrong (the owner, 2026-11-22)
-        let web = if days < WEB_START { 0.0 } else { ((days - WEB_START) / WEB_SPAN).min(1.0).powf(0.8) }; // it grows thread by thread, for most of a year
+        let (start, left, webc) = self.age_of(id);
+        let day = |t: u64| now_ms.saturating_sub(t) as f32 / WEAR_DAY_MS as f32;
+        let dust = left * dust_curve(day(start));
+        let web = web_curve(day(webc));
+        let polished = webc > start;
         let condition = (100.0 * (1.0 - (0.7 * dust + 0.3 * web))).round().clamp(0.0, 100.0) as u8;
-        Wear { dust, scratch, web, days, condition, clean: dust < 0.02 && scratch < 0.03 && web < 0.01, polishes: n }
+        Wear { dust, scratch: 0.0, web, days: day(webc), condition, clean: dust < 0.02 && web < 0.01, polishes: polished as u32 }
     }
 
     /// One rub of the polishing cloth. Returns the new look and the shine points it earned (0 when already spotless).
+    /// A rub clears the cobweb (it regrows from now) and keeps 70% of the dust. Spotless: the clocks start again, + bonus.
     pub fn polish(&mut self, id: &str, now_ms: u64) -> (Wear, u64) {
         let w = self.wear(id, now_ms);
         if !self.earned(id) || w.clean {
             return (w, 0);
         }
-        let mut d = w.dust * RUB_KEEP;
-        let mut s = w.scratch * 0.72;
-        if d < 0.015 {
-            d = 0.0;
-        }
-        if s < 0.02 {
-            s = 0.0;
-        }
-        let d = d / DUST_AMT; // stored before the dust amount
-        let c = Care { t: now_ms, d: (d * 1000.0).round().min(1000.0) as u16, s: (s * 1000.0).round().min(1000.0) as u16, n: w.polishes + 1 };
-        self.cl.insert(id.to_string(), c);
-        let nw = self.wear(id, now_ms);
-        let gain = SHINE_RUB + if nw.clean { SHINE_SPOTLESS } else { 0 };
+        let (start, left, _) = self.age_of(id);
+        let left = left * RUB_KEEP;
+        let spotless = left < 0.05 || w.dust * RUB_KEEP < 0.02;
+        let a = if spotless { Age { start: now_ms, left: 1.0, web: now_ms } } else { Age { start, left, web: now_ms } };
+        let key = self.age_key(id);
+        self.ag.insert(key, a);
+        let gain = SHINE_RUB + if spotless { SHINE_SPOTLESS } else { 0 };
         self.sh = self.sh.saturating_add(gain);
-        (nw, gain)
+        (self.wear(id, now_ms), gain)
     }
 
     pub fn tier(&self, id: &str) -> u8 {
@@ -1141,7 +1156,13 @@ pub fn merge(a: &State, b: &State) -> State {
     m.tm = a.tm.max(b.tm);
     m.al = merge_max(&a.al, &b.al);
     m.g = a.g || b.g;
-    m.cl = merge_max(&a.cl, &b.cl);   // the latest polish wins
+    m.ag = a.ag.clone();   // aging: the newest start wins, then the least dust
+    for (k, v) in &b.ag {
+        let better = |x: &Age| v.start > x.start || (v.start == x.start && (v.left < x.left || (v.left == x.left && v.web > x.web)));
+        if m.ag.get(k).map_or(true, better) {
+            m.ag.insert(k.clone(), *v);
+        }
+    }
     m.sh = a.sh.max(b.sh);
     normalize(m)
 }
@@ -1177,10 +1198,13 @@ pub fn normalize(mut s: State) -> State {
     }
     s.ps.retain(|_, t| *t > 0);
     let u = &s.u;
-    s.cl.retain(|id, _| u.contains_key(id));
-    for c in s.cl.values_mut() {
-        c.d = c.d.min(1000);
-        c.s = c.s.min(1000);
+    let k = &s.k;   // keep aging only for the tier on show of an earned medal (passed tiers drop)
+    s.ag.retain(|key, a| {
+        let (id, tier) = key.rsplit_once(':').unwrap_or((key.as_str(), ""));
+        u.contains_key(id) && tier == k.get(id).copied().unwrap_or(0).to_string() && a.left.is_finite()
+    });
+    for a in s.ag.values_mut() {
+        a.left = a.left.clamp(0.0, 1.0);
     }
     s.d.flat = s.d.flat.min(FLAT_CAP);
     s.w.1 &= 0x7f;
@@ -1254,7 +1278,7 @@ impl State {
             ("tm", Json::Arr(vec![num(self.tm.0), num(self.tm.1)])),
             ("al", map_json(&self.al, |&t| num(t))),
             ("g", num(self.g as u8)),
-            ("cl", map_json(&self.cl, |c| Json::Arr(vec![num(c.t), num(c.d), num(c.s), num(c.n)]))),
+            ("ag", map_json(&self.ag, |a| Json::Arr(vec![num(a.start), Json::Num((a.left as f64 * 1000.0).round() / 1000.0), num(a.web)]))),
             ("sh", num(self.sh)),
         ]);
         j.to_string()
@@ -1286,13 +1310,14 @@ impl State {
             tm: (nth(j.get("tm"), 0) as u32, nth(j.get("tm"), 1)),
             al: read_map(j.get("al"), |k| k.parse::<u8>().ok()),
             g: n("g") != 0,
-            cl: BTreeMap::new(),
+            ag: BTreeMap::new(),
             sh: n("sh"),
         };
-        if let Some(o) = j.get("cl").and_then(|v| v.as_obj()) {
-            for (id, v) in o {
-                let g = |i| nth(Some(v), i);
-                s.cl.insert(id.clone(), Care { t: g(0), d: g(1).min(1000) as u16, s: g(2).min(1000) as u16, n: g(3).min(u32::MAX as u64) as u32 });
+        if let Some(o) = j.get("ag").and_then(|v| v.as_obj()) {
+            for (key, v) in o {
+                let arr = v.as_arr().unwrap_or(&[]);
+                let left = match arr.get(1) { Some(Json::Num(n)) if n.is_finite() => n.clamp(0.0, 1.0) as f32, _ => 1.0 };
+                s.ag.insert(key.clone(), Age { start: nth(Some(v), 0), left, web: nth(Some(v), 2) });
             }
         }
         if let Some(o) = j.get("kd").and_then(|v| v.as_obj()) {
@@ -2144,13 +2169,24 @@ mod tests {
         let s = earned_gold(at);
         let w0 = s.wear("watch", at);
         assert!(w0.clean && w0.condition == 100);
-        let w5 = s.wear("watch", at + 5 * WEAR_DAY_MS);
-        assert!(w5.dust > 0.01 && w5.dust < 0.03 && w5.web == 0.0, "{w5:?}");
-        let w30 = s.wear("watch", at + 30 * WEAR_DAY_MS);
-        assert!((w30.dust - 0.111).abs() < 0.01 && w30.web > 0.05 && w30.web < 0.1 && w30.scratch == 0.0, "{w30:?}");
-        assert!(s.wear("watch", at + 365 * WEAR_DAY_MS).dust > 0.99, "a year covers it");
-        assert!(w30.condition < w5.condition);
+        // the dust curve: min(1, 2(1 - e^(-days/527)))
+        for (d, want) in [(10.0, 0.0377), (30.0, 0.1107), (90.0, 0.3141), (180.0, 0.5781), (270.0, 0.8019), (365.0, 0.9994)] {
+            assert!((dust_curve(d) - want).abs() < 0.002, "day {d}: {}", dust_curve(d));
+            let w = s.wear("watch", at + (d as u64) * WEAR_DAY_MS);
+            assert!((w.dust - want).abs() < 0.002 && w.scratch == 0.0, "{w:?}");
+        }
+        // the cobweb: none before day 20, full at day 350
+        assert_eq!(s.wear("watch", at + 19 * WEAR_DAY_MS).web, 0.0);
+        assert!(s.wear("watch", at + 30 * WEAR_DAY_MS).web > 0.0);
+        assert!(s.wear("watch", at + 349 * WEAR_DAY_MS).web < 1.0);
+        assert_eq!(s.wear("watch", at + 350 * WEAR_DAY_MS).web, 1.0);
+        assert!(s.wear("watch", at + 30 * WEAR_DAY_MS).condition < s.wear("watch", at + 5 * WEAR_DAY_MS).condition);
         assert!(s.wear("nope", at + 99 * WEAR_DAY_MS).clean);
+        // the bubble never ages
+        let mut e = s.clone();
+        e.k.insert("watch".into(), 7);
+        e.kd.get_mut("watch").unwrap().extend([at, at, at, at]);
+        assert!(e.wear("watch", at + 300 * WEAR_DAY_MS).clean);
     }
 
     #[test]
@@ -2158,43 +2194,58 @@ mod tests {
         let at = 1_800_000_000_000;
         let mut s = earned_gold(at);
         let now = at + 60 * WEAR_DAY_MS;
+        let before = s.wear("watch", now);
         let (w1, g1) = s.polish("watch", now);
         assert_eq!(g1, SHINE_RUB);
-        assert_eq!(w1.web, 0.0, "one rub clears the cobwebs");
-        assert!(!w1.clean);
+        assert_eq!(w1.web, 0.0, "the first rub clears the cobweb");
+        assert!((w1.dust - before.dust * 0.7).abs() < 1e-4, "each rub takes 30% of the dust");
+        // the dust clock keeps running from the tier's start; the web regrows from the rub
+        let later = s.wear("watch", now + 25 * WEAR_DAY_MS);
+        assert!((later.dust - 0.7 * dust_curve(85.0)).abs() < 1e-3, "{later:?}");
+        assert!((later.web - web_curve(25.0)).abs() < 1e-4 && later.web > 0.0, "{later:?}");
         let mut rubs = 1;
         let mut last = w1;
+        let mut s2 = s.clone();
         while !last.clean && rubs < 40 {
-            last = s.polish("watch", now).0;
+            last = s2.polish("watch", now).0;
             rubs += 1;
         }
         assert!(last.clean && (4..=20).contains(&rubs), "{rubs} rubs");
-        assert_eq!(s.polish("watch", now).1, 0, "no shine for an already spotless medal");
-        assert_eq!(s.sh, rubs as u64 * SHINE_RUB + SHINE_SPOTLESS);
-        // it ages again from the polish
-        assert!(s.wear("watch", now + 60 * WEAR_DAY_MS).dust > 0.2);
-        // a new tier is a new, clean medal
-        let mut up = s.clone();
+        assert_eq!(s2.polish("watch", now).1, 0, "no shine for an already spotless medal");
+        assert_eq!(s2.sh, rubs as u64 * SHINE_RUB + SHINE_SPOTLESS);
+        // spotless starts the clocks again
+        assert!((s2.wear("watch", now + 60 * WEAR_DAY_MS).dust - dust_curve(60.0)).abs() < 1e-4);
+        // a new tier is a new, clean medal; the old tier's entry drops
+        let mut up = s2.clone();
         up.k.insert("watch".into(), 4);
         up.kd.get_mut("watch").unwrap().push(now + 30 * WEAR_DAY_MS);
+        let up = normalize(up);
         assert!(up.wear("watch", now + 30 * WEAR_DAY_MS).clean);
+        assert!(up.ag.is_empty(), "{:?}", up.ag);
     }
 
     #[test]
-    fn care_round_trips_and_merges_latest() {
+    fn aging_round_trips_and_merges() {
         let at = 1_800_000_000_000;
         let mut a = earned_gold(at);
         a.polish("watch", at + 40 * WEAR_DAY_MS);
         let back = State::from_json(&a.to_json()).unwrap();
-        assert_eq!(back.cl, a.cl);
+        assert_eq!(back.ag.keys().collect::<Vec<_>>(), vec!["watch:3"]);
+        assert!((back.ag["watch:3"].left - 0.7).abs() < 1e-3 && back.ag["watch:3"].web == at + 40 * WEAR_DAY_MS);
         assert_eq!(back.sh, a.sh);
-        let mut b = earned_gold(at);
+        // same start: the least dust wins, in either order
+        let mut b = a.clone();
         b.polish("watch", at + 50 * WEAR_DAY_MS);
         let m = merge(&a, &b);
-        assert_eq!(m.cl["watch"].t, at + 50 * WEAR_DAY_MS);
+        assert!((m.ag["watch:3"].left - 0.49).abs() < 1e-3);
         assert_eq!(merge(&b, &a), m);
+        // a newer start wins over less dust
+        let mut c = earned_gold(at);
+        c.ag.insert("watch:3".into(), Age { start: at + 70 * WEAR_DAY_MS, left: 1.0, web: at + 70 * WEAR_DAY_MS });
+        assert_eq!(merge(&b, &c).ag["watch:3"].start, at + 70 * WEAR_DAY_MS);
+        assert_eq!(merge(&c, &b), merge(&b, &c));
         let mut stray = State::default();
-        stray.cl.insert("ghost".into(), Care { t: 1, d: 5000, s: 0, n: 1 });
-        assert!(normalize(stray).cl.is_empty(), "care only for earned badges");
+        stray.ag.insert("ghost:1".into(), Age { start: 1, left: 5.0, web: 1 });
+        assert!(normalize(stray).ag.is_empty(), "aging only for earned badges");
     }
 }

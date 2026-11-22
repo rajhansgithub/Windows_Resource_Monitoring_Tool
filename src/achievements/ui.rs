@@ -3577,3 +3577,20 @@ pub fn close_all() {
         }
     }
 }
+
+#[cfg(test)]
+mod seed_tests {
+    use super::web_seed;
+
+    /// Same badge id = same cobweb and dust every time, and the same seed as the preview page's `webSeed`
+    /// (values from the page's own function).
+    #[test]
+    fn web_seed_matches_the_preview() {
+        for (id, h) in [("watch", 79835757u32), ("tier0", 2413277403), ("flow", 517522467)] {
+            let want = (h as f64 / 4294967296.0) as f32;
+            assert_eq!(web_seed(id), want, "{id}");
+            assert_eq!(web_seed(id), web_seed(id));
+        }
+        assert!((web_seed("tier0") - web_seed("tier1")).abs() > 0.1, "ids one letter apart differ a lot");
+    }
+}
