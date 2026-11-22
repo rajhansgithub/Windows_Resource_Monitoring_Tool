@@ -2074,15 +2074,15 @@ void main(){
   /* ------------------------------------------------------------------ v4: what Windows actually drew (CI run 44973046644, 22 Nov 2026).
      Numbers are from the test achievements::gpu::tests::shaders_compile_and_every_material_renders (192 px tile, still frame). */
   const VERIFY = [
-    { icon: 'clock', badge: 'Watchkeeper', cov: 73, sd: 39.5, rgb: [133, 95, 62] },
-    { icon: 'flame', badge: 'Heavy Lifting', cov: 73, sd: 47.3, rgb: [139, 140, 143] },
-    { icon: 'gpu', badge: 'Render Farm', cov: 73, sd: 44.4, rgb: [145, 124, 67] },
-    { icon: 'disk', badge: 'Data Mover', cov: 73, sd: 46.5, rgb: [119, 139, 137] },
+    { icon: 'clock', badge: 'Watchkeeper', cov: 73, sd: 61.1, rgb: [108, 77, 49] },
+    { icon: 'flame', badge: 'Heavy Lifting', cov: 73, sd: 65.3, rgb: [113, 114, 116] },
+    { icon: 'gpu', badge: 'Render Farm', cov: 73, sd: 64.0, rgb: [118, 101, 53] },
+    { icon: 'disk', badge: 'Data Mover', cov: 73, sd: 65.2, rgb: [96, 113, 111] },
     { icon: 'globe', badge: 'Bandwidth', cov: 73, sd: 65.7, rgb: [97, 97, 99] },
     { icon: 'down', badge: 'Downloader', cov: 73, sd: 29.8, rgb: [141, 20, 35] },
     { icon: 'up', badge: 'Uploader', cov: 79, sd: 48.7, rgb: [42, 42, 42] }
   ];
-  const RUN = 'https://github.com/rajhansgithub/Windows_Resource_Monitoring_Tool/actions/runs/44973046644';
+  const RUN = 'https://github.com/rajhansgithub/Windows_Resource_Monitoring_Tool/actions/runs/44983904690';
   const PR = 'https://github.com/rajhansgithub/Windows_Resource_Monitoring_Tool/pull/26';
   function verifyHtml() {
     const tiles = VERIFY.map((v, i) => `<button class="vf" type="button" data-tile="${i}" aria-label="${TIER[i]} medal, verified on Windows, open full view">
