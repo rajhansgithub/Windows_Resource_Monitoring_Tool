@@ -439,6 +439,7 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         crate::update_ui::register(hinst);
         report::register(hinst);
         crate::settings_ui::register(hinst);
+        crate::achievements::ui::register(hinst);
 
         // Hidden top-level window (not message-only: those miss broadcasts
         // such as TaskbarCreated, WM_SETTINGCHANGE and WM_DISPLAYCHANGE).
@@ -528,6 +529,13 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         crate::settings_ui::apply_menu_theme(a.m.s.theme, hwnd);
         a.popup = popup::create(hinst, hwnd);
         a.tray.add();
+        // Moments earned but not shown last run (crash, shutdown) are shown once now.
+        if a.m.s.achievements {
+            let pending = crate::achievements::store::read_pending();
+            if !pending.is_empty() {
+                a.ach_unlocked(pending);
+            }
+        }
         if a.m.s.auto_update && !after_update {
             // Once per start, in the background. No repeated checks.
             crate::update::check(hwnd as isize, false);
@@ -857,8 +865,9 @@ impl App {
 
     /// New achievement moments are ready to show.
     fn ach_unlocked(&mut self, moments: Vec<crate::achievements::Moment>) {
-        let _ = moments;
-        // TODO(lead): show moment UI
+        let st = self.ach.state().clone();
+        crate::achievements::ui::refresh(&st);
+        crate::achievements::ui::show_moments(self.hwnd, &moments, &st, self.m.dark);
     }
 
     /// Alert rules evaluated on the samples we already take (no extra work).
@@ -1014,6 +1023,10 @@ impl App {
         crate::settings_ui::apply_menu_theme(self.m.s.theme, self.hwnd);
         self.need_locate = true;
         self.m.dark = effective_dark(self.m.s.theme);
+        crate::achievements::ui::set_dark(self.m.dark);
+        if !self.m.s.achievements {
+            crate::achievements::ui::close_all();
+        }
         let ct = self.m.s.click_through;
         for o in &mut self.overlays {
             o.set_click_through(ct);
@@ -1236,6 +1249,9 @@ impl App {
             sep(hm);
             add(hm, ID_VISIBLE, "Show widget", s.visible);
             add(hm, ID_SETTINGS, "Settings\u{2026}", false);
+            if s.achievements {
+                add(hm, ID_ACHIEVE, "Achievements\u{2026}", false);
+            }
 
             let mm = CreatePopupMenu();
             for (i, m) in Metric::ALL.iter().enumerate() {
@@ -1431,6 +1447,10 @@ impl App {
     fn command(&mut self, id: usize) {
         match id {
             ID_SETTINGS => return crate::settings_ui::open(self),
+            ID_ACHIEVE => {
+                let st = self.ach.state().clone();
+                return crate::achievements::ui::open(self.hwnd, &st, self.m.dark);
+            }
             ID_REPORT => return report::open(self),
             ID_TASKMGR => return shell_open("taskmgr.exe", None),
             ID_UPDATE_NOW => {
@@ -1716,6 +1736,7 @@ const ID_EDIT: usize = 703;
 const ID_DATA: usize = 704;
 const ID_EXIT: usize = 705;
 const ID_SETTINGS: usize = 706;
+const ID_ACHIEVE: usize = 799;
 const ID_DISP_PRIMARY: usize = 800;
 const ID_DISP_ALL: usize = 801;
 const ID_DISP: usize = 810;
@@ -1942,6 +1963,7 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         WM_SETTINGCHANGE => {
             // Theme switch, taskbar moved/resized (work area), auto-hide toggled…
             a.m.dark = effective_dark(a.m.s.theme);
+            crate::achievements::ui::set_dark(a.m.dark);
             crate::settings_ui::apply_menu_theme(a.m.s.theme, hwnd);
             a.update_timer();
             a.need_locate = true;

@@ -76,6 +76,7 @@ pub struct Badge {
     /// Ladders only: "hours", "GB", "alerts", ...
     pub unit: &'static str,
     /// Set (Certified Build plate) this ladder belongs to.
+    #[allow(dead_code)]
     pub set: Option<&'static str>,
     /// Ladders only: counter name (see `counter`) and raw units per `unit`.
     counter: &'static str,
@@ -189,6 +190,7 @@ impl Catalog {
     pub fn ladders() -> impl Iterator<Item = &'static Badge> {
         BADGES.iter().filter(|b| b.is_ladder())
     }
+    #[allow(dead_code)]
     pub fn sets() -> &'static [Set] {
         SETS
     }
@@ -511,6 +513,7 @@ pub fn level(s: &State) -> u32 {
     level_of(total_xp(s))
 }
 
+#[allow(dead_code)]
 pub fn rank(s: &State) -> Rank {
     rank_of(level(s), s.g)
 }

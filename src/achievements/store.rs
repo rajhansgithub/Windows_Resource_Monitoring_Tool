@@ -92,11 +92,13 @@ fn write_if_changed(path: &Path, text: &str) -> io::Result<()> {
 }
 
 /// Same content, whatever the key order or whitespace of the stored text.
+#[allow(dead_code)]
 pub fn same_content(a: &State, b: &State) -> bool {
     normalize(a.clone()).to_json() == normalize(b.clone()).to_json()
 }
 
 /// Canonical form of stored text (`None` when it is not a state).
+#[allow(dead_code)]
 pub fn canonical(text: &str) -> Option<String> {
     State::from_json(text).map(|s| s.to_json())
 }
