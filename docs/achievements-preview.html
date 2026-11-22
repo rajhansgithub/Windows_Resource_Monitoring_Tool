@@ -2763,7 +2763,7 @@ void main(){
   function tnStop() { if (!TN.on) return; TN.on = false; cancelAnimationFrame(TN.raf); TN.raf = 0; try { if (YTPM3D.canvas() === TN.c3) YTPM3D.stop(); } catch (e) { /* ignore */ } }
   function tnBindDrag(c) {
     c.addEventListener('pointerdown', (ev) => { TN.drag = { x: ev.clientX, y: ev.clientY }; try { c.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ } });
-    c.addEventListener('pointermove', (ev) => { const g = TN.drag; if (!g) return; TN.yaw += (ev.clientX - g.x) * .7; TN.pitch = clamp(TN.pitch - (ev.clientY - g.y) * .7, -85, 85); g.x = ev.clientX; g.y = ev.clientY; });
+    c.addEventListener('pointermove', (ev) => { const g = TN.drag; if (!g) return; TN.yaw += (ev.clientX - g.x) * .7; TN.pitch = clamp(TN.pitch + (ev.clientY - g.y) * .7, -85, 85); g.x = ev.clientX; g.y = ev.clientY; });
     const end = () => { TN.drag = null; };
     c.addEventListener('pointerup', end); c.addEventListener('pointercancel', end);
   }
@@ -3095,9 +3095,9 @@ void main(){
   slab.addEventListener('pointermove', (ev) => {
     const g = FV.drag; if (!FV.is3d || !g) return;
     const now = performance.now(), dx = ev.clientX - g.x, dy = ev.clientY - g.y, k = 300 / Math.max(200, stage.clientWidth);
-    FV.yaw += dx * k; FV.pitch -= dy * k;
+    FV.yaw += dx * k; FV.pitch += dy * k;   // vertical drag inverted (the owner 11-22)
     const dt = Math.max(8, now - g.t) / 1000;
-    FV.vy = FV.vy * .5 + (dx * k / dt) * .5; FV.vp = FV.vp * .5 + (-dy * k / dt) * .5;
+    FV.vy = FV.vy * .5 + (dx * k / dt) * .5; FV.vp = FV.vp * .5 + (dy * k / dt) * .5;
     g.x = ev.clientX; g.y = ev.clientY; g.t = now; FV.lastDrag = now;
     if (Math.hypot(ev.clientX - g.sx, ev.clientY - g.sy) > 5) FV.dragged = Date.now();
     if (reduced()) apply();
