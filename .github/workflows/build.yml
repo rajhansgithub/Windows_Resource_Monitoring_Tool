@@ -29,21 +29,56 @@ jobs:
       - name: Run app, screenshot Achievements window
         shell: pwsh
         run: |
+          # CI-only state: one badge at every tier, Bronze to Emulsion, so every medal shader shows in the window
+          $dir = "$env:LOCALAPPDATA/ResourceMonitor"
+          New-Item -ItemType Directory -Force $dir, target/medal-shots | Out-Null
+          Set-Content "$dir/achievements.json" '{"v":1,"g":1,"k":{"watch":1,"heavy":2,"render":3,"mover":4,"bandwidth":5,"down":6,"up":7}}'
           $p = Start-Process target/release/ResourceMonitor.exe -ArgumentList "--achievements" -PassThru
           Start-Sleep -Seconds 12
+          Add-Type @"
+          using System; using System.Runtime.InteropServices;
+          public static class W {
+            [StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Rt, B; }
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string c, string t);
+            [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r);
+          }
+          "@
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          function Shot($x, $y, $w, $h, $file) {
+            $bmp = New-Object System.Drawing.Bitmap $w, $h
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($x, $y, 0, 0, (New-Object System.Drawing.Size $w, $h))
+            $bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)
+          }
           $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
-          $g = [System.Drawing.Graphics]::FromImage($bmp)
-          $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
-          New-Item -ItemType Directory -Force target/medal-shots | Out-Null
-          $bmp.Save("target/medal-shots/app-achievements.png", [System.Drawing.Imaging.ImageFormat]::Png)
-          $log = "$env:LOCALAPPDATA/ResourceMonitor/diagnostics.log"
+          Shot $b.X $b.Y $b.Width $b.Height "target/medal-shots/app-screen.png"
+          $h = [W]::FindWindowW($null, "Achievements")
+          if ($h -ne [IntPtr]::Zero) {
+            $r = New-Object W+R
+            [void][W]::GetWindowRect($h, [ref]$r)
+            Shot $r.L $r.T ($r.Rt - $r.L) ($r.B - $r.T) "target/medal-shots/app-achievements.png"
+          }
+          $log = "$dir/diagnostics.log"
           if (Test-Path $log) { Copy-Item $log target/medal-shots/; Get-Content $log }
           if ($p.HasExited) { Write-Error "app exited early (code $($p.ExitCode))"; exit 1 }
           Stop-Process -Id $p.Id
+          if ($h -eq [IntPtr]::Zero) { Write-Error "Achievements window did not open"; exit 1 }
           if ((Test-Path $log) -and (Select-String -Path $log -Pattern "achievements gpu" -Quiet)) {
             Write-Error "GPU badge path failed in the app, see diagnostics.log"; exit 1
+          }
+      - name: TEMP dump screenshots as base64
+        if: always()
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Drawing
+          foreach ($f in Get-ChildItem target/medal-shots/*.png) {
+            $img = [System.Drawing.Image]::FromFile($f.FullName)
+            $ms = New-Object System.IO.MemoryStream
+            $img.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+            $s = [Convert]::ToBase64String($ms.ToArray())
+            Write-Output "B64BEGIN $($f.Name)"
+            for ($i = 0; $i -lt $s.Length; $i += 8000) { Write-Output ("B64 " + $s.Substring($i, [Math]::Min(8000, $s.Length - $i))) }
+            Write-Output "B64END"
           }
       - uses: actions/upload-artifact@v4
         if: always()
