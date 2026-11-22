@@ -147,6 +147,27 @@ canvas { display: block; }
 /* moments */
 .moments { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
 
+/* v4: verified on Windows */
+.vf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 10px; }
+.vf { background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; padding: 10px 8px 12px; display: grid; justify-items: center; gap: 3px; align-content: start; cursor: pointer; text-align: center; }
+.vf:hover { border-color: #3b4452; }
+.vf canvas { width: 112px; height: 112px; max-width: 100%; }
+.vf b { font-family: var(--display); font-size: 14px; }
+.vf small { font-size: 11.5px; color: var(--dim); }
+.vf .ok { font-family: var(--mono); font-size: 11px; color: var(--ok); }
+.vf dl { margin: 2px 0 0; display: grid; grid-template-columns: auto auto; gap: 1px 8px; font-family: var(--mono); font-size: 11px; color: var(--dim); text-align: left; }
+.vf dd { margin: 0; color: var(--fg); }
+.vf .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; vertical-align: -1px; margin-right: 4px; border: 1px solid rgba(255, 255, 255, .2); }
+.vf-checks { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 0; }
+.vf-checks li { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 2px 10px; padding: 9px 0; border-top: 1px solid var(--line); }
+.vf-checks .tk { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 700; border: 2px solid var(--ok); background: #123a25; color: var(--ok); }
+.vf-checks b { font-weight: 600; }
+.vf-checks span.nt { grid-column: 2; color: var(--dim); font-size: 12.5px; }
+.vf-checks code, .vf p code { font-family: var(--mono); font-size: 12px; }
+.vf-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.vf-links a { font-family: var(--mono); font-size: 12px; color: var(--accent); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; text-decoration: none; }
+.vf-links a:hover { border-color: var(--accent); }
+
 /* build status */
 .bs-sum { display: flex; flex-wrap: wrap; gap: 8px 14px; font-family: var(--mono); font-size: 12.5px; margin-bottom: 10px; }
 .bs-bar { height: 8px; border-radius: 4px; background: #262c35; overflow: hidden; display: flex; margin-bottom: 14px; }
@@ -1421,13 +1442,28 @@ void main(){
   /* ------------------------------------------------------------------ versions: each stores only its settings; engines load once.
      To add a version: add an entry here (newest first) and a builder in BUILDERS. Earlier versions stay in the page, live. */
   const VERSIONS = [
-    { id: 'v3', label: 'v3 · Built into the app', note: 'Current. Core, observer, window, pop-ups and full view are in the app (v2.13.0). Build status below.' },
+    { id: 'v4', label: 'v4 · Shaders verified on Windows', note: 'Current. The HLSL medal, stone and bubble shaders compiled and rendered on Windows (CI, 22 Nov 2026). No fallback to flat medals.' },
+    { id: 'v3', label: 'v3 · Built into the app', note: 'Core, observer, window, pop-ups and full view are in the app (v2.13.0). Build status as it stood before the Windows run.' },
     { id: 'v2', label: 'v2 · Uptime Medals picked', note: 'The theme is picked; the build status as it stood then.' },
     { id: 'v1', label: 'v1 · Theme options', note: 'Earlier options: the three themes shown before the pick (Case Badges, Uptime Medals, Hall of Fame Plaques).' }
   ];
 
   /* ------------------------------------------------------------------ BUILD STATUS (the lead updates statuses here: 'done' | 'wip' | 'missing') */
   const BUILD_STATUS = [
+    { name: 'Theme picked', st: 'done', note: 'Uptime Medals (round struck medal + 1U rack plates). Bubble keeps only the pulse line.' },
+    { name: 'Catalog spec', st: 'done', note: '32 badges: 13 ladders, 3 rack sets, 5 start, 4 mastery, 6 accidents, 4 secrets. docs/ACHIEVEMENTS.md.' },
+    { name: 'Core logic + storage + merge', st: 'done', note: 'src/achievements/core.rs, store.rs, json.rs. %APPDATA% mirrored to %LOCALAPPDATA%. Runs in Windows CI.' },
+    { name: 'Observer hooks', st: 'done', note: 'Active minutes on the existing sample tick, alerts fired/cleared, End task, update installed, billing cycle. No new timers.' },
+    { name: 'Native shaders (HLSL / D3D11 port)', st: 'done', note: 'Verified on Windows: vs_5_0 + both ps_5_0 compile with D3DCompile, all 7 tiers render with shading and motion. No flat-medal fallback.' },
+    { name: 'Badge tab window', st: 'done', note: 'Opened on Windows (ResourceMonitor.exe --achievements): header, rack plates and every tier drawn by the GPU path.' },
+    { name: 'Moments + level-up', st: 'wip', note: 'Pop-up near the tray, +XP pill, 6 s bar; level-up with 18 rays. Built, not yet triggered in the Windows run.' },
+    { name: 'Full view + 3D award + spec-sheet back', st: 'wip', note: 'Tilt, idle sway, flip to the spec sheet, arrows. Simpler than here: no blur, no edge thickness, no glare.' },
+    { name: 'Emulsion gate', st: 'done', note: 'Level 30, 180 days in 6 months, 3 ladders at Ruby, 2,000 hours + 5 TB. Sticky once open.' },
+    { name: 'Settings (pop-ups, level-up, bubble sliders)', st: 'wip', note: 'Achievements on/off is in Settings. Separate pop-up and level-up toggles and bubble sliders are still missing.' },
+    { name: 'Tests', st: 'done', note: '57 tests in Windows CI, now with the shader pixel check (coverage, shading, premultiplied alpha, motion) and an app run that opens the window.' },
+    { name: 'docs/ACHIEVEMENTS.md', st: 'done', note: 'Mode, theme and why, scoring, catalog, gate numbers, storage.' }
+  ];
+  const BUILD_STATUS_V3 = [
     { name: 'Theme picked', st: 'done', note: 'Uptime Medals (round struck medal + 1U rack plates). Bubble keeps only the pulse line.' },
     { name: 'Catalog spec', st: 'done', note: '32 badges: 13 ladders, 3 rack sets, 5 start, 4 mastery, 6 accidents, 4 secrets. docs/ACHIEVEMENTS.md.' },
     { name: 'Core logic + storage + merge', st: 'done', note: 'src/achievements/core.rs, store.rs, json.rs. %APPDATA% mirrored to %LOCALAPPDATA%. Runs in Windows CI.' },
@@ -1658,7 +1694,39 @@ void main(){
       <section class="card" aria-labelledby="h-th${sfx}"><div class="sec-h"><div class="eyebrow">Theme contract</div><h2 id="h-th${sfx}">Uptime Medals</h2><p>Chosen over Case Badges and Hall of Fame Plaques, which stay live under Earlier options. Reason: Resource Monitor users watch their machines the way operators watch servers, and uptime is the number they are proud of.</p></div><div class="theme-line">${esc(THEME)}</div>
         <div class="moments" style="margin-top:14px"><button class="btn" type="button" id="btnV1">Open earlier options (v1)</button></div></section>`;
   }
-  function buildV3() { return buildV2(BUILD_STATUS, '-3'); }
+  function buildV3() { return buildV2(BUILD_STATUS_V3, '-3'); }
+
+  /* ------------------------------------------------------------------ v4: what Windows actually drew (CI run 44973046644, 22 Nov 2026).
+     Numbers are from the test achievements::gpu::tests::shaders_compile_and_every_material_renders (192 px tile, still frame). */
+  const VERIFY = [
+    { icon: 'clock', badge: 'Watchkeeper', cov: 73, sd: 39.5, rgb: [133, 95, 62] },
+    { icon: 'flame', badge: 'Heavy Lifting', cov: 73, sd: 47.3, rgb: [139, 140, 143] },
+    { icon: 'gpu', badge: 'Render Farm', cov: 73, sd: 44.4, rgb: [145, 124, 67] },
+    { icon: 'disk', badge: 'Data Mover', cov: 73, sd: 46.5, rgb: [119, 139, 137] },
+    { icon: 'globe', badge: 'Bandwidth', cov: 73, sd: 65.7, rgb: [97, 97, 99] },
+    { icon: 'down', badge: 'Downloader', cov: 73, sd: 29.8, rgb: [141, 20, 35] },
+    { icon: 'up', badge: 'Uploader', cov: 79, sd: 48.7, rgb: [42, 42, 42] }
+  ];
+  const RUN = 'https://github.com/rajhansgithub/Windows_Resource_Monitoring_Tool/actions/runs/44973046644';
+  const PR = 'https://github.com/rajhansgithub/Windows_Resource_Monitoring_Tool/pull/26';
+  function verifyHtml() {
+    const tiles = VERIFY.map((v, i) => `<button class="vf" type="button" data-tile="${i}" aria-label="${TIER[i]} medal, verified on Windows, open full view">
+      ${cv({ tier: i + 1, icon: v.icon, size: 112 })}<b style="color:${THEX[i]}">${TIER[i]}</b><small>${esc(v.badge)}</small><span class="ok">✓ rendered</span>
+      <dl><dt>cover</dt><dd>${v.cov}%</dd><dt>shading</dt><dd>sd ${v.sd}</dd><dt>colour</dt><dd><i class="sw" style="background:rgb(${v.rgb.join(',')})" title="mean rgb ${v.rgb.join(' ')}"></i></dd></dl></button>`).join('');
+    const checks = [
+      ['D3DCompile accepts all three shaders', 'vs_5_0 vsmain, ps_5_0 main for the medal / brilliant and for the Emulsion bubble. d3dcompiler_47.dll from System32.'],
+      ['Every tier renders real shading', 'Coverage, luminance spread, premultiplied alpha and colour checked per material. Gold reads warmer than Silver. A flat disc would fail.'],
+      ['Every tier moves', 'Time 2.5 s with tilt (0.35, -0.25) draws a different frame from the still frame, for all 7.'],
+      ['The app draws them, not the fallback', '<code>ResourceMonitor.exe --achievements</code> opened the window on the Windows runner. Seeded one badge per tier; diagnostics.log has no “achievements gpu” line, so the GPU path ran.'],
+      ['Guarded from now on', 'CI fails if a shader stops compiling, if the window does not open, or if the app logs a GPU fallback.']
+    ].map((c) => `<li><span class="tk" aria-hidden="true">✓</span><b>${c[0]}</b><span class="nt">${c[1]}</span></li>`).join('');
+    return `<section class="card" aria-labelledby="h-vf"><div class="sec-h"><div class="eyebrow">Verified on Windows · 22 Nov 2026</div><h2 id="h-vf">The medal shaders work</h2>
+      <p>Each medal below is live, drawn by the same shader the HLSL port was made from, with the numbers Windows measured on its own render of that tier. Tap one for the full view.</p></div>
+      <div class="vf-grid" role="list" aria-label="Seven tiers, verified">${tiles}</div>
+      <ul class="vf-checks">${checks}</ul>
+      <div class="vf-links"><a href="${PR}" target="_blank" rel="noopener">PR #26</a><a href="${RUN}" target="_blank" rel="noopener">Windows CI run</a></div></section>`;
+  }
+  function buildV4() { return verifyHtml() + buildV2(BUILD_STATUS, '-4'); }
 
   /* ------------------------------------------------------------------ v1: the three theme options (settings only) */
   const OPTIONS = [
@@ -1683,7 +1751,7 @@ void main(){
   }
 
   /* ------------------------------------------------------------------ versions bar + panels */
-  const BUILDERS = { v3: buildV3, v2: () => buildV2(), v1: buildV1 };
+  const BUILDERS = { v4: buildV4, v3: buildV3, v2: () => buildV2(), v1: buildV1 };
   const panelsEl = $('#panels'), tabsEl = $('#vtabs');
   let cur = null;
   function renderTabs() {
