@@ -458,7 +458,7 @@ vec2 wSeg(vec2 p, vec2 a, vec2 b){ vec2 pa=p-a, ba=b-a; float h=clamp(dot(pa,ba)
 // two per cell, each crossing into the next cell. dens = how many of them exist.
 float wTangle(vec2 p, float sc, float aa, float dens){
   vec2 q=p*sc, id=floor(q);
-  float m=0., w=.0011*uAge[2].x, cw=min(1.,w*2.4/(aa*1.5+1e-4))+.1;
+  float m=0., w=.0019*uAge[2].x, cw=(min(1.,w*2.4/(aa*1.5+1e-4))+.1)*.6;   // soft, dusty strands
   for(int j=-1;j<=1;j++) for(int i=-1;i<=1;i++) for(int k=0;k<2;k++){
     vec2 c=id+vec2(float(i),float(j)); float fk=float(k);
     if(hash(c+fk*13.7)>dens) continue;
@@ -466,7 +466,7 @@ float wTangle(vec2 p, float sc, float aa, float dens){
     float an=hash(c+7.9+fk*2.)*3.1416;
     vec2 dir=vec2(cos(an),sin(an))*(.5+.5*hash(c+11.+fk));
     float d=wSeg(q,o-dir,o+dir).x/sc;
-    m=max(m,smoothstep(w+aa,max(w-aa*.5,0.),d)*cw*(.35+.65*hash(c+17.+fk)));
+    m=max(m,smoothstep(w+aa*1.2,0.,d)*cw*(.35+.65*hash(c+17.+fk)));
   }
   return m;
 }
@@ -487,7 +487,7 @@ vec4 wWeb(vec2 p, float amt, float aa){
   float ins=smoothstep(tear+aa*3.,tear-aa*3.,h)*smoothstep(-.01,.03,t)*smoothstep(1.01,.97,t);
   vec2 pc=p-C; float rr=length(pc), th=atan(pc.y,pc.x);
   float veil=smoothstep(.22,.72,wF(p*6.+2.))*(.45+.55*wF(p*21.+9.));  // a thin felt of silk with holes
-  float fib=ins>0.?max(wTangle(p,5.,aa,.85),wTangle(p+3.7,11.,aa,.5)*.75)*(.55+.45*smoothstep(.75,.05,rr)):0.;   // straight silk threads crossing every way
+  float fib=ins>0.?max(wTangle(p,5.,aa,.8),wTangle(p+3.7,11.,aa,.35)*.6)*(.55+.45*smoothstep(.75,.05,rr)):0.;   // straight silk threads crossing every way
   float dens=ins*min(A*1.3,1.)*(veil*uAge[2].z*1.6+fib*.6);
   float bw=.0022*uAge[2].x, cw=min(1.,bw*2.4/(aa*1.5+1e-4))+.15;
   float border=smoothstep(bw+aa,max(bw-aa*.5,0.),abs(h-sag))*smoothstep(-.02,.08,t)*smoothstep(1.02,.92,t)*min(A*2.,1.)*cw*.7*smoothstep(.25,.45,wN(vec2(t*9.,4.1)));
@@ -506,7 +506,7 @@ vec4 wWeb(vec2 p, float amt, float aa){
   float glint=ins*min(A*1.3,1.)*fib*uAge[2].y*(.6+.4*(1.-abs(dot(rd,L2))))+border*.5+guy*.4;
   float al=clamp(dens*.75+border*.7+guy*.5,0.,.9);
   vec3 silk=vec3(.80,.79,.76), dusty=vec3(.56,.54,.50);
-  vec3 rgb=mix(silk,dusty,clamp(uAge[2].w*.55*(.4+.6*veil),0.,1.))*al*.6+silk*glint*.55
+  vec3 rgb=mix(silk,dusty,clamp(uAge[2].w*.7*(.5+.5*veil),0.,1.))*al*.62+silk*glint*.35
           +uAge[3].x*glint*(.5+.5*cos(6.283*(th*3.+rr*4.+vec3(0.,.33,.67))));
   return vec4(min(rgb,vec3(al)),al);
 }
@@ -515,17 +515,24 @@ vec3 aged(vec3 col, float a, vec2 p, float recess, float metal, float aa){
   float dust=min(uWear.x*uAge[0].x,1.), web=uWear.z*uAge[1].z;
   if(dust+web<.002 || a<=0.) return col;
   float lum=dot(col,vec3(.299,.587,.114))/max(a,.01);
-  float film=mix(smoothstep(.15,.85,wF(p*3.2+11.))*uAge[0].y+(1.-uAge[0].y),1.,dust*dust);   // patches that join up as it builds
-  float up=smoothstep(-.4,.95,p.y);                                     // settles on what faces up
-  float where=mix(.22+.55*recess+uAge[0].z*up,1.,smoothstep(.35,1.,dust));   // ledges and corners first, then everywhere
-  float cover=clamp(dust*where*film*1.25,0.,.96);
-  float fluff=wF(p*26.+5.);
+  // how much has settled here. Gravity: the top gets it first and the bottom lags behind, but by a year all of it is covered
+  // (the bottom's share = dust^(1+2*how low)); ledges and the groove under the rim hold a little more; thin patches join up.
+  float low=1.-smoothstep(-1.,1.,p.y+(wF(p*2.5+3.)-.5)*.3);
+  float dl=pow(dust,1.+2.*low*uAge[0].z);
+  float film=mix(smoothstep(.15,.85,wF(p*3.2+11.))*uAge[0].y+(1.-uAge[0].y),1.,dl*dl);
+  float T=dl*film*(1.+.35*min(recess,1.));
+  // stage 1, a thin layer: the mirror goes hazy at once (dust scatters the light), the colour still shows through
+  float mx=max(max(col.r,col.g),max(col.b,.001));
+  vec3 matte=(col/mx*(.17+.07*smoothstep(-1.,1.,p.y))+vec3(.15,.145,.135))*a*(1.-.12*min(recess,1.));   // pale, flat, greyed
+  col=mix(col,matte,smoothstep(.0,.55,T)*uAge[0].w);
+  // stage 2, a thick layer: soft light-grey felt hides the metal; the relief only reads faintly (dust fills the hollows)
+  float grain=.92+.08*wN(p*90.+1.)+.06*(wF(p*14.+5.)-.5);
   float grit=smoothstep(.82,.97,wN(p*170.+3.))+.7*smoothstep(.9,.99,wN(p*60.+9.)); // fine grit and the odd coarse grain
   float lint=smoothstep(.012,0.,abs(wN(p*7.+31.)-.5))*smoothstep(.78,.86,wN(p*2.3+5.)); // a curly fibre here and there
-  vec3 dc=vec3(.60,.57,.52)*a;
-  col=mix(col,vec3(lum)*.8*a+.03*a,clamp(dust*uAge[0].w*(metal>.5?1.:1.6),0.,1.));  // the shine goes flat (stones lose their fire)
-  col=mix(col,dc*(.5+.2*lum+.25*fluff),cover);                         // grey felt; the relief still shows a little
-  col=mix(col,dc*.9,clamp(grit*dust*uAge[1].x+lint*dust*uAge[1].y,0.,.6));
+  vec3 dc=vec3(.62,.60,.56)*a;
+  vec3 felt=dc*(.62+.10*smoothstep(-1.,1.,p.y))*grain*(1.-.12*min(recess,1.));   // dust fills the engraving: it reads only faintly
+  col=mix(col,felt,clamp(pow(smoothstep(.12,1.,T),1.3),0.,.97));
+  col=mix(col,dc*.85,clamp((grit*uAge[1].x+lint*uAge[1].y)*smoothstep(.1,.6,T),0.,.5));
   vec4 wb=wWeb(p,web,aa);
   col=col*(1.-wb.a)+wb.rgb*a;
   return col;
@@ -1200,7 +1207,7 @@ void main(){
   function only(c) { solo = c || null; items.forEach((it) => { it.fresh = true; }); if (still()) draw(performance.now()); else if (!raf && items.length) raf = requestAnimationFrame(loop); }
   const api = { mount, set, only, icons: (fn) => { iconSrc = fn; root.YTPMIconSrc = fn; }, supported: () => setup() };
   /** Age look (the full view's "Tune the age" sliders). Shader part goes to uAge[4]; the rest drives the wear clock and motion. */
-  root.YTPMAgeDefaults = { dustAmt: 1, dustPatch: .65, dustUp: .3, dull: .2, grit: .55, lint: .5, webAmt: 1, webThreads: 1, webWidth: 1, webGlint: .65, webSheet: .42, webDust: 1, webRainbow: .1,
+  root.YTPMAgeDefaults = { dustAmt: 1, dustPatch: .65, dustUp: 1, dull: 1, grit: .55, lint: .5, webAmt: 1, webThreads: 1, webWidth: 1, webGlint: .65, webSheet: .42, webDust: 1, webRainbow: .1,
     dustDays: 120, webStart: 10, webSpan: 40, rubDust: .5, sway: .33, hover: .33, flick: 1, friction: 2.2 };
   root.YTPMAge = Object.assign({}, root.YTPMAgeDefaults, root.YTPMAge || {});
   root.YTPMAgeVec = () => { const a = root.YTPMAge; return new Float32Array([a.dustAmt, a.dustPatch, a.dustUp, a.dull, a.grit, a.lint, a.webAmt, a.webThreads, a.webWidth, a.webGlint, a.webSheet, a.webDust, a.webRainbow, 0, 0, 0]); };
@@ -1223,7 +1230,7 @@ vec2 wSeg(vec2 p, vec2 a, vec2 b){ vec2 pa=p-a, ba=b-a; float h=clamp(dot(pa,ba)
 // two per cell, each crossing into the next cell. dens = how many of them exist.
 float wTangle(vec2 p, float sc, float aa, float dens){
   vec2 q=p*sc, id=floor(q);
-  float m=0., w=.0011*uAge[2].x, cw=min(1.,w*2.4/(aa*1.5+1e-4))+.1;
+  float m=0., w=.0019*uAge[2].x, cw=(min(1.,w*2.4/(aa*1.5+1e-4))+.1)*.6;   // soft, dusty strands
   for(int j=-1;j<=1;j++) for(int i=-1;i<=1;i++) for(int k=0;k<2;k++){
     vec2 c=id+vec2(float(i),float(j)); float fk=float(k);
     if(hash(c+fk*13.7)>dens) continue;
@@ -1231,7 +1238,7 @@ float wTangle(vec2 p, float sc, float aa, float dens){
     float an=hash(c+7.9+fk*2.)*3.1416;
     vec2 dir=vec2(cos(an),sin(an))*(.5+.5*hash(c+11.+fk));
     float d=wSeg(q,o-dir,o+dir).x/sc;
-    m=max(m,smoothstep(w+aa,max(w-aa*.5,0.),d)*cw*(.35+.65*hash(c+17.+fk)));
+    m=max(m,smoothstep(w+aa*1.2,0.,d)*cw*(.35+.65*hash(c+17.+fk)));
   }
   return m;
 }
@@ -1252,7 +1259,7 @@ vec4 wWeb(vec2 p, float amt, float aa){
   float ins=smoothstep(tear+aa*3.,tear-aa*3.,h)*smoothstep(-.01,.03,t)*smoothstep(1.01,.97,t);
   vec2 pc=p-C; float rr=length(pc), th=atan(pc.y,pc.x);
   float veil=smoothstep(.22,.72,wF(p*6.+2.))*(.45+.55*wF(p*21.+9.));  // a thin felt of silk with holes
-  float fib=ins>0.?max(wTangle(p,5.,aa,.85),wTangle(p+3.7,11.,aa,.5)*.75)*(.55+.45*smoothstep(.75,.05,rr)):0.;   // straight silk threads crossing every way
+  float fib=ins>0.?max(wTangle(p,5.,aa,.8),wTangle(p+3.7,11.,aa,.35)*.6)*(.55+.45*smoothstep(.75,.05,rr)):0.;   // straight silk threads crossing every way
   float dens=ins*min(A*1.3,1.)*(veil*uAge[2].z*1.6+fib*.6);
   float bw=.0022*uAge[2].x, cw=min(1.,bw*2.4/(aa*1.5+1e-4))+.15;
   float border=smoothstep(bw+aa,max(bw-aa*.5,0.),abs(h-sag))*smoothstep(-.02,.08,t)*smoothstep(1.02,.92,t)*min(A*2.,1.)*cw*.7*smoothstep(.25,.45,wN(vec2(t*9.,4.1)));
@@ -1271,7 +1278,7 @@ vec4 wWeb(vec2 p, float amt, float aa){
   float glint=ins*min(A*1.3,1.)*fib*uAge[2].y*(.6+.4*(1.-abs(dot(rd,L2))))+border*.5+guy*.4;
   float al=clamp(dens*.75+border*.7+guy*.5,0.,.9);
   vec3 silk=vec3(.80,.79,.76), dusty=vec3(.56,.54,.50);
-  vec3 rgb=mix(silk,dusty,clamp(uAge[2].w*.55*(.4+.6*veil),0.,1.))*al*.6+silk*glint*.55
+  vec3 rgb=mix(silk,dusty,clamp(uAge[2].w*.7*(.5+.5*veil),0.,1.))*al*.62+silk*glint*.35
           +uAge[3].x*glint*(.5+.5*cos(6.283*(th*3.+rr*4.+vec3(0.,.33,.67))));
   return vec4(min(rgb,vec3(al)),al);
 }
@@ -1280,17 +1287,24 @@ vec3 aged(vec3 col, float a, vec2 p, float recess, float metal, float aa){
   float dust=min(uWear.x*uAge[0].x,1.), web=uWear.z*uAge[1].z;
   if(dust+web<.002 || a<=0.) return col;
   float lum=dot(col,vec3(.299,.587,.114))/max(a,.01);
-  float film=mix(smoothstep(.15,.85,wF(p*3.2+11.))*uAge[0].y+(1.-uAge[0].y),1.,dust*dust);   // patches that join up as it builds
-  float up=smoothstep(-.4,.95,p.y);                                     // settles on what faces up
-  float where=mix(.22+.55*recess+uAge[0].z*up,1.,smoothstep(.35,1.,dust));   // ledges and corners first, then everywhere
-  float cover=clamp(dust*where*film*1.25,0.,.96);
-  float fluff=wF(p*26.+5.);
+  // how much has settled here. Gravity: the top gets it first and the bottom lags behind, but by a year all of it is covered
+  // (the bottom's share = dust^(1+2*how low)); ledges and the groove under the rim hold a little more; thin patches join up.
+  float low=1.-smoothstep(-1.,1.,p.y+(wF(p*2.5+3.)-.5)*.3);
+  float dl=pow(dust,1.+2.*low*uAge[0].z);
+  float film=mix(smoothstep(.15,.85,wF(p*3.2+11.))*uAge[0].y+(1.-uAge[0].y),1.,dl*dl);
+  float T=dl*film*(1.+.35*min(recess,1.));
+  // stage 1, a thin layer: the mirror goes hazy at once (dust scatters the light), the colour still shows through
+  float mx=max(max(col.r,col.g),max(col.b,.001));
+  vec3 matte=(col/mx*(.17+.07*smoothstep(-1.,1.,p.y))+vec3(.15,.145,.135))*a*(1.-.12*min(recess,1.));   // pale, flat, greyed
+  col=mix(col,matte,smoothstep(.0,.55,T)*uAge[0].w);
+  // stage 2, a thick layer: soft light-grey felt hides the metal; the relief only reads faintly (dust fills the hollows)
+  float grain=.92+.08*wN(p*90.+1.)+.06*(wF(p*14.+5.)-.5);
   float grit=smoothstep(.82,.97,wN(p*170.+3.))+.7*smoothstep(.9,.99,wN(p*60.+9.)); // fine grit and the odd coarse grain
   float lint=smoothstep(.012,0.,abs(wN(p*7.+31.)-.5))*smoothstep(.78,.86,wN(p*2.3+5.)); // a curly fibre here and there
-  vec3 dc=vec3(.60,.57,.52)*a;
-  col=mix(col,vec3(lum)*.8*a+.03*a,clamp(dust*uAge[0].w*(metal>.5?1.:1.6),0.,1.));  // the shine goes flat (stones lose their fire)
-  col=mix(col,dc*(.5+.2*lum+.25*fluff),cover);                         // grey felt; the relief still shows a little
-  col=mix(col,dc*.9,clamp(grit*dust*uAge[1].x+lint*dust*uAge[1].y,0.,.6));
+  vec3 dc=vec3(.62,.60,.56)*a;
+  vec3 felt=dc*(.62+.10*smoothstep(-1.,1.,p.y))*grain*(1.-.12*min(recess,1.));   // dust fills the engraving: it reads only faintly
+  col=mix(col,felt,clamp(pow(smoothstep(.12,1.,T),1.3),0.,.97));
+  col=mix(col,dc*.85,clamp((grit*uAge[1].x+lint*uAge[1].y)*smoothstep(.1,.6,T),0.,.5));
   vec4 wb=wWeb(p,web,aa);
   col=col*(1.-wb.a)+wb.rgb*a;
   return col;
@@ -2132,7 +2146,7 @@ void main(){
     col*=1.-smoothstep(aa*1.5,0.,abs(r-RIM))*.7;
   }
   col=aces(col*1.1);
-  col=aged(col,1.,(front||back)?q:vec2(atan(p.y,p.x),p.z*8.),rec,1.,pxw);
+  col=aged(col,1.,(front||back)?q:p.xy,rec,1.,pxw);   // the edge: its top collects dust first too
   float cover=clamp(-md/pxw+1.,0.,1.);
   gl_FragColor=vec4(col,1.);
 }`;
@@ -2642,12 +2656,12 @@ void main(){
 
   /* ------------------------------------------------------------------ age tuner (full view of a metal or stone): drives YTPMAge */
   const AG_SPEC = [
-    ['Dust', [['dustAmt', 'Dust amount', 0, 2, 0.01], ['dustPatch', 'Patchiness', 0, 1, 0.01], ['dustUp', 'Settles on top', 0, 1, 0.01], ['dull', 'Dulls the shine', 0, .6, 0.01], ['grit', 'Grit specks', 0, 1.5, 0.01], ['lint', 'Lint fibres', 0, 1.5, 0.01], ['dustDays', 'Days to get dusty (63%)', 10, 365, 1]]],
+    ['Dust', [['dustAmt', 'Dust amount', 0, 2, 0.01], ['dustPatch', 'Patchiness', 0, 1, 0.01], ['dustUp', 'Top first (bottom lags)', 0, 1, 0.01], ['dull', 'Dust hides reflections', 0, 1, 0.01], ['grit', 'Grit specks', 0, 1.5, 0.01], ['lint', 'Lint fibres', 0, 1.5, 0.01], ['dustDays', 'Days to get dusty (63%)', 10, 365, 1]]],
     ['Cobwebs', [['webAmt', 'Cobweb amount', 0, 2, 0.01], ['webThreads', 'Web size', 0.4, 1.6, 0.01], ['webWidth', 'Border thread thickness', 0.3, 3, 0.01], ['webGlint', 'Silk glint', 0, 1.5, 0.01], ['webSheet', 'Silk felt (density)', 0, 1, 0.01], ['webDust', 'Dust on the silk', 0, 2, 0.01], ['webRainbow', 'Rainbow on silk', 0, .5, 0.01], ['webStart', 'Cobwebs start after (days)', 0, 40, 1], ['webSpan', 'Days to full cobwebs', 5, 120, 1]]],
     ['Polish', [['rubDust', 'Dust off per rub', 0.1, 0.9, 0.01]]],
     ['Motion', [['sway', 'Idle sway', 0, 1, 0.01], ['hover', 'Hover tilt', 0, 1, 0.01], ['flick', 'Flick speed', 0, 3, 0.01], ['friction', 'Flick slows down', 0.5, 8, 0.1]]]
   ];
-  const AG_KEY = 'rm-age-look', AG_DOC = 'tuning/age';
+  const AG_KEY = 'rm-age-look-v2', AG_DOC = 'tuning/age';   // v2: dust sliders changed meaning (top first, hides reflections)
   try { const ls = JSON.parse(store.get(AG_KEY) || 'null'); if (ls) for (const k in YTPMAgeDefaults) if (typeof ls[k] === 'number') YTPMAge[k] = ls[k]; } catch (e) { /* ignore */ }
   const AG = { sets: [], dirty: false, status: '' };
   const agStep = (k) => AG_SPEC.flatMap((g) => g[1]).find((x) => x[0] === k)[4];
