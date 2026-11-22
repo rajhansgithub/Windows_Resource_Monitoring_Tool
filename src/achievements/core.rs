@@ -1341,7 +1341,8 @@ mod tests {
                 s.c.insert(b.counter.to_string(), th * b.per - 1);
                 let (s, un) = apply(&s, &Event::UpdateInstalled { now_ms: 5 }, &Ctx::default());
                 assert_eq!(s.tier(b.id), i as u8, "{} just below tier {}", b.id, i + 1);
-                assert!(!un.iter().any(|u| matches!(u, Unlock::Badge { id, .. } if *id == b.id)));
+                // A fresh state may climb to tier i here, never past it.
+                assert!(!un.iter().any(|u| matches!(u, Unlock::Badge { id, to, .. } if *id == b.id && *to > i as u8)));
                 let mut s = s;
                 s.g = true; // open gate so Emulsion is reachable in this unit test
                 s.c.insert(b.counter.to_string(), th * b.per);
