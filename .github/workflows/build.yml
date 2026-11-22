@@ -66,20 +66,6 @@ jobs:
           if ((Test-Path $log) -and (Select-String -Path $log -Pattern "achievements gpu" -Quiet)) {
             Write-Error "GPU badge path failed in the app, see diagnostics.log"; exit 1
           }
-      - name: TEMP dump screenshots as base64
-        if: always()
-        shell: pwsh
-        run: |
-          Add-Type -AssemblyName System.Drawing
-          foreach ($f in Get-ChildItem target/medal-shots/*.png) {
-            $img = [System.Drawing.Image]::FromFile($f.FullName)
-            $ms = New-Object System.IO.MemoryStream
-            $img.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
-            $s = [Convert]::ToBase64String($ms.ToArray())
-            Write-Output "B64BEGIN $($f.Name)"
-            for ($i = 0; $i -lt $s.Length; $i += 8000) { Write-Output ("B64 " + $s.Substring($i, [Math]::Min(8000, $s.Length - $i))) }
-            Write-Output "B64END"
-          }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
