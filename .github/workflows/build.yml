@@ -52,7 +52,7 @@ jobs:
           }
           $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
           Shot $b.X $b.Y $b.Width $b.Height "target/medal-shots/app-screen.png"
-          $h = [W]::FindWindowW($null, "Achievements")
+          $h = [W]::FindWindowW([NullString]::Value, "Achievements")  # $null would pass ""
           if ($h -ne [IntPtr]::Zero) {
             $r = New-Object W+R
             [void][W]::GetWindowRect($h, [ref]$r)
