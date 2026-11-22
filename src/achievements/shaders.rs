@@ -79,6 +79,15 @@ pub const BUBBLE: &str = r#"
 #define uMotAmt 1.0
 #define uMotT 10.5
 #define uVar 2.0
+// the liquid pulse (water + tiny bubbles), tuner defaults
+#define uLqRefr 0.5
+#define uLqRefl 0.5
+#define uLqFilm 0.35
+#define uLqTint 0.2
+#define uLqWob 0.5
+#define uLqDrops 0.6
+#define uLqDropS 1.0
+#define uLqMove 0.5
 
 float fbm(float2 p){
   float v = 0., a = .5;
@@ -123,28 +132,56 @@ float3 glow(float2 q, float k){
 float pulseD(float2 p){
   return min(min(min(seg(p, float2(4., 9.8), float2(7.6, 9.8)), seg(p, float2(7.6, 9.8), float2(9.6, 6.1))), min(seg(p, float2(9.6, 6.1), float2(11.4, 13.4)), seg(p, float2(11.4, 13.4), float2(13.2, 4.8)))), min(seg(p, float2(13.2, 4.8), float2(14.9, 9.8)), seg(p, float2(14.9, 9.8), float2(20., 9.8))));
 }
-// rgb = the liquid's colour, a = its coverage. dc = its colour at this height.
+// shading of clear water at normal n (view straight on), over what is behind it (the glow, sampled bent by refraction)
+float3 water(float3 n, float2 q, float3 dc, float k){
+  float ndv = n.z;
+  float Fl = .02 + .98*pow(1. - ndv, 5.);
+  float3 Rr = reflect(float3(0., 0., -1.), n);
+  float3 behind = glow(q - n.xy*.22*uLqRefr, k)*.9 + v3(.012);
+  float edge = lerp(1., smoothstep(.05, .55, ndv), saturate(uLqRefr*1.6));
+  float3 trans = behind*(1. - Fl)*edge;
+  float spec = (Fl*(.4 + uRefl)*1.4 + pow(max(dot(Rr, normalize(float3(-.45, .55, .7))), 0.), 120.)*2.4 + pow(max(dot(Rr, normalize(float3(.6, .35, .72))), 0.), 400.)*2.)*uLqRefl*2.;
+  float3 fl = film(uThick*.5 + 220.*n.y + 60.*sin(q.x*5.6 + uTime*.4), ndv)*(Fl*2.2 + .03)*uLqFilm*1.6;
+  float3 tint = dc*(.08 + .5*pow(ndv, 2.))*uLqTint*(.85 + .25*k);
+  return trans + v3(spec) + fl + tint;
+}
+// rgb = the water pulse with its tiny bubbles (already over the glow behind it), a = coverage. dc = the logo colour here.
 float4 liquid(float2 q, float aa, float3 dc, float k){
-  float cs = 1. + uMotAmt*.05*sin(uTime*TAU/uMotT);
-  q /= cs;
-  float2 p = float2(12. + q.x*9., 9.4 - q.y*9.);
-  float xw = q.x*.62, yw = q.y*.62;
-  float R = .95*(1. + (.006*sin(xw*14. - uTime*2.1) + .003*sin(xw*33. + yw*9. + uTime*3.3))/.062);
+  float t = uTime;
+  float2 w = q*.62;                                   // bubble units, as in the preview's 3D pulse
+  w.y -= .012*uLqMove*sin(t*.6);
+  w = rotv(.035*uLqMove*sin(t*.37), w);
+  float cs = 1. + uMotAmt*.05*sin(t*TAU/uMotT);
+  w /= cs;
+  float2 p = float2(12. + w.x/.62*9., 9.4 - w.y/.62*9.);
+  float R = .95*(1. + (.006*sin(w.x*14. - t*2.1) + .003*sin(w.x*33. + w.y*9. + t*3.3))*uLqWob*2./.062);
   float d0 = pulseD(p);
   float a = aa*9.;
   float m = smoothstep(a, -a, d0 - R);
+  float3 n = float3(0., 0., 1.);
+  if (m > 0.){
+    float e = .06;
+    float2 gr = float2(pulseD(p + float2(e, 0.)) - pulseD(p - float2(e, 0.)), pulseD(p - float2(0., e)) - pulseD(p + float2(0., e)))/(2.*e);
+    float x = clamp(d0/R, 0., .999);
+    n = normalize(float3(gr*x, sqrt(1. - x*x)));
+  }
+  // tiny bubbles (spheres): the one in front wins
+  [loop] for (int i = 0; i < 12; i++){
+    float fi = (float)i;
+    if (fi >= 12.*uLqDrops) break;
+    float2 c = float2(-.6 + fi*.105 + .03*sin(fi*7.3), .30*sin(fi*2.39 + .5) - .03);
+    c += .014*uLqMove*float2(sin(t*.5 + fi), sin(t*.43 + fi*2.));
+    float r = (.013 + .026*frac(fi*.618))*uLqDropS;
+    float2 v = (w - c)/r; float l2 = dot(v, v);
+    float md = smoothstep(1. + aa*.62/r, 1. - aa*.62/r, sqrt(l2));
+    if (md > 0.){
+      float3 nd = float3(v, sqrt(max(1. - l2, 0.)));
+      if (md >= m || nd.z > n.z){ n = nd; }
+      m = max(m, md);
+    }
+  }
   if (m <= 0.) return float4(0., 0., 0., 0.);
-  float e = .06;
-  float2 gr = float2(pulseD(p + float2(e, 0.)) - pulseD(p - float2(e, 0.)), pulseD(p - float2(0., e)) - pulseD(p + float2(0., e)))/(2.*e);   // icon y runs down
-  float x = clamp(d0/R, 0., .999);
-  float3 n = normalize(float3(gr*x, sqrt(1. - x*x)));
-  float ndv = n.z;
-  float Fl = .04 + .96*pow(1. - ndv, 5.);
-  float3 Rr = reflect(float3(0., 0., -1.), n);
-  float3 body = dc*dc*(.12 + .85*pow(ndv, 1.6))*(.85 + .25*k);
-  float3 sk = film(uThick*.6 + 180.*n.y, ndv)*Fl*1.1;
-  float spec = Fl*.9*(.35 + uRefl) + pow(max(dot(Rr, normalize(float3(-.45, .55, .7))), 0.), 90.)*2.2 + pow(max(dot(Rr, normalize(float3(.6, .35, .72))), 0.), 300.)*1.6;
-  return float4(body + sk + v3(spec), m*(.65 + .35*(1. - ndv)));
+  return float4(water(n, q, dc, k), m);
 }
 float3 content(float2 q, float k, float aa){
   float4 L = logo(q, aa);
@@ -160,7 +197,7 @@ float3 content(float2 q, float k, float aa){
   }
   if (uVar > 1.5 && uVar < 2.5){
     float4 lq = liquid(q, aa, dotc, k);
-    return g*(1. - .65*lq.a) + lq.rgb*smoothstep(0., .3, lq.a);
+    return g*(1. - lq.a) + lq.rgb*lq.a;
   }
   return g + L.a*dotc*(1. - .15*k);
 }

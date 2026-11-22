@@ -1095,11 +1095,13 @@ void main(){
   /* The bubble's look, shared by the flat badge and the 3D bubble and set by the tuner (v4). Defaults = Rajhans's saved values
      (tuning/bubble v7, 2026-11-20). */
   const LOOK_DEFAULTS = { edgeWidth: 0.59, edgeVary: 0.85, edgeColour: 1.13, rimLine: 0.3, saturation: 0.8, filmInside: 1, filmThick: 497, flowSpeed: 2, reflection: 0.6,
-    dotRefr: 0.3, dotRing: 0.3, refrPeriod: 20, glow: 0.43, breath: 15, motionAmt: 1, motionTime: 10.5 };
+    dotRefr: 0.3, dotRing: 0.3, refrPeriod: 20, glow: 0.43, breath: 15, motionAmt: 1, motionTime: 10.5,
+    lqRefr: 0.5, lqRefl: 0.5, lqFilm: 0.35, lqTint: 0.2, lqWobble: 0.5, lqDrops: 0.6, lqDropSize: 1, lqMove: 0.5, turn: 8 };
   root.YTPMLookDefaults = Object.freeze(Object.assign({}, LOOK_DEFAULTS));
   root.YTPMLook = Object.assign({}, LOOK_DEFAULTS);
   const LOOK_U = { edgeWidth: 'uEdgeW', edgeVary: 'uEdgeVary', edgeColour: 'uEdgeCol', rimLine: 'uRim', saturation: 'uSat', filmInside: 'uFilmIn', filmThick: 'uThick', flowSpeed: 'uFlow', reflection: 'uRefl',
-    dotRefr: 'uDotRefr', dotRing: 'uDotRing', refrPeriod: 'uRefrT', glow: 'uGlow', breath: 'uBreath', motionAmt: 'uMotAmt', motionTime: 'uMotT' };
+    dotRefr: 'uDotRefr', dotRing: 'uDotRing', refrPeriod: 'uRefrT', glow: 'uGlow', breath: 'uBreath', motionAmt: 'uMotAmt', motionTime: 'uMotT',
+    lqRefr: 'uLqRefr', lqRefl: 'uLqRefl', lqFilm: 'uLqFilm', lqTint: 'uLqTint', lqWobble: 'uLqWob', lqDrops: 'uLqDrops', lqDropSize: 'uLqDropS', lqMove: 'uLqMove' };
   let LU = {};
 
   const VS = 'attribute vec2 a;void main(){gl_Position=vec4(a,0.,1.);}';
@@ -1108,6 +1110,7 @@ precision highp float;
 uniform vec2 uRes; uniform float uTime; uniform float uSeed;
 uniform sampler2D uEnv; uniform float uEnvOn; uniform vec4 uEnvR; uniform vec4 uEnvK; uniform float uSee;   // uEnvK: front, back, distance, film tint; uSee: how see-through the bubble is   // the page behind, for a faint mirror reflection
 uniform float uEdgeW, uEdgeVary, uEdgeCol, uSat, uFilmIn, uRefl, uFlow, uThick, uRim, uDotRefr, uDotRing, uRefrT, uGlow, uBreath, uMotAmt, uMotT;   // the look (YTPMLook, the tuner)
+uniform float uLqRefr, uLqRefl, uLqFilm, uLqTint, uLqWob, uLqDrops, uLqDropS, uLqMove;   // the liquid pulse
 #define uVar 2.0
 float hash(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }
 float noise(vec2 p){ vec2 i=floor(p), f=fract(p); vec2 u=f*f*(3.-2.*f);
@@ -1156,28 +1159,56 @@ vec3 glow(vec2 q, float k){
 float pulseD(vec2 p){
   return min(min(min(seg(p,vec2(4.,9.8),vec2(7.6,9.8)),seg(p,vec2(7.6,9.8),vec2(9.6,6.1))),min(seg(p,vec2(9.6,6.1),vec2(11.4,13.4)),seg(p,vec2(11.4,13.4),vec2(13.2,4.8)))),min(seg(p,vec2(13.2,4.8),vec2(14.9,9.8)),seg(p,vec2(14.9,9.8),vec2(20.,9.8))));
 }
-// rgb = the liquid's colour, a = its coverage. dc = its colour at this height.
+// shading of clear water at normal n (view straight on), over what is behind it (the glow, sampled bent by refraction)
+vec3 water(vec3 n, vec2 q, vec3 dc, float k){
+  float ndv=n.z;
+  float Fl=.02+.98*pow(1.-ndv,5.);
+  vec3 Rr=reflect(vec3(0.,0.,-1.),n);
+  vec3 behind=glow(q-n.xy*.22*uLqRefr,k)*.9+vec3(.012);
+  float edge=mix(1.,smoothstep(.05,.55,ndv),clamp(uLqRefr*1.6,0.,1.));
+  vec3 trans=behind*(1.-Fl)*edge;
+  float spec=(Fl*(.4+uRefl)*1.4+pow(max(dot(Rr,normalize(vec3(-.45,.55,.7))),0.),120.)*2.4+pow(max(dot(Rr,normalize(vec3(.6,.35,.72))),0.),400.)*2.)*uLqRefl*2.;
+  vec3 fl=film(uThick*.5+220.*n.y+60.*sin(q.x*5.6+uTime*.4),ndv)*(Fl*2.2+.03)*uLqFilm*1.6;
+  vec3 tint=dc*(.08+.5*pow(ndv,2.))*uLqTint*(.85+.25*k);
+  return trans+vec3(spec)+fl+tint;
+}
+// rgb = the water pulse with its tiny bubbles (already over the glow behind it), a = coverage. dc = the logo colour here.
 vec4 liquid(vec2 q, float aa, vec3 dc, float k){
-  float cs=1.+uMotAmt*.05*sin(uTime*TAU/uMotT);
-  q/=cs;
-  vec2 p=vec2(12.+q.x*9., 9.4-q.y*9.);
-  float xw=q.x*.62, yw=q.y*.62;
-  float R=.95*(1.+(.006*sin(xw*14.-uTime*2.1)+.003*sin(xw*33.+yw*9.+uTime*3.3))/.062);
+  float t=uTime;
+  vec2 w=q*.62;                                     // bubble units, as in the 3D pulse
+  w.y-=.012*uLqMove*sin(t*.6);
+  w=rot(.035*uLqMove*sin(t*.37))*w;
+  float cs=1.+uMotAmt*.05*sin(t*TAU/uMotT);
+  w/=cs;
+  vec2 p=vec2(12.+w.x/.62*9., 9.4-w.y/.62*9.);
+  float R=.95*(1.+(.006*sin(w.x*14.-t*2.1)+.003*sin(w.x*33.+w.y*9.+t*3.3))*uLqWob*2./.062);
   float d0=pulseD(p);
   float a=aa*9.;
   float m=smoothstep(a,-a,d0-R);
+  vec3 n=vec3(0.,0.,1.);
+  if(m>0.){
+    float e=.06;
+    vec2 gr=vec2(pulseD(p+vec2(e,0.))-pulseD(p-vec2(e,0.)), pulseD(p-vec2(0.,e))-pulseD(p+vec2(0.,e)))/(2.*e);
+    float x=clamp(d0/R,0.,.999);
+    n=normalize(vec3(gr*x,sqrt(1.-x*x)));
+  }
+  // tiny bubbles (spheres): the one in front wins
+  for(int i=0;i<12;i++){
+    float fi=float(i);
+    if(fi>=12.*uLqDrops) break;
+    vec3 c=vec3(-.6+fi*.105+.03*sin(fi*7.3), .30*sin(fi*2.39+.5)-.03, 0.);
+    c.xy+=.014*uLqMove*vec2(sin(t*.5+fi), sin(t*.43+fi*2.));
+    float r=(.013+.026*fract(fi*.618))*uLqDropS;
+    vec2 v=(w-c.xy)/r; float l2=dot(v,v);
+    float md=smoothstep(1.+aa*.62/r,1.-aa*.62/r,sqrt(l2));
+    if(md>0.){
+      vec3 nd=vec3(v,sqrt(max(1.-l2,0.)));
+      if(md>=m || nd.z>n.z){ n=nd; }
+      m=max(m,md);
+    }
+  }
   if(m<=0.) return vec4(0.);
-  float e=.06;
-  vec2 gr=vec2(pulseD(p+vec2(e,0.))-pulseD(p-vec2(e,0.)), pulseD(p-vec2(0.,e))-pulseD(p+vec2(0.,e)))/(2.*e);   // icon y runs down
-  float x=clamp(d0/R,0.,.999);
-  vec3 n=normalize(vec3(gr*x, sqrt(1.-x*x)));
-  float ndv=n.z;
-  float Fl=.04+.96*pow(1.-ndv,5.);
-  vec3 Rr=reflect(vec3(0.,0.,-1.),n);
-  vec3 body=dc*dc*(.12+.85*pow(ndv,1.6))*(.85+.25*k);
-  vec3 sk=film(uThick*.6+180.*n.y,ndv)*Fl*1.1;
-  float spec=Fl*.9*(.35+uRefl)+pow(max(dot(Rr,normalize(vec3(-.45,.55,.7))),0.),90.)*2.2+pow(max(dot(Rr,normalize(vec3(.6,.35,.72))),0.),300.)*1.6;
-  return vec4(body+sk+vec3(spec), m*(.65+.35*(1.-ndv)));
+  return vec4(water(n,q,dc,k),m);
 }
 vec3 content(vec2 q, float k, float aa){
   vec4 L=logo(q,aa);
@@ -1193,7 +1224,7 @@ vec3 content(vec2 q, float k, float aa){
   }
   if(uVar>1.5 && uVar<2.5){
     vec4 lq=liquid(q,aa,dotc,k);
-    return g*(1.-.65*lq.a)+lq.rgb*smoothstep(0.,.3,lq.a);
+    return g*(1.-lq.a)+lq.rgb*lq.a;
   }
   return g + L.a*dotc*(1.-.15*k);
 }
@@ -1584,6 +1615,7 @@ void main(){
 
   const BUBBLE = COMMON + `
 uniform float uEdgeW, uEdgeVary, uEdgeCol, uSat, uFilmIn, uRefl, uFlow, uThick, uRim, uGlow, uBreath, uMotAmt, uMotT, uDotRefr, uDotRing, uRefrT;   // the look (YTPMLook)
+uniform float uLqRefr, uLqRefl, uLqFilm, uLqTint, uLqWob, uLqDrops, uLqDropS, uLqMove;   // the liquid pulse
 float h3(vec3 p){ p=fract(p*vec3(.1031,.1030,.0973)); p+=dot(p,p.yxz+33.33); return fract((p.x+p.y)*p.z); }
 float n3(vec3 p){ vec3 i=floor(p), f=fract(p); f=f*f*(3.-2.*f);
   return mix(mix(mix(h3(i),h3(i+vec3(1,0,0)),f.x),mix(h3(i+vec3(0,1,0)),h3(i+vec3(1,1,0)),f.x),f.y),
@@ -1646,16 +1678,31 @@ vec3 dcol(float y){   // the pulse's colour by height (mark units)
 // ---- the pulse as a liquid: a tube of liquid in the shape of the mark, floating inside the sphere (object space, turns with it)
 float sg3(vec3 p, vec3 a, vec3 b){ vec3 pa=p-a, ba=b-a; float h=clamp(dot(pa,ba)/dot(ba,ba),0.,1.); return length(pa-ba*h); }
 float smn(float a, float b, float k){ float h=clamp(.5+.5*(b-a)/k,0.,1.); return mix(b,a,h)-k*h*(1.-h); }
+// tiny bubbles that belong to the pulse: fixed places round the line (same in the flat badge), drifting a little
+vec4 drop(float fi, float t){
+  vec3 c=vec3(-.6+fi*.105+.03*sin(fi*7.3), .30*sin(fi*2.39+.5)-.03, .08*sin(fi*1.7));
+  c+=.014*uLqMove*vec3(sin(t*.5+fi), sin(t*.43+fi*2.), sin(t*.31+fi*1.3));
+  return vec4(c,(.013+.026*fract(fi*.618))*uLqDropS);
+}
 float liq(vec3 p){
-  float sc=1.+uMotAmt*.05*sin(uTime*TAU/uMotT);
+  float t=uTime;
+  // alive, but calm: the pulse drifts and tilts very slightly
+  p.y-=.012*uLqMove*sin(t*.6);
+  p.xy=rot(.035*uLqMove*sin(t*.37))*p.xy;
+  float sc=1.+uMotAmt*.05*sin(t*TAU/uMotT);
   p/=sc;
   vec3 A=vec3(-.5511,-.0276,0.), B=vec3(-.3031,-.0276,0.), C=vec3(-.1653,.2273,0.), D=vec3(-.0413,-.2756,0.), E=vec3(.0827,.3169,0.), F=vec3(.1998,-.0276,0.), G=vec3(.5511,-.0276,0.);
   float d=sg3(p,A,B);
   d=smn(d,sg3(p,B,C),.035); d=smn(d,sg3(p,C,D),.035); d=smn(d,sg3(p,D,E),.035); d=smn(d,sg3(p,E,F),.035); d=smn(d,sg3(p,F,G),.035);
-  // liquid: slow bulges travel along the tube, and the surface ripples a little
-  float t=uTime;
-  float rad=.062+.006*sin(p.x*14.-t*2.1)+.003*sin(p.x*33.+p.y*9.+t*3.3);
-  return (d-rad)*sc;
+  float rad=.062+(.006*sin(p.x*14.-t*2.1)+.003*sin(p.x*33.+p.y*9.+t*3.3))*uLqWob*2.;
+  d-=rad;
+  for(int i=0;i<12;i++){
+    float fi=float(i);
+    if(fi>=12.*uLqDrops) break;
+    vec4 q=drop(fi,t);
+    d=smn(d,length(p-q.xyz)-q.w,.012);
+  }
+  return d*sc;
 }
 vec3 liqN(vec3 p){
   const vec2 e=vec2(.0015,-.0015);
@@ -1699,7 +1746,7 @@ void main(){
   vec3 ro=uRT*p1, rdo=uRT*d;
   float tmax=2.*sh, tt=0., hmin=1e3; bool hit=false;
   // only march where the ray passes the pulse's box
-  vec3 bi=1./rdo, t0=(-vec3(.66,.42,.12)-ro)*bi, t1=(vec3(.66,.42,.12)-ro)*bi;
+  vec3 bi=1./rdo, t0=(-vec3(.75,.5,.2)-ro)*bi, t1=(vec3(.75,.5,.2)-ro)*bi;
   vec3 tn=min(t0,t1), tf=max(t0,t1);
   float ta=max(max(tn.x,tn.y),max(tn.z,0.)), tb=min(min(tf.x,tf.y),min(tf.z,tmax));
   vec3 inner=vec3(0.);
@@ -1717,20 +1764,29 @@ void main(){
   vec3 ph=ro+rdo*clamp(-ro.z/(abs(rdo.z)>1e-3?rdo.z:1e-3),0.,tmax);
   inner+=glow(ph.xy/.62,k)*.38*smoothstep(.0,.35,abs(rdo.z));
   if(hit){
-    vec3 pp=ro+rdo*tt, no=liqN(pp), nw=uR*no;
-    vec3 dc=dcol(pp.y/.62);
+    // clear water: mostly what is behind it, bent (refraction), dark where the surface turns away (light leaves the
+    // other way), the studio on its surface (reflection), a hint of soap-film colour, and a little of the logo's colour
+    vec3 pp=ro+rdo*tt, no=liqN(pp), nw=uR*no, pw=uR*pp;
     float ndv=clamp(-dot(nw,d),0.,1.);
-    float Fl=.04+.96*pow(1.-ndv,5.);
+    float Fl=.02+.98*pow(1.-ndv,5.);
     vec3 R=reflect(d,nw);
-    // liquid body: thick in the middle, so it glows its colour there and goes deeper towards the edges
-    vec3 body=dc*dc*(.12+.85*pow(ndv,1.6))*(.85+.25*k);
-    // its surface is a film too: a hint of interference colour where it turns away, and studio reflections
-    vec3 sk=film(uThick*.6+180.*nw.y,ndv)*Fl*1.1;
-    float spec=min(env(R),2.5)*Fl*.9+pow(max(dot(R,normalize(vec3(-.45,.55,.7))),0.),90.)*2.2+pow(max(dot(R,normalize(vec3(.6,.35,.72))),0.),300.)*1.6;
-    inner=inner*(.35*ndv)+body+sk+vec3(spec);   // see-through: the light behind shows through the thick middle
-    back*=.1;
+    vec3 rr=normalize(mix(d,refract(d,nw,1./1.33),clamp(uLqRefr*2.,0.,1.)));
+    float bb=dot(pw,rr), cc=dot(pw,pw)-1., hb=max(bb*bb-cc,0.);
+    vec3 pb=pw+rr*(-bb+sqrt(hb)), nb=normalize(pb);
+    float cb=clamp(dot(rr,nb),0.,1.);
+    vec3 behind=film(thick(pb),sqrt(1.-(1.-cb*cb)/1.77))*(uFilmIn*.03+uEdgeCol*1.4*(.02+.98*pow(1.-cb,5.)))*.6;
+    vec3 ro2=uRT*pw, rd2=uRT*rr;
+    vec3 pg=ro2+rd2*clamp(-ro2.z/(abs(rd2.z)>1e-3?rd2.z:1e-3),0.,2.);
+    behind+=glow(pg.xy/.62,k)*.38+min(env(rr),2.)*.05;
+    float edge=mix(1.,smoothstep(.05,.55,ndv),clamp(uLqRefr*1.6,0.,1.));
+    vec3 trans=behind*(1.-Fl)*edge;
+    float spec=(min(env(R),3.)*Fl*1.8+pow(max(dot(R,normalize(vec3(-.45,.55,.7))),0.),120.)*2.4+pow(max(dot(R,normalize(vec3(.6,.35,.72))),0.),400.)*2.)*uLqRefl*2.;
+    vec3 fl=film(uThick*.5+220.*nw.y+60.*sin(pp.x*9.+uTime*.4),ndv)*(Fl*2.2+.03)*uLqFilm*1.6;
+    vec3 tint=dcol(pp.y/.62)*(.08+.5*pow(ndv,2.))*uLqTint*(.85+.25*k);
+    inner=trans+vec3(spec)+fl+tint;
+    back=vec3(0.);
   } else {
-    inner+=dcol(0.)*exp(-hmin*55.)*.12*k;   // a faint halo where a ray only grazes the liquid
+    inner+=vec3(.8,.9,1.)*exp(-hmin*70.)*.05*uLqRefl;   // a faint glint where a ray only grazes the water
   }
   col+=(back+inner*.95)*(1.-F1);
   // the mark's refraction copies near the rim, as on the flat badge (screen space: p = position on the outline disc, radius 1)
@@ -1768,7 +1824,7 @@ void main(){
   gl_FragColor=vec4(col*cover,a*cover);
 }`;
 
-  const LOOK3 = { dotRefr: 'uDotRefr', dotRing: 'uDotRing', refrPeriod: 'uRefrT', edgeWidth: 'uEdgeW', edgeVary: 'uEdgeVary', edgeColour: 'uEdgeCol', rimLine: 'uRim', saturation: 'uSat', filmInside: 'uFilmIn', filmThick: 'uThick', flowSpeed: 'uFlow', reflection: 'uRefl', glow: 'uGlow', breath: 'uBreath', motionAmt: 'uMotAmt', motionTime: 'uMotT' };
+  const LOOK3 = { lqRefr: 'uLqRefr', lqRefl: 'uLqRefl', lqFilm: 'uLqFilm', lqTint: 'uLqTint', lqWobble: 'uLqWob', lqDrops: 'uLqDrops', lqDropSize: 'uLqDropS', lqMove: 'uLqMove', dotRefr: 'uDotRefr', dotRing: 'uDotRing', refrPeriod: 'uRefrT', edgeWidth: 'uEdgeW', edgeVary: 'uEdgeVary', edgeColour: 'uEdgeCol', rimLine: 'uRim', saturation: 'uSat', filmInside: 'uFilmIn', filmThick: 'uThick', flowSpeed: 'uFlow', reflection: 'uRefl', glow: 'uGlow', breath: 'uBreath', motionAmt: 'uMotAmt', motionTime: 'uMotT' };
   let cv = null, gl = null, progs = {}, cur = null, raf = 0, t0 = 0, kind = 'dia', R = [1, 0, 0, 0, 1, 0, 0, 0, 1], dirty = true, still = false;
   function prog(src) {
     const sh = (type, s) => { const x = gl.createShader(type); gl.shaderSource(x, s); gl.compileShader(x); if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) { console.info('[RM] 3d shader:', gl.getShaderInfoLog(x)); return null; } return x; };
@@ -2195,7 +2251,9 @@ void main(){
     ['Film', [['saturation', 'Colour saturation', 0, 1.2, 0.01], ['filmInside', 'Film colour in the middle', 0, 1, 0.01], ['filmThick', 'Film thickness (nm)', 80, 700, 1], ['flowSpeed', 'Swirl speed', 0, 2, 0.01], ['reflection', 'Reflections', 0, 1, 0.01]]],
     ['Dots at the edge', [['dotRefr', 'Dot copies left and right', 0, 1, 0.01], ['dotRing', 'Dot ring all round', 0, 1, 0.01], ['refrPeriod', 'Sway time (seconds)', 20, 240, 1]]],
     ['Centre', [['glow', 'Centre light', 0, 1.6, 0.01], ['breath', 'Breath time (seconds)', 4, 40, 0.5]]],
-    ['Pulse motion', [['motionAmt', 'Amount', 0, 1, 0.01], ['motionTime', 'Cycle time (seconds)', 4, 40, 0.5]]]
+    ['Pulse motion', [['motionAmt', 'Amount', 0, 1, 0.01], ['motionTime', 'Cycle time (seconds)', 4, 40, 0.5]]],
+    ['Liquid pulse', [['lqRefr', 'Refraction', 0, 1, 0.01], ['lqRefl', 'Reflections', 0, 1, 0.01], ['lqFilm', 'Thin film colour', 0, 1, 0.01], ['lqTint', 'Logo colour in the water', 0, 1, 0.01], ['lqWobble', 'Surface ripple', 0, 1, 0.01]]],
+    ['Tiny bubbles and life', [['lqDrops', 'Tiny bubbles (how many)', 0, 1, 0.01], ['lqDropSize', 'Tiny bubble size', 0.4, 2, 0.01], ['lqMove', 'Logo drift', 0, 1, 0.01], ['turn', 'Bubble sway (degrees)', 0, 40, 1]]]
   ];
   const TN_KEY = 'rm-bubble-look', TN_DOC = 'tuning/bubble';
   try { const ls = JSON.parse(store.get(TN_KEY) || 'null'); if (ls) for (const k in YTPMLookDefaults) if (typeof ls[k] === 'number') YTPMLook[k] = ls[k]; } catch (e) { /* ignore */ }
@@ -2260,8 +2318,8 @@ void main(){
   function tnTick(now) {
     TN.raf = 0;
     if (!TN.on) return;
-    if (!TN.drag && !reduced()) TN.yaw += .12;
-    try { YTPM3D.rot(TN.yaw, TN.pitch, 0); } catch (e) { /* ignore */ }
+    const sw = reduced() ? 0 : +YTPMLook.turn || 0, ts = now / 1000;
+    try { YTPM3D.rot(TN.yaw + sw * Math.sin(ts * .45), TN.pitch + sw * .35 * Math.sin(ts * .31), 0); } catch (e) { /* ignore */ }
     TN.raf = requestAnimationFrame(tnTick);
   }
   function tnStart() {
@@ -2492,7 +2550,7 @@ void main(){
       const r = stage.getBoundingClientRect();
       ty = clamp((FV.px - (r.left + r.width / 2)) / (window.innerWidth / 2), -1, 1) * 22;
       tx = -clamp((FV.py - (r.top + r.height / 2)) / (window.innerHeight / 2), -1, 1) * 16;
-    } else { const t = ts / 1000; tx = 3.5 * Math.sin(.7 * t); ty = 9 * Math.sin(.5 * t); }
+    } else { const t = ts / 1000, sw = FV.bubble ? (+YTPMLook.turn || 0) / 9 : 1; tx = 3.5 * sw * Math.sin(.7 * t); ty = 9 * sw * Math.sin(.5 * t); }
     const k = 1 - Math.exp(-dt * 16);
     FV.rx += (tx - FV.rx) * k; FV.ry += (ty - FV.ry) * k;
     FV.flip += (FV.flipT - FV.flip) * (1 - Math.exp(-dt * 6.5));
@@ -2501,7 +2559,7 @@ void main(){
       if (!FV.drag) {
         FV.yaw += FV.vy * dt; FV.pitch += FV.vp * dt;                  // a flick keeps turning, then slows
         const fr = Math.exp(-dt * 2.2); FV.vy *= fr; FV.vp *= fr;
-        if (ts - FV.lastDrag > 2500) FV.yaw += (FV.bubble ? 9 : 14) * dt;   // left alone: a slow turntable
+        if (ts - FV.lastDrag > 2500 && !FV.bubble) FV.yaw += 14 * dt;   // left alone: stones turn slowly; the bubble only sways
       }
       FV.turn += (FV.turnT - FV.turn) * (1 - Math.exp(-dt * 5));
       if (FV.drag) { FV.rx *= .9; FV.ry *= .9; }
