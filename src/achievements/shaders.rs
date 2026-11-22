@@ -492,7 +492,6 @@ static const float4 AGE2 = float4(1.42, .65, .3, 1.6);  // thread thickness, gli
 static const float  AGE_RAINBOW = .19;
 float wN(float2 p){ return vnoise(p); }
 static float wS, wC;   // this medal's seed (uWear.y, from its id) and the angle its cobweb hangs at: every medal gets its own web and dust
-float wN(float2 p){ float2 i=floor(p), f=frac(p); float2 u=f*f*(3.-2.*f); return lerp(lerp(hash(i),hash(i+float2(1.,0.)),u.x),lerp(hash(i+float2(0.,1.)),hash(i+float2(1.,1.)),u.x),u.y); }
 float wF(float2 p){ return .5*wN(p)+.25*wN(p*2.03+3.1)+.125*wN(p*4.01+7.7); }
 float2 wSeg(float2 p, float2 a, float2 b){ float2 pa=p-a, ba=b-a; float h=clamp(dot(pa,ba)/dot(ba,ba),0.,1.); return float2(length(pa-ba*h),h); }
 // short curled fibres, one per cell of size 1/sc. dens = how many of them exist yet (each has its own fixed place).
