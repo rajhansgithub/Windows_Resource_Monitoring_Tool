@@ -479,27 +479,12 @@ float4 medal(float2 p, float r, float aa, float t){
   return float4(col*inside, inside);
 }
 
-// ---- age: dust, scratches and cobwebs (uWear, 0..1). 1 real hour = 1 day on the shelf; polishing removes it.
+// ---- age: dust and cobwebs (uWear.x dust, .z cobweb, 0..1; .y unused). 1 real hour = 1 day on the shelf; polishing removes it.
 // Dust settles most on what faces up and in sheltered corners, in patches, with grit of several sizes and the odd lint
 // fibre. Cobwebs are abandoned tangle webs: sagging threads strung from a sheltered corner, sticky silk that catches
 // dust (grey beads along it), a faint sheet where threads crowd; the silk glints where a thread runs across the light.
 float wN(float2 p){ return vnoise(p); }
 float wF(float2 p){ return .5*wN(p) + .25*wN(p*2.03 + 3.1) + .125*wN(p*4.01 + 7.7); }
-float wScr(float2 p, float amt, float aa){
-  float m = 0.;
-  [unroll] for (int i = 0; i < 3; i++){
-    float a = float(i)*2.1 + .7;
-    float2 q = rotv(a, p)*float2(3., 16.) + float2(float(i)*7.3, float(i)*3.1);
-    float2 id = floor(q), f = frac(q);
-    if (hash(id + float(i)*17.) < amt*.55){
-      float y0 = .2 + .6*hash(id + 3.1), x0 = hash(id + 5.7)*.5, x1 = x0 + .25 + .5*hash(id + 9.2);
-      float w = max(.05, aa*16.*.6);
-      float l = smoothstep(w, 0., abs(f.y - y0))*smoothstep(x0, x0 + .05, f.x)*smoothstep(x1, x1 - .05, f.x);
-      m = max(m, l*(.4 + .6*hash(id + 1.3)));
-    }
-  }
-  return m;
-}
 float2 wSeg(float2 p, float2 a, float2 b){ float2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba)/dot(ba, ba), 0., 1.); return float2(length(pa - ba*h), h); }
 float4 wWeb(float2 p, float amt, float aa){
   if (amt <= .001) return float4(0., 0., 0., 0.);
@@ -541,8 +526,8 @@ float4 wWeb(float2 p, float amt, float aa){
 }
 // age a premultiplied colour. p: on the face (radius 1, +y up). recess: how sheltered. metal: 1 metal, 0 stone.
 float3 aged(float3 col, float a, float2 p, float recess, float metal, float aa){
-  float dust = uWear.x, scr = uWear.y, web = uWear.z;
-  if (dust + scr + web < .002 || a <= 0.) return col;
+  float dust = uWear.x, web = uWear.z;   // dust and cobwebs only (no scratches: the owner 11-22)
+  if (dust + web < .002 || a <= 0.) return col;
   float lum = dot(col, float3(.299, .587, .114))/max(a, .01);
   float film = smoothstep(.15, .85, wF(p*3.2 + 11.))*.65 + .35;
   float up = smoothstep(-.4, .95, p.y);
@@ -553,8 +538,6 @@ float3 aged(float3 col, float a, float2 p, float recess, float metal, float aa){
   col = lerp(col, v3(lum)*.8*a + .03*a, dust*(metal > .5 ? .2 : .32));
   col = lerp(col, dc*(.42 + .38*lum), clamp(dd*1.15, 0., .72));
   col = lerp(col, dc*.9, clamp(grit*dust*.55 + lint*dust*.5, 0., .6));
-  float sc = wScr(p, scr, aa);
-  col += float3(.9, .88, .85)*sc*a*(metal > .5 ? .16 : .12)*(.3 + .7*lum);
   float4 wb = wWeb(p, web, aa);
   col = col*(1. - wb.a) + wb.rgb*a;
   return col;

@@ -2407,7 +2407,7 @@ impl Ui {
                 items.push(Cl::T(l, f.small, soft, if i == 0 { sc(6) } else { 0 }));
             }
             items.push(Cl::Btn(w.clean, sc(10)));
-            let note = format!("Ages like the real thing: 1 hour here is 1 day on the shelf. Cobwebs come after 10 days. One rub clears the webs, dust goes next, scratches take the most rubs. Shine {}", self.state.sh);
+            let note = format!("Ages like the real thing: 1 hour here is 1 day on the shelf. Cobwebs come after 10 days. One rub clears the webs, the dust takes a few more. Shine {}", self.state.sh);
             for (i, l) in wrap_dc(mdc, f.small, &note, inner, 4).into_iter().enumerate() {
                 items.push(Cl::T(l, f.small, soft, if i == 0 { sc(8) } else { 0 }));
             }

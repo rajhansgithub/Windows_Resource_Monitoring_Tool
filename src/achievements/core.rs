@@ -396,8 +396,8 @@ pub struct Care {
 }
 
 /// How worn a medal looks now. Medals age with real time, 1 real hour = 1 day on the shelf: dust settles in about a
-/// month (63% at 30 days), hairline scratches in about five (63% at 150 days), cobwebs start after 10 days and are
-/// full by 50. Polishing: every rub clears the webs, takes half the dust and a quarter of the scratches.
+/// month (63% at 30 days), cobwebs start after 10 days and are full by 50. Polishing: every rub clears the webs and
+/// takes half the dust. `scratch` stays 0 (scratches were dropped).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Wear {
     pub dust: f32,
@@ -501,9 +501,10 @@ impl State {
         };
         let days = now_ms.saturating_sub(t) as f32 / WEAR_DAY_MS as f32;
         let dust = 1.0 - (1.0 - d0) * (-days / 30.0).exp();
-        let scratch = 1.0 - (1.0 - s0) * (-days / 150.0).exp();
+        let _ = s0;
+        let scratch = 0.0; // dust and cobwebs only: scratches looked wrong (the owner, 2026-11-22)
         let web = if days < 10.0 { 0.0 } else { ((days - 10.0) / 40.0).min(1.0).powf(0.8) };
-        let condition = (100.0 * (1.0 - (0.5 * dust + 0.3 * scratch + 0.2 * web))).round().clamp(0.0, 100.0) as u8;
+        let condition = (100.0 * (1.0 - (0.7 * dust + 0.3 * web))).round().clamp(0.0, 100.0) as u8;
         Wear { dust, scratch, web, days, condition, clean: dust < 0.02 && scratch < 0.03 && web < 0.01, polishes: n }
     }
 
