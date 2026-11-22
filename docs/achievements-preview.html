@@ -1014,7 +1014,7 @@ void main(){
     return rec;
   }
   function draw(now) {
-    const t = still() ? 9 : (now - t0) / 1000;
+    const t = still() ? 9 : (now - t0) / 3000;   // a third of real time: calm (the owner 11-22)
     for (const it of items) {
       if (solo && it.c !== solo) continue;            // full view open: only the big one draws, the rest hold still
       if (!it.vis && !it.fresh) continue;
@@ -1838,7 +1838,7 @@ void main(){
     raf = 0;
     if (!gl || !cur) return;
     if (!document.hidden && (dirty || !still)) {
-      const t = still ? 9 : (now - t0) / 1000;
+      const t = still ? 9 : (now - t0) / (kind === 'bubble' ? 1000 : 3000);   // stones move at a third of real time
       gl.viewport(0, 0, cv.width, cv.height);
       gl.useProgram(cur.p);
       gl.uniform2f(cur.U.uRes, cv.width, cv.height); gl.uniform1f(cur.U.uTime, t); gl.uniform1f(cur.U.uKind, kind === 'ruby' ? 1 : 0);
@@ -2546,9 +2546,10 @@ void main(){
     let tx, ty;
     if (FV.px !== null && ts - FV.moved < 4000) {
       const r = stage.getBoundingClientRect();
-      ty = clamp((FV.px - (r.left + r.width / 2)) / (window.innerWidth / 2), -1, 1) * 22;
-      tx = -clamp((FV.py - (r.top + r.height / 2)) / (window.innerHeight / 2), -1, 1) * 16;
-    } else { const t = ts / 1000, sw = FV.bubble ? (+YTPMLook.turn || 0) / 9 : 1; tx = 3.5 * sw * Math.sin(.7 * t); ty = 9 * sw * Math.sin(.5 * t); }
+      const hv = FV.bubble ? 1 : 1 / 3;   // metals and stones: a third of the hover tilt
+      ty = clamp((FV.px - (r.left + r.width / 2)) / (window.innerWidth / 2), -1, 1) * 22 * hv;
+      tx = -clamp((FV.py - (r.top + r.height / 2)) / (window.innerHeight / 2), -1, 1) * 16 * hv;
+    } else { const t = ts / 1000, sw = FV.bubble ? (+YTPMLook.turn || 0) / 9 : 1 / 3; tx = 3.5 * sw * Math.sin(.7 * t); ty = 9 * sw * Math.sin(.5 * t); }
     const k = 1 - Math.exp(-dt * 16);
     FV.rx += (tx - FV.rx) * k; FV.ry += (ty - FV.ry) * k;
     FV.flip += (FV.flipT - FV.flip) * (1 - Math.exp(-dt * 6.5));
@@ -2557,7 +2558,7 @@ void main(){
       if (!FV.drag) {
         FV.yaw += FV.vy * dt; FV.pitch += FV.vp * dt;                  // a flick keeps turning, then slows
         const fr = Math.exp(-dt * 2.2); FV.vy *= fr; FV.vp *= fr;
-        if (ts - FV.lastDrag > 2500 && !FV.bubble) FV.yaw += 14 * dt;   // left alone: stones turn slowly; the bubble only sways
+        if (ts - FV.lastDrag > 2500 && !FV.bubble) FV.yaw += 14 / 3 * dt;   // left alone: stones turn slowly (a third of before); the bubble only sways
       }
       FV.turn += (FV.turnT - FV.turn) * (1 - Math.exp(-dt * 5));
       if (FV.drag) { FV.rx *= .9; FV.ry *= .9; }

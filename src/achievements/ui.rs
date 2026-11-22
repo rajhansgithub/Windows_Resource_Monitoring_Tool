@@ -2129,7 +2129,9 @@ impl Ui {
         if !gpu::available() && key_old == Some(key) {
             return;
         }
-        let t = if reduced { gpu::still_time(material_of(tier)) } else { (now_s() - t0) as f32 };
+        // metals and stones move at a third of real time (calm); the bubble keeps its own pace
+        let pace = if tier >= 7 { 1.0 } else { 1.0 / 3.0 };
+        let t = if reduced { gpu::still_time(material_of(tier)) } else { (now_s() - t0) as f32 * pace };
         let frame = self.medals.frame(id, tier, px, t, (ry / 22.0 * 0.5, rx / 16.0 * 0.5));
         if let Some(fv) = self.fv.as_mut() {
             fv.frame = frame;
@@ -2142,17 +2144,19 @@ impl Ui {
         let Some(fv) = self.fv.as_ref() else { return (0.0, 0.0) };
         let g = self.fv_geom(self.fv_tier());
         let now = now_s();
+        // metals and stones: a third of the hover tilt and idle sway (calm); the bubble keeps its own
+        let amp = if self.fv_tier() >= 7 { 1.0 } else { 1.0 / 3.0 };
         match fv.ptr {
             Some((px, py)) if now - fv.moved < 4.0 => {
                 let (cx, cy) = ((g.stage.l + g.stage.r) as f32 / 2.0, (g.stage.t + g.stage.b) as f32 / 2.0);
-                let ty = ((px as f32 - cx) / (self.cw as f32 / 2.0)).clamp(-1.0, 1.0) * 22.0;
-                let tx = -((py as f32 - cy) / (self.ch as f32 / 2.0)).clamp(-1.0, 1.0) * 16.0;
+                let ty = ((px as f32 - cx) / (self.cw as f32 / 2.0)).clamp(-1.0, 1.0) * 22.0 * amp;
+                let tx = -((py as f32 - cy) / (self.ch as f32 / 2.0)).clamp(-1.0, 1.0) * 16.0 * amp;
                 (tx, ty)
             }
             _ if fv.reduced => (0.0, 0.0),
             _ => {
                 let t = (now - fv.t0) as f32;
-                (3.5 * (0.7 * t).sin(), 9.0 * (0.5 * t).sin())
+                (3.5 * amp * (0.7 * t).sin(), 9.0 * amp * (0.5 * t).sin())
             }
         }
     }
