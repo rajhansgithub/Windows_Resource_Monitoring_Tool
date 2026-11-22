@@ -808,6 +808,18 @@ fn wear_code(w: &Wear) -> u16 {
     q(w.dust) | q(w.scratch) << 4 | q(w.web) << 8
 }
 
+/// This medal's own seed for its cobweb and dust (0..1), sent in wear[1]. Same as the preview's `webSeed`:
+/// FNV-1a of the id, then a murmur3 finish so ids one letter apart still get very different webs.
+fn web_seed(id: &str) -> f32 {
+    let mut h = hash32(id);
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x85eb_ca6b);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0xc2b2_ae35);
+    h ^= h >> 16;
+    (h as f64 / 4294967296.0) as f32
+}
+
 fn wear_of_code(c: u16) -> [f32; 3] {
     let f = |sh: u16| ((c >> sh) & 15) as f32 / 15.0;
     [f(0), f(4), f(8)]
@@ -884,7 +896,7 @@ impl Medals {
                     time_s: gpu::still_time(material_of(t)),
                     seed: seed_of(id, t),
                     tilt: (0.0, 0.0),
-                    wear: if t >= 7 { [0.0; 3] } else { wear_of_code(wc) },
+                    wear: if t >= 7 { [0.0; 3] } else { let w = wear_of_code(wc); [w[0], web_seed(id), w[2]] },
                     icon_mask: self.masks.get(icon_of(id)).map(|m| &m[..]),
                     detail_mask: None,
                 })
@@ -913,7 +925,7 @@ impl Medals {
                 time_s: t,
                 seed: seed_of(id, tier),
                 tilt,
-                wear,
+                wear: [wear[0], web_seed(id), wear[2]],
                 icon_mask: self.masks.get(icon).map(|m| &m[..]),
                 detail_mask: None,
             }];
@@ -2407,7 +2419,7 @@ impl Ui {
                 items.push(Cl::T(l, f.small, soft, if i == 0 { sc(6) } else { 0 }));
             }
             items.push(Cl::Btn(w.clean, sc(10)));
-            let note = format!("Ages like the real thing: 1 hour here is 1 day on the shelf. Cobwebs start after a week and grow for months. One rub clears the webs, the dust takes a few more. Shine {}", self.state.sh);
+            let note = format!("Ages like the real thing: 1 hour here is 1 day on the shelf. Cobwebs start after 20 days and grow for months. One rub clears the webs, the dust takes a few more. Shine {}", self.state.sh);
             for (i, l) in wrap_dc(mdc, f.small, &note, inner, 4).into_iter().enumerate() {
                 items.push(Cl::T(l, f.small, soft, if i == 0 { sc(8) } else { 0 }));
             }
