@@ -224,6 +224,28 @@ canvas { display: block; }
 .fv-floor { position: absolute; left: 50%; bottom: -8%; width: 70%; height: 8%; margin-left: -35%; border-radius: 50%; background: radial-gradient(ellipse at center, rgba(0, 0, 0, .55), transparent 70%); pointer-events: none; }
 .fv-card { width: min(340px, 100%); background: rgba(21, 24, 29, .88); border: 1px solid #3a424e; border-radius: 14px; padding: 18px; display: grid; gap: 8px; }
 .fv-card h2 { font-size: 24px; }
+.wr { border-top: 1px solid #3a424e; padding-top: 10px; display: grid; gap: 7px; position: relative; }
+.wr-h { display: flex; justify-content: space-between; align-items: baseline; font-family: var(--mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
+.wr-h b { font-family: var(--display); font-size: 20px; letter-spacing: 0; color: var(--fg); }
+.wr-bar { height: 8px; border-radius: 99px; background: #0f1216; border: 1px solid #333b46; overflow: hidden; }
+.wr-bar i { display: block; height: 100%; border-radius: 99px; background: var(--wc, #6fd38a); transition: width .35s ease, background .35s; }
+.wr-sub { font-size: 13px; color: var(--dim); }
+.wr-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.wr-btn { flex: 1 1 auto; min-height: 44px; border-radius: 10px; border: 1px solid #5c6675; background: linear-gradient(#2a313b, #20262e); color: var(--fg); font-family: var(--display); font-weight: 700; font-size: 15px; cursor: pointer; }
+.wr-btn:hover { border-color: var(--accent); }
+.wr-btn:active { transform: translateY(1px); }
+.wr-btn.done { border-color: #6fd38a; color: #9ff0b4; }
+.wr-ff { min-height: 44px; border-radius: 10px; border: 1px dashed #4a5361; background: none; color: var(--dim); font-family: var(--mono); font-size: 12px; padding: 0 12px; cursor: pointer; }
+.wr-note { font-size: 12px; color: var(--dim); line-height: 1.45; }
+.wr-pop { position: absolute; right: 12px; bottom: 64px; font-family: var(--display); font-weight: 700; color: #ffe08a; pointer-events: none; animation: wrPop .9s ease-out forwards; }
+@keyframes wrPop { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-34px); } }
+.tg.dusty { background: none; color: #d9b98a; border: 1px dashed #6b5a44; }
+.fv-shine { position: absolute; inset: 3%; border-radius: 50%; overflow: hidden; pointer-events: none; z-index: 3; }
+.fv-shine .sw { position: absolute; inset: -20% -60%; background: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, .0) 42%, rgba(255, 255, 255, .42) 50%, rgba(255, 255, 255, 0) 58%, transparent 62%); animation: shSweep .7s ease-in-out forwards; mix-blend-mode: screen; }
+.fv-shine b { position: absolute; width: 18px; height: 18px; margin: -9px; background: radial-gradient(circle, #fff 0 12%, transparent 13%), linear-gradient(90deg, transparent 46%, rgba(255,255,255,.9) 50%, transparent 54%), linear-gradient(0deg, transparent 46%, rgba(255,255,255,.9) 50%, transparent 54%); border-radius: 50%; animation: shStar .8s ease-out forwards; mix-blend-mode: screen; }
+@keyframes shSweep { from { transform: translateX(-60%); } to { transform: translateX(60%); } }
+@keyframes shStar { 0% { opacity: 0; transform: scale(.2) rotate(0deg); } 30% { opacity: 1; } 100% { opacity: 0; transform: scale(1.3) rotate(45deg); } }
+@media (prefers-reduced-motion: reduce) { .fv-shine, .wr-pop { display: none; } .wr-bar i { transition: none; } }
 .fv-card .mt { font-family: var(--mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
 .fv-card .ln { color: var(--dim); }
 .fv-card ul { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 3px; font-size: 13px; color: var(--dim); }
@@ -414,6 +436,91 @@ float inner(vec2 c, vec3 v, vec3 n, float ior, float t){
 }
 // ---- struck metal medals (tiers 1-4): polished raised rim, spun face with fine rings, icon engraved (frosted floor, bright cut walls)
 uniform vec3 uMetal;
+
+// ---- age: dust, scratches and cobwebs (uWear = dust, scratches, cobweb, 0..1). 1 real hour = 1 day on the shelf; polishing removes it.
+// Real dust settles most on what faces up and in sheltered corners, in patches, with grit of several sizes and the odd lint fibre.
+// Real cobwebs are abandoned tangle webs: sagging threads strung from a sheltered corner, sticky silk that catches dust (grey beads
+// along it), a faint sheet where threads crowd. The silk glints where a thread runs across the light, with a faint rainbow.
+uniform vec3 uWear;
+float wN(vec2 p){ vec2 i=floor(p), f=fract(p); vec2 u=f*f*(3.-2.*f); return mix(mix(hash(i),hash(i+vec2(1.,0.)),u.x),mix(hash(i+vec2(0.,1.)),hash(i+vec2(1.,1.)),u.x),u.y); }
+float wF(vec2 p){ return .5*wN(p)+.25*wN(p*2.03+3.1)+.125*wN(p*4.01+7.7); }
+// hairline scratches: short straight lines in three directions; more of them appear as amt grows
+float wScr(vec2 p, float amt, float aa){
+  float m=0.;
+  for(int i=0;i<3;i++){
+    float a=float(i)*2.1+.7;
+    vec2 q=mat2(cos(a),-sin(a),sin(a),cos(a))*p*vec2(3.,16.)+vec2(float(i)*7.3,float(i)*3.1);
+    vec2 id=floor(q), f=fract(q);
+    if(hash(id+float(i)*17.)<amt*.55){
+      float y0=.2+.6*hash(id+3.1), x0=hash(id+5.7)*.5, x1=x0+.25+.5*hash(id+9.2);
+      float w=max(.05,aa*16.*.6);
+      float l=smoothstep(w,0.,abs(f.y-y0))*smoothstep(x0,x0+.05,f.x)*smoothstep(x1,x1-.05,f.x);
+      m=max(m,l*(.4+.6*hash(id+1.3)));
+    }
+  }
+  return m;
+}
+vec2 wSeg(vec2 p, vec2 a, vec2 b){ vec2 pa=p-a, ba=b-a; float h=clamp(dot(pa,ba)/dot(ba,ba),0.,1.); return vec2(length(pa-ba*h),h); }
+// the cobweb: rgb = light from the silk and its dust (premultiplied), a = how much it covers
+vec4 wWeb(vec2 p, float amt, float aa){
+  if(amt<=.001) return vec4(0.);
+  const float A0=2.3;                                     // the sheltered corner: top left, under the light
+  vec2 cn=vec2(cos(A0),sin(A0));
+  if(dot(p-cn*.7,p-cn*.7)>.45) return vec4(0.);
+  vec2 L2=normalize(vec2(-.42,.46));
+  float cov=0., glint=0., grey=0.; vec3 iri=vec3(0.);
+  for(int i=0;i<28;i++){
+    float fi=float(i);
+    float h1=hash(vec2(fi,1.3)), h2=hash(vec2(fi,7.1)), h3=hash(vec2(fi,4.7)), h4=hash(vec2(fi,9.9));
+    if(h4>amt*1.15) continue;                             // more threads the longer it is left
+    float aA=A0+(h1-.5)*1.25, aB=A0+(h2-.5)*1.6;
+    vec2 a=vec2(cos(aA),sin(aA))*(.85+.07*h3);
+    vec2 b=fi<9.?vec2(cos(aB),sin(aB))*(.84+.08*h1):cn*.86+vec2(cos(fi*2.4),sin(fi*2.4))*(.18+.32*h3);
+    float Ls=length(b-a);
+    vec2 k=(a+b)*.5-vec2(0.,1.)*Ls*(.06+.16*h2)*2.;      // control point: the thread sags under gravity
+    vec2 P0=a, P1=mix(mix(a,k,.25),mix(k,b,.25),.25), P2=mix(mix(a,k,.5),mix(k,b,.5),.5), P3=mix(mix(a,k,.75),mix(k,b,.75),.75);
+    vec2 d1=wSeg(p,P0,P1), d2=wSeg(p,P1,P2), d3=wSeg(p,P2,P3), d4=wSeg(p,P3,b);
+    vec2 dd=d1; float tt=d1.y*.25; vec2 sd=P1-P0;
+    if(d2.x<dd.x){ dd=d2; tt=.25+d2.y*.25; sd=P2-P1; }
+    if(d3.x<dd.x){ dd=d3; tt=.5+d3.y*.25; sd=P3-P2; }
+    if(d4.x<dd.x){ dd=d4; tt=.75+d4.y*.25; sd=b-P3; }
+    float clump=smoothstep(.62,.95,wN(vec2(tt*Ls*55.,fi*5.3)))*(.3+.7*amt);   // dust caught on the sticky silk
+    float w=.0016+.006*clump;
+    float c=smoothstep(w+aa,w-aa*.5,dd.x)*min(1.,(w*2.)/(aa*1.5+1e-4))*(.55+.45*smoothstep(.0,.15,amt-h4*.8));
+    if(c>0.){
+      float g=pow(1.-abs(dot(normalize(sd),L2)),2.);       // glints where it runs across the light
+      cov=max(cov,c);
+      glint=max(glint,c*g*(1.-clump));
+      grey=max(grey,c*clump);
+      iri=max(iri,c*g*(.5+.5*cos(6.283*(tt*2.+h1+vec3(0.,.33,.67)))));
+    }
+  }
+  // the sheet where threads crowd in the corner: thin, patchy, grey with dust
+  float sh=amt*smoothstep(.40,.0,length(p-cn*.86))*(.35+.65*smoothstep(.3,.8,wF(p*22.+4.)))*.42;
+  float a=clamp(max(cov*.75,sh),0.,1.);
+  vec3 rgb=vec3(.78,.77,.74)*(cov*.35+glint*.65)+iri*.10+vec3(.50,.48,.44)*(grey*.75+sh*.9);
+  return vec4(rgb,a);
+}
+// age a (premultiplied) colour. p: on the face (radius 1, +y up). recess: how sheltered (dust collects there). metal: 1 metal, 0 stone.
+vec3 aged(vec3 col, float a, vec2 p, float recess, float metal, float aa){
+  float dust=uWear.x, scr=uWear.y, web=uWear.z;
+  if(dust+scr+web<.002 || a<=0.) return col;
+  float lum=dot(col,vec3(.299,.587,.114))/max(a,.01);
+  float film=smoothstep(.15,.85,wF(p*3.2+11.))*.65+.35;                // patches, like a real shelf
+  float up=smoothstep(-.4,.95,p.y);                                     // settles on what faces up
+  float dd=dust*(.22+.55*recess+.3*up)*film;
+  float grit=smoothstep(.82,.97,wN(p*170.+3.))+.7*smoothstep(.9,.99,wN(p*60.+9.)); // fine grit and the odd coarse grain
+  float lint=smoothstep(.012,0.,abs(wN(p*7.+31.)-.5))*smoothstep(.78,.86,wN(p*2.3+5.)); // a curly fibre here and there
+  vec3 dc=vec3(.60,.57,.52)*a;
+  col=mix(col,vec3(lum)*.8*a+.03*a,dust*(metal>.5?.2:.32));            // the shine goes flat (stones lose their fire)
+  col=mix(col,dc*(.42+.38*lum),clamp(dd*1.15,0.,.72));                    // the film: grey, matte, lifts the darks
+  col=mix(col,dc*.9,clamp(grit*dust*.55+lint*dust*.5,0.,.6));
+  float sc=wScr(p,scr,aa);
+  col+=vec3(.9,.88,.85)*sc*a*(metal>.5?.16:.12)*(.3+.7*lum);
+  vec4 wb=wWeb(p,web,aa);
+  col=col*(1.-wb.a)+wb.rgb*a;
+  return col;
+}
 float envM(vec3 d, float t){
   d.xy=rot(t*.25)*d.xy;
   float s=.10+.30*smoothstep(-.3,1.,d.z);
@@ -894,7 +1001,10 @@ void main(){
     gl_FragColor=brill(g*vec2(cos(an),sin(an)),g,aa*1.3,t,p,-1.); return;
   }
   if(r>1.+aa){ gl_FragColor=vec4(0.); return; }
-  gl_FragColor=uKind>1.5?medal(p,r,aa,t):brill(p,r,aa,t,p,-1.);
+  vec4 c=uKind>1.5?medal(p,r,aa,t):brill(p,r,aa,t,p,-1.);
+  float rec=uKind>1.5 ? (uIconOn>0. && r<.83 ? icA(p) : 0.)+smoothstep(.1,0.,abs(r-.83))*.8+smoothstep(.62,.83,r)*step(r,.83)*.3 : smoothstep(.86,1.,r)*.6;
+  c.rgb=aged(c.rgb,c.a,p,rec,uKind>1.5?1.:0.,aa);
+  gl_FragColor=c;
 }`;
 
   // metal colours (linear-ish reflectance): bronze, silver, gold, and platinum with the cool tint from the tier colour
@@ -924,7 +1034,7 @@ void main(){
     gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
     const loc = gl.getAttribLocation(pr, 'a'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-    for (const k of ['uRes', 'uTime', 'uSeed', 'uKind', 'uIcon', 'uIconOn', 'uPx', 'uMetal', 'uShape', 'uDet', 'uDetOn', 'uTilt']) U[k] = gl.getUniformLocation(pr, k);
+    for (const k of ['uRes', 'uTime', 'uSeed', 'uKind', 'uIcon', 'uIconOn', 'uPx', 'uMetal', 'uShape', 'uDet', 'uDetOn', 'uTilt', 'uWear']) U[k] = gl.getUniformLocation(pr, k);
     gl.uniform1i(U.uIcon, 0); gl.uniform1i(U.uDet, 1);
     t0 = performance.now();
     if ('IntersectionObserver' in root) io = new IntersectionObserver((es) => es.forEach((e) => { const it = items.find((x) => x.c === e.target); if (it) it.vis = e.isIntersecting; }));
@@ -1021,7 +1131,7 @@ void main(){
       it.fresh = false;
       if (off && (gc.width !== it.px || gc.height !== it.px)) { gc.width = it.px; gc.height = it.px; }
       gl.viewport(0, 0, it.px, it.px);
-      gl.uniform2f(U.uRes, it.px, it.px); gl.uniform1f(U.uTime, t); gl.uniform1f(U.uSeed, it.seed); gl.uniform1f(U.uKind, it.kind); gl.uniform1f(U.uPx, it.px); gl.uniform3fv(U.uMetal, METAL[it.metal] || METAL.gold); gl.uniform1f(U.uShape, it.shape); gl.uniform2f(U.uTilt, it.tilt[0], it.tilt[1]);
+      gl.uniform2f(U.uRes, it.px, it.px); gl.uniform1f(U.uTime, t); gl.uniform1f(U.uSeed, it.seed); gl.uniform1f(U.uKind, it.kind); gl.uniform1f(U.uPx, it.px); gl.uniform3fv(U.uMetal, METAL[it.metal] || METAL.gold); gl.uniform1f(U.uShape, it.shape); gl.uniform2f(U.uTilt, it.tilt[0], it.tilt[1]); gl.uniform3f(U.uWear, it.wear[0], it.wear[1], it.wear[2] || 0);
       const dt = it.shape === 2 ? detail(it) : null;
       gl.uniform1f(U.uDetOn, dt && dt.ok ? 1 : 0);
       if (dt && dt.ok) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, dt.tex); gl.activeTexture(gl.TEXTURE0); }
@@ -1054,7 +1164,7 @@ void main(){
       c.width = px; c.height = px; c.dataset.live = '1';
       if (c.parentElement) c.parentElement.classList.add('is-gl');
       maxPx = Math.max(maxPx, px);
-      items.push({ c, ctx: c.getContext(off ? 'bitmaprenderer' : '2d'), px, kind: kindOf(c.dataset.kind), metal: c.dataset.kind, shape: SHAPE[c.dataset.shape] || 0, icon: c.dataset.icon || '', pre: c.dataset.pre || '', title: c.dataset.title || '', line: c.dataset.line || '', sub: c.dataset.sub || '', tilt: [0, 0], det: null, seed: (items.length % 7) * 5.1, vis: true, fresh: true });
+      items.push({ c, ctx: c.getContext(off ? 'bitmaprenderer' : '2d'), px, kind: kindOf(c.dataset.kind), metal: c.dataset.kind, shape: SHAPE[c.dataset.shape] || 0, icon: c.dataset.icon || '', pre: c.dataset.pre || '', title: c.dataset.title || '', line: c.dataset.line || '', sub: c.dataset.sub || '', tilt: [0, 0], wear: [0, 0, 0], det: null, seed: (items.length % 7) * 5.1, vis: true, fresh: true });
       if (io) io.observe(c);
     }
     if (!off && (gc.width !== maxPx || gc.height !== maxPx)) { gc.width = maxPx; gc.height = maxPx; }
@@ -1070,6 +1180,7 @@ void main(){
     if (o.kind) { it.kind = kindOf(o.kind); it.metal = o.kind; c.dataset.kind = o.kind; }
     if (o.shape !== undefined) { it.shape = SHAPE[o.shape] || 0; c.dataset.shape = o.shape; }
     if (o.tilt) it.tilt = [+o.tilt[0] || 0, +o.tilt[1] || 0];
+    if (o.wear) it.wear = [+o.wear[0] || 0, +o.wear[1] || 0, +o.wear[2] || 0];
     for (const k of ['pre', 'title', 'line', 'sub']) if (o[k] !== undefined) it[k] = o[k];
     it.fresh = true;
     if (still()) draw(performance.now());
@@ -1077,7 +1188,93 @@ void main(){
   }
   /** Draw only this canvas (the full view), at full frame rate; null = back to all. */
   function only(c) { solo = c || null; items.forEach((it) => { it.fresh = true; }); if (still()) draw(performance.now()); else if (!raf && items.length) raf = requestAnimationFrame(loop); }
-  const api = { mount, set, only, icons: (fn) => { iconSrc = fn; }, supported: () => setup() };
+  const api = { mount, set, only, icons: (fn) => { iconSrc = fn; root.YTPMIconSrc = fn; }, supported: () => setup() };
+  root.YTPMWearGLSL = `
+// ---- age: dust, scratches and cobwebs (uWear = dust, scratches, cobweb, 0..1). 1 real hour = 1 day on the shelf; polishing removes it.
+// Real dust settles most on what faces up and in sheltered corners, in patches, with grit of several sizes and the odd lint fibre.
+// Real cobwebs are abandoned tangle webs: sagging threads strung from a sheltered corner, sticky silk that catches dust (grey beads
+// along it), a faint sheet where threads crowd. The silk glints where a thread runs across the light, with a faint rainbow.
+uniform vec3 uWear;
+float wN(vec2 p){ vec2 i=floor(p), f=fract(p); vec2 u=f*f*(3.-2.*f); return mix(mix(hash(i),hash(i+vec2(1.,0.)),u.x),mix(hash(i+vec2(0.,1.)),hash(i+vec2(1.,1.)),u.x),u.y); }
+float wF(vec2 p){ return .5*wN(p)+.25*wN(p*2.03+3.1)+.125*wN(p*4.01+7.7); }
+// hairline scratches: short straight lines in three directions; more of them appear as amt grows
+float wScr(vec2 p, float amt, float aa){
+  float m=0.;
+  for(int i=0;i<3;i++){
+    float a=float(i)*2.1+.7;
+    vec2 q=mat2(cos(a),-sin(a),sin(a),cos(a))*p*vec2(3.,16.)+vec2(float(i)*7.3,float(i)*3.1);
+    vec2 id=floor(q), f=fract(q);
+    if(hash(id+float(i)*17.)<amt*.55){
+      float y0=.2+.6*hash(id+3.1), x0=hash(id+5.7)*.5, x1=x0+.25+.5*hash(id+9.2);
+      float w=max(.05,aa*16.*.6);
+      float l=smoothstep(w,0.,abs(f.y-y0))*smoothstep(x0,x0+.05,f.x)*smoothstep(x1,x1-.05,f.x);
+      m=max(m,l*(.4+.6*hash(id+1.3)));
+    }
+  }
+  return m;
+}
+vec2 wSeg(vec2 p, vec2 a, vec2 b){ vec2 pa=p-a, ba=b-a; float h=clamp(dot(pa,ba)/dot(ba,ba),0.,1.); return vec2(length(pa-ba*h),h); }
+// the cobweb: rgb = light from the silk and its dust (premultiplied), a = how much it covers
+vec4 wWeb(vec2 p, float amt, float aa){
+  if(amt<=.001) return vec4(0.);
+  const float A0=2.3;                                     // the sheltered corner: top left, under the light
+  vec2 cn=vec2(cos(A0),sin(A0));
+  if(dot(p-cn*.7,p-cn*.7)>.45) return vec4(0.);
+  vec2 L2=normalize(vec2(-.42,.46));
+  float cov=0., glint=0., grey=0.; vec3 iri=vec3(0.);
+  for(int i=0;i<28;i++){
+    float fi=float(i);
+    float h1=hash(vec2(fi,1.3)), h2=hash(vec2(fi,7.1)), h3=hash(vec2(fi,4.7)), h4=hash(vec2(fi,9.9));
+    if(h4>amt*1.15) continue;                             // more threads the longer it is left
+    float aA=A0+(h1-.5)*1.25, aB=A0+(h2-.5)*1.6;
+    vec2 a=vec2(cos(aA),sin(aA))*(.85+.07*h3);
+    vec2 b=fi<9.?vec2(cos(aB),sin(aB))*(.84+.08*h1):cn*.86+vec2(cos(fi*2.4),sin(fi*2.4))*(.18+.32*h3);
+    float Ls=length(b-a);
+    vec2 k=(a+b)*.5-vec2(0.,1.)*Ls*(.06+.16*h2)*2.;      // control point: the thread sags under gravity
+    vec2 P0=a, P1=mix(mix(a,k,.25),mix(k,b,.25),.25), P2=mix(mix(a,k,.5),mix(k,b,.5),.5), P3=mix(mix(a,k,.75),mix(k,b,.75),.75);
+    vec2 d1=wSeg(p,P0,P1), d2=wSeg(p,P1,P2), d3=wSeg(p,P2,P3), d4=wSeg(p,P3,b);
+    vec2 dd=d1; float tt=d1.y*.25; vec2 sd=P1-P0;
+    if(d2.x<dd.x){ dd=d2; tt=.25+d2.y*.25; sd=P2-P1; }
+    if(d3.x<dd.x){ dd=d3; tt=.5+d3.y*.25; sd=P3-P2; }
+    if(d4.x<dd.x){ dd=d4; tt=.75+d4.y*.25; sd=b-P3; }
+    float clump=smoothstep(.62,.95,wN(vec2(tt*Ls*55.,fi*5.3)))*(.3+.7*amt);   // dust caught on the sticky silk
+    float w=.0016+.006*clump;
+    float c=smoothstep(w+aa,w-aa*.5,dd.x)*min(1.,(w*2.)/(aa*1.5+1e-4))*(.55+.45*smoothstep(.0,.15,amt-h4*.8));
+    if(c>0.){
+      float g=pow(1.-abs(dot(normalize(sd),L2)),2.);       // glints where it runs across the light
+      cov=max(cov,c);
+      glint=max(glint,c*g*(1.-clump));
+      grey=max(grey,c*clump);
+      iri=max(iri,c*g*(.5+.5*cos(6.283*(tt*2.+h1+vec3(0.,.33,.67)))));
+    }
+  }
+  // the sheet where threads crowd in the corner: thin, patchy, grey with dust
+  float sh=amt*smoothstep(.40,.0,length(p-cn*.86))*(.35+.65*smoothstep(.3,.8,wF(p*22.+4.)))*.42;
+  float a=clamp(max(cov*.75,sh),0.,1.);
+  vec3 rgb=vec3(.78,.77,.74)*(cov*.35+glint*.65)+iri*.10+vec3(.50,.48,.44)*(grey*.75+sh*.9);
+  return vec4(rgb,a);
+}
+// age a (premultiplied) colour. p: on the face (radius 1, +y up). recess: how sheltered (dust collects there). metal: 1 metal, 0 stone.
+vec3 aged(vec3 col, float a, vec2 p, float recess, float metal, float aa){
+  float dust=uWear.x, scr=uWear.y, web=uWear.z;
+  if(dust+scr+web<.002 || a<=0.) return col;
+  float lum=dot(col,vec3(.299,.587,.114))/max(a,.01);
+  float film=smoothstep(.15,.85,wF(p*3.2+11.))*.65+.35;                // patches, like a real shelf
+  float up=smoothstep(-.4,.95,p.y);                                     // settles on what faces up
+  float dd=dust*(.22+.55*recess+.3*up)*film;
+  float grit=smoothstep(.82,.97,wN(p*170.+3.))+.7*smoothstep(.9,.99,wN(p*60.+9.)); // fine grit and the odd coarse grain
+  float lint=smoothstep(.012,0.,abs(wN(p*7.+31.)-.5))*smoothstep(.78,.86,wN(p*2.3+5.)); // a curly fibre here and there
+  vec3 dc=vec3(.60,.57,.52)*a;
+  col=mix(col,vec3(lum)*.8*a+.03*a,dust*(metal>.5?.2:.32));            // the shine goes flat (stones lose their fire)
+  col=mix(col,dc*(.42+.38*lum),clamp(dd*1.15,0.,.72));                    // the film: grey, matte, lifts the darks
+  col=mix(col,dc*.9,clamp(grit*dust*.55+lint*dust*.5,0.,.6));
+  float sc=wScr(p,scr,aa);
+  col+=vec3(.9,.88,.85)*sc*a*(metal>.5?.16:.12)*(.3+.7*lum);
+  vec4 wb=wWeb(p,web,aa);
+  col=col*(1.-wb.a)+wb.rgb*a;
+  return col;
+}
+`;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.YTPMGem = api;
 })(typeof window !== 'undefined' ? window : globalThis);
@@ -1530,7 +1727,7 @@ void cam(out vec3 o, out vec3 d, out float pxw, float ext){
   o=vec3(0.,0.,6.); d=normalize(vec3(p,0.)-o); pxw=2.*ext/S;
 }`;
 
-  const GEM = COMMON + `
+  const GEM = COMMON + (root.YTPMWearGLSL || 'uniform vec3 uWear; vec3 aged(vec3 c,float a,vec2 p,float r,float m,float aa){return c;}') + `
 // studio (world space, +z = towards the viewer): soft ceiling, three strip lights, hard spots, and the viewer's dark head
 float env(vec3 d){
   d.xy=rot(uTime*.05)*d.xy;
@@ -1575,6 +1772,7 @@ void main(){
   vec3 iorC=ruby?vec3(1.762,1.77,1.778):vec3(2.37,2.417,2.47);   // diamond fire a touch stronger than life so it reads on screen
   vec3 absorb=ruby?vec3(.12,3.4,2.7):vec3(.004,.006,.01);
   vec3 p=o+d*tIn;
+  vec2 pe=p.xy;
   float ci=-dot(d,nIn);
   float F=fres(ci,ior);
   vec3 col=vec3(F*env(uR*reflect(d,nIn)))*.8;
@@ -1608,6 +1806,7 @@ void main(){
     col=pow(col*.8,vec3(1.7))*1.25+.01;          // a brilliant is mostly bright white and near black
   }
   col=1.-exp(-max(col,0.)*1.6);
+  col=aged(col,1.,pe,smoothstep(.86,1.,length(pe))*.6,0.,pxw);
   gl_FragColor=vec4(col*cover,cover);
 }`;
 
@@ -1822,15 +2021,110 @@ void main(){
   gl_FragColor=vec4(col*cover,a*cover);
 }`;
 
+
+  // ---- a struck metal medal as a real object: a thick disc with a rounded edge, reeded rim, the icon engraved on the
+  // front, the name engraved on the back. Same studio and metal as the flat medal, plus age.
+  const MEDAL = COMMON + (root.YTPMWearGLSL || 'uniform vec3 uWear; vec3 aged(vec3 c,float a,vec2 p,float r,float m,float aa){return c;}') + `
+uniform vec3 uMetal; uniform sampler2D uIcon; uniform float uIconOn; uniform sampler2D uBack; uniform float uBackOn;
+float envS(vec3 d, float t){
+  d.xy=rot(.12*sin(t*.21))*d.xy;
+  float s=.09+.12*smoothstep(-.2,.9,d.y);
+  vec3 a=normalize(vec3(-.42,.46,.78));
+  vec3 ux=normalize(cross(vec3(0.,0.,1.),a)), uy=cross(a,ux);
+  float ca=dot(d,a);
+  if(ca>0.){ vec2 q=vec2(dot(d,ux),dot(d,uy))/ca; s+=2.6*smoothstep(.08,-.08,max(abs(q.x)-.55,abs(q.y)-.40))*(.8+.2*smoothstep(-.3,.3,q.y)); }
+  vec3 b=normalize(vec3(.82,0.,.57)); float cb=dot(d,b);
+  if(cb>0.){ vec3 bx=normalize(cross(vec3(0.,1.,0.),b)); vec2 q=vec2(dot(d,bx),d.y)/cb; s+=1.8*smoothstep(.05,-.05,max(abs(q.x)-.08,abs(q.y)-1.)); }
+  s+=.32*smoothstep(-.05,-.7,d.y)*smoothstep(-.4,.2,d.z);
+  s+=.25*exp(-pow((d.y+.1)/.03,2.))*smoothstep(-.5,.2,d.z);
+  s+=9.*pow(max(dot(d,normalize(vec3(.3,.62,.72))),0.),700.);
+  return s;
+}
+vec3 aces(vec3 x){ return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),0.,1.); }
+const float TH=.075, RND=.05;
+float sdDisc(vec3 p){ vec2 d=vec2(length(p.xy)-(1.-RND), abs(p.z)-(TH-RND)); return min(max(d.x,d.y),0.)+length(max(d,0.))-RND; }
+float tex(sampler2D s, vec2 p, float k){ vec2 iu=p/k*.5+.5; if(iu.x<0.||iu.y<0.||iu.x>1.||iu.y>1.) return 0.; return texture2D(s,vec2(iu.x,1.-iu.y)).a; }
+void main(){
+  vec3 ow, dw; float pxw; cam(ow,dw,pxw,1.12);
+  vec3 ro=uRT*ow, rd=uRT*dw;
+  float b=dot(ro,rd), c=dot(ro,ro)-1.03, h=b*b-c;
+  if(h<0.){ gl_FragColor=vec4(0.); return; }
+  float t=-b-sqrt(h), tmax=-b+sqrt(h), md=1e3; bool hit=false;
+  for(int i=0;i<72;i++){ float dd=sdDisc(ro+rd*t); md=min(md,dd); if(dd<.0004){ hit=true; break; } t+=dd; if(t>tmax) break; }
+  if(!hit){ gl_FragColor=vec4(0.); return; }
+  vec3 p=ro+rd*t;
+  vec2 e=vec2(.0008,0.);
+  vec3 n=normalize(vec3(sdDisc(p+e.xyy)-sdDisc(p-e.xyy),sdDisc(p+e.yxy)-sdDisc(p-e.yxy),sdDisc(p+e.yyx)-sdDisc(p-e.yyx)));
+  float tt=uTime;
+  bool front=n.z>.6, back=n.z<-.6;
+  vec2 q=front?p.xy:vec2(-p.x,p.y);                 // face coordinates as you look at that face
+  float r=length(q); vec2 rq=r>1e-4?q/r:vec2(1.,0.);
+  float RIM=.83, spin=0., matte=0., rec=0.;
+  vec3 nq=vec3(0.,0.,1.);                           // normal in face space (z out of that face)
+  float aa=pxw*1.2;
+  if(front||back){
+    if(r>RIM){
+      float x=clamp((r-RIM)/(.95-RIM),0.,1.);
+      nq=normalize(vec3(-rq*cos(x*PI)*1.1,1.));    // the raised, rounded bead
+    } else {
+      nq=normalize(vec3(q*.22,1.));
+      float ring=sin(r*900.)*.5+.5;
+      nq=normalize(nq+vec3(rq*(ring-.5)*.012,0.));
+      spin=1.;
+      rec=smoothstep(RIM-.12,RIM,r)*.3;
+    }
+    // engraving: the icon on the front, the name on the back. Floor = matte (sandblasted), walls = polished.
+    float k=front?.66:.92;
+    if(r<RIM && ((front && uIconOn>0.) || (back && uBackOn>0.))){
+      float dd=1.4*pxw;
+      float m=front?tex(uIcon,q,k):tex(uBack,q,k);
+      float gx=front?tex(uIcon,q+vec2(dd,0.),k)-tex(uIcon,q-vec2(dd,0.),k):tex(uBack,q+vec2(dd,0.),k)-tex(uBack,q-vec2(dd,0.),k);
+      float gy=front?tex(uIcon,q+vec2(0.,dd),k)-tex(uIcon,q-vec2(0.,dd),k):tex(uBack,q+vec2(0.,dd),k)-tex(uBack,q-vec2(0.,dd),k);
+      float w=clamp(length(vec2(gx,gy))*1.6,0.,1.);
+      nq=normalize(mix(nq,normalize(vec3(vec2(gx,gy)*2.2,1.)),w*.9));
+      matte=smoothstep(.15,.85,m)*(1.-w);
+      rec+=m;
+      if(m>.15) spin=0.;
+    }
+    rec+=smoothstep(.1,0.,abs(r-RIM))*.8;
+  } else {
+    // the edge: fine reeding all round
+    float ang=atan(p.y,p.x);
+    vec3 tg=vec3(-sin(ang),cos(ang),0.);
+    n=normalize(n+tg*sin(ang*180.)*.18);
+    rec=.15;
+  }
+  vec3 nl=(front||back)?(front?nq:vec3(-nq.x,nq.y,-nq.z)):n;   // back: undo the mirror and face -z
+  vec3 nw=uR*nl;
+  float cv=clamp(-dot(nw,dw),0.,1.);
+  vec3 F=uMetal+(1.-uMetal)*pow(1.-cv,5.);
+  float en=0.;
+  if(spin>.5){
+    vec3 rw=uR*(front?vec3(rq,0.):vec3(-rq.x,rq.y,0.));
+    for(int j=0;j<4;j++){ float o=(float(j)-1.5)/1.5; en+=envS(reflect(dw,normalize(nw+rw*o*.28)),tt); }
+    en*=.25*.92;
+  } else en=envS(reflect(dw,nw),tt);
+  vec3 col=F*en;
+  if(matte>0.){ float grain=.85+.3*hash(floor(gl_FragCoord.xy)); col=mix(col,uMetal*(.10+.10*envS(vec3(-.35,.4,.85),tt))*grain,matte); }
+  if(front||back){
+    col*=1.-.35*smoothstep(RIM-.12,RIM,r)*step(r,RIM);
+    col*=1.-smoothstep(aa*1.5,0.,abs(r-RIM))*.7;
+  }
+  col=aces(col*1.1);
+  col=aged(col,1.,(front||back)?q:vec2(atan(p.y,p.x),p.z*8.),rec,1.,pxw);
+  float cover=clamp(-md/pxw+1.,0.,1.);
+  gl_FragColor=vec4(col,1.);
+}`;
+
   const LOOK3 = { lqRefr: 'uLqRefr', lqRefl: 'uLqRefl', lqFilm: 'uLqFilm', lqTint: 'uLqTint', lqWobble: 'uLqWob', lqDrops: 'uLqDrops', lqDropSize: 'uLqDropS', lqMove: 'uLqMove', dotRefr: 'uDotRefr', dotRing: 'uDotRing', refrPeriod: 'uRefrT', edgeWidth: 'uEdgeW', edgeVary: 'uEdgeVary', edgeColour: 'uEdgeCol', rimLine: 'uRim', saturation: 'uSat', filmInside: 'uFilmIn', filmThick: 'uThick', flowSpeed: 'uFlow', reflection: 'uRefl', glow: 'uGlow', breath: 'uBreath', motionAmt: 'uMotAmt', motionTime: 'uMotT' };
-  let cv = null, gl = null, progs = {}, cur = null, raf = 0, t0 = 0, kind = 'dia', R = [1, 0, 0, 0, 1, 0, 0, 0, 1], dirty = true, still = false;
+  let cv = null, gl = null, progs = {}, cur = null, raf = 0, t0 = 0, kind = 'dia', R = [1, 0, 0, 0, 1, 0, 0, 0, 1], dirty = true, still = false, wear = [0, 0], opt = {}, texI = null, texB = null;
   function prog(src) {
     const sh = (type, s) => { const x = gl.createShader(type); gl.shaderSource(x, s); gl.compileShader(x); if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) { console.info('[RM] 3d shader:', gl.getShaderInfoLog(x)); return null; } return x; };
     const v = sh(gl.VERTEX_SHADER, VS), f = sh(gl.FRAGMENT_SHADER, src);
     if (!v || !f) return null;
     const p = gl.createProgram(); gl.attachShader(p, v); gl.attachShader(p, f); gl.bindAttribLocation(p, 0, 'a'); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) return null;
-    const U = {}; for (const k of ['uRes', 'uTime', 'uR', 'uRT', 'uKind']) U[k] = gl.getUniformLocation(p, k);
+    const U = {}; for (const k of ['uRes', 'uTime', 'uR', 'uRT', 'uKind', 'uWear', 'uMetal', 'uIcon', 'uIconOn', 'uBack', 'uBackOn']) U[k] = gl.getUniformLocation(p, k);
     const L = {}; for (const k in LOOK3) L[k] = gl.getUniformLocation(p, LOOK3[k]);
     return { p, U, L };
   }
@@ -1847,6 +2141,13 @@ void main(){
       gl.uniformMatrix3fv(cur.U.uRT, false, R);
       const look = root.YTPMLook || {};
       for (const k in cur.L) if (cur.L[k]) gl.uniform1f(cur.L[k], +(look[k] != null ? look[k] : 0));
+      if (cur.U.uWear) gl.uniform3f(cur.U.uWear, wear[0], wear[1], wear[2] || 0);
+      if (kind === 'medal') {
+        gl.uniform3fv(cur.U.uMetal, opt.metal || [1, .77, .33]);
+        gl.uniform1i(cur.U.uIcon, 0); gl.uniform1i(cur.U.uBack, 1);
+        gl.uniform1f(cur.U.uIconOn, texI ? 1 : 0); gl.uniform1f(cur.U.uBackOn, texB ? 1 : 0);
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, texB); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texI);
+      }
       gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       dirty = false;
@@ -1854,13 +2155,51 @@ void main(){
     raf = requestAnimationFrame(frame);
   }
   /** Start on `canvas` (sized by the caller: width/height in device px). Returns false without WebGL or if the shader fails. */
-  function start(canvas, k, reduced) {
+  /** A 512 px alpha texture from a canvas, mipmapped (power of two). */
+  function upload(c) {
+    const tx = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tx);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return tx;
+  }
+  /** The medal's engravings: the icon (front) and the name round the back. Drawn white on clear, edges softened like the flat medal's. */
+  function medalTextures(o, g) {
+    const mk = () => { const c = document.createElement('canvas'); c.width = c.height = 512; return c; };
+    const b = mk(), x = b.getContext('2d');
+    x.fillStyle = '#fff'; x.textAlign = 'center'; x.textBaseline = 'middle';
+    const font = '"Chakra Petch", "Segoe UI", system-ui, sans-serif';
+    x.font = `700 ${o.title && o.title.length > 14 ? 40 : 50}px ${font}`; x.fillText(o.title || '', 256, 236);
+    x.font = `600 26px ${font}`; x.fillText((o.sub || '').toUpperCase(), 256, 296);
+    const ring = 'RESOURCE MONITOR  ·  UPTIME MEDAL  ·  ', R0 = 196;
+    x.font = `600 24px ${font}`;
+    const tot = x.measureText(ring + ring).width, step = Math.PI * 2 / tot;
+    let a = -Math.PI / 2 - (x.measureText(ring).width * step) / 2;
+    for (const ch of ring + ring) { const w = x.measureText(ch).width; x.save(); x.translate(256 + Math.cos(a + w * step / 2) * R0, 256 + Math.sin(a + w * step / 2) * R0); x.rotate(a + w * step / 2 + Math.PI / 2); x.fillText(ch, 0, 0); x.restore(); a += w * step; }
+    x.lineWidth = 4; x.strokeStyle = '#fff'; x.beginPath(); x.arc(256, 256, 168, 0, Math.PI * 2); x.stroke();
+    if (g === gl && gl) { texB = upload(b); dirty = true; }
+    const src = root.YTPMIconSrc && o.icon ? root.YTPMIconSrc(o.icon) : '';
+    if (!src) return;
+    const img = new Image();
+    img.onload = () => {
+      if (g !== gl || !gl) return;
+      const c = mk(), y = c.getContext('2d');
+      if ('filter' in y) y.filter = 'blur(1.4px)';
+      y.drawImage(img, 0, 0, 512, 512);
+      texI = upload(c); dirty = true;
+    };
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="512" height="512" fill="none" stroke="#fff" color="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${src}</svg>`);
+  }
+  function start(canvas, k, reduced, o) {
     stop();
     try { gl = canvas.getContext('webgl', { premultipliedAlpha: true, antialias: false, alpha: true }); } catch (e) { gl = null; }
     if (!gl) return false;
-    cv = canvas; kind = k; progs = {}; still = !!reduced;
+    cv = canvas; kind = k; progs = {}; still = !!reduced; opt = o || {}; texI = texB = null; wear = opt.wear || [0, 0, 0];
     const isB = k === 'bubble';
-    cur = prog(isB ? BUBBLE : GEM);
+    cur = prog(isB ? BUBBLE : k === 'medal' ? MEDAL : GEM);
+    if (cur && k === 'medal') medalTextures(opt, gl);
     if (!cur) { gl = null; cv = null; return false; }
     const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
@@ -1880,7 +2219,7 @@ void main(){
     dirty = true;
   }
   function stop() { if (raf) cancelAnimationFrame(raf); raf = 0; cur = null; if (gl) { const ext = gl.getExtension('WEBGL_lose_context'); if (ext) ext.loseContext(); } gl = null; cv = null; }
-  root.YTPM3D = { start, rot, stop, redraw: () => { dirty = true; }, active: () => !!cur, canvas: () => cv };
+  root.YTPM3D = { start, rot, stop, redraw: () => { dirty = true; }, active: () => !!cur, canvas: () => cv, wear: (w) => { wear = [+w[0] || 0, +w[1] || 0, +w[2] || 0]; dirty = true; } };
 })(typeof window !== 'undefined' ? window : globalThis);
 </script>
 <script>
@@ -1947,18 +2286,53 @@ void main(){
   function cv(o) {
     if (o.tier === 7 || o.kind === 'emu') return `<canvas class="ach-bubble" data-size="${o.size}" aria-hidden="true"></canvas>`;
     const kind = o.kind || KIND[o.tier - 1];
-    return `<canvas class="ach-gemgl" data-kind="${kind}" data-shape="${o.shape || 'round'}" data-icon="${o.icon || ''}" data-size="${o.size}"${o.dpr ? ` data-dpr="${o.dpr}"` : ''}${o.pre ? ` data-pre="${esc(o.pre)}" data-title="${esc(o.title)}" data-line="${esc(o.line)}" data-sub="${esc(o.sub)}"` : ''} aria-hidden="true"></canvas>`;
+    return `<canvas class="ach-gemgl" data-kind="${kind}" data-shape="${o.shape || 'round'}" data-icon="${o.icon || ''}" data-size="${o.size}"${o.wid ? ` data-wid="${esc(o.wid)}"` : ''}${o.dpr ? ` data-dpr="${o.dpr}"` : ''}${o.pre ? ` data-pre="${esc(o.pre)}" data-title="${esc(o.title)}" data-line="${esc(o.line)}" data-sub="${esc(o.sub)}"` : ''} aria-hidden="true"></canvas>`;
   }
   function mountIn(el) {
     try { YTPMGem.mount(el); } catch (e) { /* no shader: parent gets .is-nogl */ }
     try { YTPMBubble.mount(el); } catch (e) { /* ignore */ }
+    applyWear(el);
   }
+
+  /* ------------------------------------------------------------------ age: dust and scratches build up with real time, 1 real hour = 1 day on the shelf.
+     Dust settles in about a month (63% at 30 days), scratches in about five (63% at 150 days). Polishing: each rub takes half the dust and
+     a quarter of the scratches, so dust comes off first and scratches need more rubs. The bubble never ages. Kept per badge in this browser
+     (rm-wear-v1); the app keeps the same record per badge in achievements.json. */
+  const HOUR_MS = 3600e3, WEAR_KEY = 'rm-wear-v1';
+  const WEAR = (() => { try { const o = JSON.parse(store.get(WEAR_KEY) || '{}'); return o && typeof o === 'object' ? o : {}; } catch (e) { return {}; } })();
+  if (!WEAR._) WEAR._ = { shine: 0 };
+  const saveWear = () => store.set(WEAR_KEY, JSON.stringify(WEAR));
+  const hid = (str) => { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0) / 4294967296; };
+  function wearRec(id) {
+    let r = WEAR[id];
+    if (!r) { r = WEAR[id] = { d: 0, s: 0, t: Date.now() - (4 + 36 * hid(id)) * HOUR_MS, n: 0 }; saveWear(); }   // DEMO: last cleaned 4 to 40 days ago
+    return r;
+  }
+  function wearOf(id) {
+    const r = wearRec(id), days = Math.max(0, (Date.now() - r.t) / HOUR_MS);
+    const d = 1 - (1 - r.d) * Math.exp(-days / 30), s = 1 - (1 - r.s) * Math.exp(-days / 150);
+    const w = days < 10 ? 0 : Math.min(1, Math.pow((days - 10) / 40, .8));   // cobwebs: from about 10 days left alone, full by 50
+    return { d, s, w, days, n: r.n || 0, cond: Math.round(100 * (1 - (.5 * d + .3 * s + .2 * w))), clean: d < .02 && s < .03 && w < .01 };
+  }
+  function polish(id) {
+    const w = wearOf(id), r = WEAR[id];
+    r.d = w.d * .5; r.s = w.s * .72;
+    if (r.d < .015) r.d = 0; if (r.s < .02) r.s = 0;
+    r.t = Date.now(); r.n = (r.n || 0) + 1; saveWear();
+    return wearOf(id);
+  }
+  function ageDay(id) { wearRec(id).t -= HOUR_MS; saveWear(); return wearOf(id); }   // test: one more day on the shelf
+  function applyWear(scope) {
+    $$('canvas.ach-gemgl[data-wid]', scope || document).forEach((c) => { const w = wearOf(c.dataset.wid); try { YTPMGem.set(c, { wear: [w.d, w.s, w.w] }); } catch (e) { /* ignore */ } });
+  }
+  const dustyTag = (id) => { const w = wearOf(id); return w.w > .3 ? '<span class="tg dusty" title="Needs a polish">COBWEBS</span>' : w.cond < 70 ? '<span class="tg dusty" title="Needs a polish">DUSTY</span>' : ''; };
+  setInterval(() => { if (!document.hidden) applyWear(document); }, 60e3);
   try { YTPMGem.icons((n) => ICONS[n] || ''); } catch (e) { /* ignore */ }
 
   /* ------------------------------------------------------------------ versions: each stores only its settings; engines load once.
      To add a version: add an entry here (newest first) and a builder in BUILDERS. Earlier versions stay in the page, live. */
   const VERSIONS = [
-    { id: 'v4', label: 'v4 · Shaders verified on Windows', note: 'Current. The HLSL medal, stone and bubble shaders compiled and rendered on Windows (CI, 22 Nov 2026). No fallback to flat medals. In the full view Diamond, Ruby and Emulsion turn as real 3D objects: drag them.' },
+    { id: 'v4', label: 'v4 · Shaders verified on Windows', note: 'Current. The HLSL medal, stone and bubble shaders compiled and rendered on Windows (CI, 22 Nov 2026). No fallback to flat medals. In the full view every medal is a real 3D object: drag it. Medals age with real time (1 hour = 1 day): dust, hairline scratches, then cobwebs after 10 days. Polish them in the full view.' },
     { id: 'v3', label: 'v3 · Built into the app', note: 'Core, observer, window, pop-ups and full view are in the app (v2.13.0). Build status as it stood before the Windows run.' },
     { id: 'v2', label: 'v2 · Uptime Medals picked', note: 'The theme is picked; the build status as it stood then.' },
     { id: 'v1', label: 'v1 · Theme options', note: 'Earlier options: the three themes shown before the pick (Case Badges, Uptime Medals, Hall of Fame Plaques).' }
@@ -2120,22 +2494,22 @@ void main(){
         meta = `<div class="rmeta"><span class="rnext">${B.pt}</span><span class="xpc">${B.xp} XP</span></div>`;
       } else meta = `<div class="rmeta"><span class="rnext">${B.secret ? 'Locked' : 'Not yet'}</span><span class="xpc">${B.secret ? '? XP' : B.xp + ' XP'}</span></div>`;
     }
-    const badge = e.earned ? cv({ tier: e.tier, icon: e.icon, size: 64 }) : `<div class="ph" aria-hidden="true">${e.kind === 'single' && e.B.secret ? '?' : ''}</div>`;
+    const badge = e.earned ? cv({ tier: e.tier, icon: e.icon, size: 64, wid: e.id }) : `<div class="ph" aria-hidden="true">${e.kind === 'single' && e.B.secret ? '?' : ''}</div>`;
     const lab = e.earned ? `${title}, ${TIER[e.tier - 1]}, ${esc(line)}. Open full view` : `${title}, not earned yet`;
     return `<div class="row${e.earned ? ' earned' : ''}"${e.earned ? ` role="button" tabindex="0" data-e="${id}"` : ''} aria-label="${esc(lab)}">
       <div class="rb">${badge}</div>
-      <div class="rt"><div class="rtitle">${esc(title)}${e.earned ? `<span class="tg">${TIER[e.tier - 1].toUpperCase()}</span>` : ''}</div><div class="rline">${esc(line)}</div>${bar}${meta}</div></div>`;
+      <div class="rt"><div class="rtitle">${esc(title)}${e.earned ? `<span class="tg">${TIER[e.tier - 1].toUpperCase()}</span>${e.tier < 7 ? dustyTag(e.id) : ''}` : ''}</div><div class="rline">${esc(line)}</div>${bar}${meta}</div></div>`;
   }
 
   /* ------------------------------------------------------------------ sections of v2 */
   function heroHtml() {
-    const tiles = TIER.map((n, i) => `<button class="tile" type="button" data-tile="${i}" aria-label="${n} medal, open full view">${cv({ tier: i + 1, icon: 'clock', size: 76 })}<span>${n}</span><i style="background:${TVAR[i]}"></i></button>`).join('');
+    const tiles = TIER.map((n, i) => `<button class="tile" type="button" data-tile="${i}" aria-label="${n} medal, open full view">${cv({ tier: i + 1, icon: 'clock', size: 76, wid: 'tier' + i })}<span>${n}</span><i style="background:${TVAR[i]}"></i></button>`).join('');
     return `<section class="card" aria-labelledby="h-hero"><div class="hero2"><div>
       <div class="eyebrow">Version 2 · Uptime Medals picked</div>
       <h1 id="h-hero" style="margin-top:6px">Resource Monitor Achievements</h1>
       <p class="lead">Data centres celebrate uptime. Here every award is a <b>struck medal</b> with a spun face and the icon engraved, and a full set of four fills a <b>1U rack plate</b> like the ones that hold real servers. Diamond and Ruby are live cut stones, Emulsion is the live soap bubble with the Resource Monitor pulse inside.</p>
       <div class="chips"><span>Free mode · no paid plan</span><span>Emulsion earned over about a year</span><span>7 tiers · 3 racks of 4</span><span>Metal label: Uptime</span></div>
-      </div><div class="herobadge"><button type="button" data-tile="2" aria-label="Gold medal, open full view">${cv({ tier: 3, icon: 'clock', size: 280 })}</button><div class="cap">Uptime · Gold medal · tap to turn it over</div></div></div>
+      </div><div class="herobadge"><button type="button" data-tile="2" aria-label="Gold medal, open full view">${cv({ tier: 3, icon: 'clock', size: 280, wid: 'tier2' })}</button><div class="cap">Uptime · Gold medal · tap to turn it over</div></div></div>
       <div class="tiers" role="list" aria-label="All seven tiers">${tiles}</div></section>`;
   }
   function rackHtml() {
@@ -2144,7 +2518,7 @@ void main(){
       const st = setState(S);
       const wells = S.members.map((id, k) => {
         const e = ENT[id];
-        const inner = e.tier > 0 ? cv({ tier: e.tier, icon: e.icon, size: 112 }) : '<div class="empty" aria-hidden="true">0</div>';
+        const inner = e.tier > 0 ? cv({ tier: e.tier, icon: e.icon, size: 112, wid: id }) : '<div class="empty" aria-hidden="true">0</div>';
         return `<div class="well">${inner}<b>${esc(e.title)}</b><small>${e.tier > 0 ? TIER[e.tier - 1] : 'Not started'}</small></div>`;
       }).join('');
       const lead = st.rec > 0 ? `${TIER[st.rec - 1]} rack` : 'No rack certified yet';
@@ -2227,7 +2601,7 @@ void main(){
   const PR = 'https://github.com/rajhansgithub/Windows_Resource_Monitoring_Tool/pull/26';
   function verifyHtml() {
     const tiles = VERIFY.map((v, i) => `<button class="vf" type="button" data-tile="${i}" aria-label="${TIER[i]} medal, verified on Windows, open full view">
-      ${cv({ tier: i + 1, icon: v.icon, size: 112 })}<b style="color:${THEX[i]}">${TIER[i]}</b><small>${esc(v.badge)}</small><span class="ok">✓ rendered</span>
+      ${cv({ tier: i + 1, icon: v.icon, size: 112, wid: 'tier' + i })}<b style="color:${THEX[i]}">${TIER[i]}</b><small>${esc(v.badge)}</small><span class="ok">✓ rendered</span>
       <dl><dt>cover</dt><dd>${v.cov}%</dd><dt>shading</dt><dd>sd ${v.sd}</dd><dt>colour</dt><dd><i class="sw" style="background:rgb(${v.rgb.join(',')})" title="mean rgb ${v.rgb.join(' ')}"></i></dd></dl></button>`).join('');
     const checks = [
       ['D3DCompile accepts all three shaders', 'vs_5_0 vsmain, ps_5_0 main for the medal / brilliant and for the Emulsion bubble. d3dcompiler_47.dll from System32.'],
@@ -2446,6 +2820,7 @@ void main(){
   const FV = { list: [], i: 0, opener: null, flip: 0, flipT: 0, rx: 0, ry: 0, px: null, py: 0, moved: 0, raf: 0, last: 0, canvas: null, bubble: false, edgeT: 0, openedAt: 0,
     is3d: false, yaw: 0, pitch: -18, vy: 0, vp: 0, drag: null, dragged: 0, turn: 0, turnT: 0, lastDrag: 0 };
   // Diamond, Ruby and Emulsion turn as real 3D objects in the full view (ray traced); the metal medals keep the struck slab with its spec-sheet back
+  const MET3 = { bronze: [0.86, 0.52, 0.30], silver: [0.93, 0.94, 0.97], gold: [1.0, 0.77, 0.33], platinum: [0.72, 0.93, 0.91] };   // = YTPMGem METAL
   const showcaseList = () => TIER.map((n, i) => ({ id: 'tier' + i, kind: 'showcase', title: n + ' medal', line: i === 6 ? 'The live soap bubble, the rarest thing in the tool.' : `What a ${n} medal looks like. Every ladder badge climbs to it.`, tier: i + 1, icon: 'clock', earned: true }));
   function stageSize(bub) {
     const w = window.innerWidth, h = window.innerHeight, narrow = w <= 760;
@@ -2468,24 +2843,86 @@ void main(){
       notes += `<li>${e.tier < 6 ? `Next: <b>${TIER[e.tier]}</b> at ${fmt(e.s.next)}` : 'Emulsion: gate shut'}</li>`;
     } else if (e.kind === 'single') notes = `<li>Earned <b>${demoDate(e.id, 0)}</b></li><li>+${e.B.xp} XP</li>`;
     else notes = '<li>A preview of the tier, not an earned badge.</li>';
-    return `<div class="fv-count">${FV.i + 1} of ${FV.list.length}</div><div class="mt" style="color:${THEX[e.tier - 1]}">Uptime · ${TIER[e.tier - 1]}</div><h2>${esc(e.title)}</h2><p class="ln">${esc(e.line)}</p>${pipsHtml(e.tier)}<ul>${notes}</ul><p class="hint">${FV.is3d ? 'Drag to turn it any way, like holding it. Click, Enter or Space turns it over. ← → go through the list, Esc closes.' : 'Tilt with the pointer. Click, Enter or Space turns the medal to its spec sheet. ← → go through the list, Esc closes.'}</p>`;
+    return `<div class="fv-count">${FV.i + 1} of ${FV.list.length}</div><div class="mt" style="color:${THEX[e.tier - 1]}">Uptime · ${TIER[e.tier - 1]}</div><h2>${esc(e.title)}</h2><p class="ln">${esc(e.line)}</p>${pipsHtml(e.tier)}<ul>${notes}</ul>${e.tier < 7 ? wearHtml(e) : ''}<p class="hint">${FV.is3d ? 'Drag to turn it any way, like holding it. Click, Enter or Space turns it over. ← → go through the list, Esc closes.' : 'Tilt with the pointer. Click, Enter or Space turns the medal to its spec sheet. ← → go through the list, Esc closes.'}</p>`;
   }
+  function wearWords(w) {
+    if (w.clean) return 'Spotless. It shines like the day you earned it.';
+    const dust = w.d < .08 ? '' : w.d < .3 ? 'a little dust' : w.d < .6 ? 'dusty' : 'thick with dust';
+    const scr = w.s < .04 ? '' : w.s < .15 ? 'a few hairline scratches' : w.s < .35 ? 'scratched' : 'well worn';
+    const web = w.w < .02 ? '' : w.w < .35 ? 'a cobweb starting' : w.w < .75 ? 'cobwebs' : 'thick with cobwebs';
+    const days = Math.floor(w.days), when = w.n ? `Polished ${days === 0 ? 'today' : days === 1 ? '1 day ago' : days + ' days ago'}` : `On the shelf ${days} days`;
+    return `${when} · ${[dust, web, scr].filter(Boolean).join(', ') || 'nearly clean'}`;
+  }
+  const wearColour = (c) => c >= 90 ? '#6fd38a' : c >= 70 ? '#c9d46a' : c >= 50 ? '#e0a84f' : '#d9785a';
+  function wearHtml(e) {
+    const w = wearOf(e.id);
+    return `<div class="wr" id="wr"><div class="wr-h"><span>Condition</span><b id="wrPct">${w.cond}%</b></div>
+      <div class="wr-bar" role="progressbar" aria-label="Condition" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${w.cond}" id="wrBarR"><i id="wrBar" style="width:${w.cond}%;--wc:${wearColour(w.cond)}"></i></div>
+      <div class="wr-sub" id="wrSub" aria-live="polite">${esc(wearWords(w))}</div>
+      <div class="wr-row"><button type="button" class="wr-btn${w.clean ? ' done' : ''}" id="wrPolish">${w.clean ? 'Spotless ✦' : 'Polish ✦'}</button><button type="button" class="wr-ff" id="wrAge" title="Test: one more day on the shelf">+1 day</button><button type="button" class="wr-ff" id="wrAge10" title="Test: ten more days on the shelf">+10 days</button></div>
+      <div class="wr-note">Ages like the real thing: 1 hour here is 1 day on the shelf. Cobwebs come after 10 days. One rub clears the webs, dust comes off next, scratches take the most rubs. Shine <b id="wrShine">${WEAR._.shine || 0}</b> ✦</div></div>`;
+  }
+  function wearUI(w) {
+    const set = (id, f) => { const el = document.getElementById(id); if (el) f(el); };
+    set('wrPct', (el) => { el.textContent = w.cond + '%'; });
+    set('wrBar', (el) => { el.style.width = w.cond + '%'; el.style.setProperty('--wc', wearColour(w.cond)); });
+    set('wrBarR', (el) => el.setAttribute('aria-valuenow', w.cond));
+    set('wrSub', (el) => { el.textContent = wearWords(w); });
+    set('wrPolish', (el) => { el.textContent = w.clean ? 'Spotless ✦' : 'Polish ✦'; el.classList.toggle('done', w.clean); });
+    set('wrShine', (el) => { el.textContent = WEAR._.shine || 0; });
+  }
+  function wearRefresh(e, w) {
+    try { YTPM3D.wear([w.d, w.s, w.w]); } catch (err) { /* ignore */ }
+    if (FV.canvas && FV.canvas.dataset.wid) { try { YTPMGem.set(FV.canvas, { wear: [w.d, w.s, w.w] }); } catch (err) { /* ignore */ } }
+    applyWear(document);
+    $$(`.row[data-e="${e.id}"] .rtitle`).forEach((t) => { const old = $('.dusty', t); if (old) old.remove(); t.insertAdjacentHTML('beforeend', dustyTag(e.id)); });
+    wearUI(w);
+  }
+  function shine(gain) {
+    if (!reduced()) {
+      const d = document.createElement('div'); d.className = 'fv-shine';
+      let h = '<i class="sw"></i>';
+      for (let k = 0; k < 5; k++) { const a = Math.random() * 6.283, r = 18 + Math.random() * 28; h += `<b style="left:${(50 + Math.cos(a) * r).toFixed(1)}%;top:${(50 + Math.sin(a) * r).toFixed(1)}%;animation-delay:${(k * .08).toFixed(2)}s"></b>`; }
+      d.innerHTML = h; stage.appendChild(d); setTimeout(() => d.remove(), 1000);
+      const wr = $('#wr');
+      if (wr && gain) { const pop = document.createElement('span'); pop.className = 'wr-pop'; pop.textContent = gain; wr.appendChild(pop); setTimeout(() => pop.remove(), 950); }
+    }
+  }
+  function doPolish() {
+    const e = FV.list[FV.i]; if (!e || e.tier === 7) return;
+    const was = wearOf(e.id);
+    if (was.clean) { shine(''); return; }   // already spotless: a sparkle, no points
+    const w = polish(e.id);
+    let gain = 1;
+    if (w.clean) gain += 10;               // finishing the job: bonus
+    WEAR._.shine = (WEAR._.shine || 0) + gain; saveWear();
+    shine(w.clean ? `Spotless! +${gain} ✦` : `+${gain} ✦`);
+    wearRefresh(e, w);
+  }
+  card.addEventListener('click', (ev) => {
+    const t = ev.target.closest && ev.target.closest('button'); if (!t) return;
+    if (t.id === 'wrPolish') doPolish();
+    else if (t.id === 'wrAge' || t.id === 'wrAge10') { const e = FV.list[FV.i]; if (e && e.tier < 7) { let w; for (let k = t.id === 'wrAge' ? 1 : 10; k > 0; k--) w = ageDay(e.id); wearRefresh(e, w); } }
+  });
   function renderFV() {
     const e = FV.list[FV.i], bub = e.tier === 7, S = stageSize(bub);
     FV.bubble = bub;
     stage.style.setProperty('--S', S + 'px'); stage.style.setProperty('--T', (S * .034).toFixed(1) + 'px');
     try { YTPM3D.stop(); } catch (err) { /* ignore */ }
     FV.is3d = false;
-    if (e.tier >= 5 && window.YTPM3D) {
+    if (window.YTPM3D) {
       const c = document.createElement('canvas'), px = Math.round(Math.min(S * Math.min(window.devicePixelRatio || 1, 1.5), 900));
       c.width = c.height = px; c.className = 'ach-3d'; c.setAttribute('aria-hidden', 'true');
       front.innerHTML = ''; front.appendChild(c);
-      FV.is3d = YTPM3D.start(c, e.tier === 7 ? 'bubble' : e.tier === 6 ? 'ruby' : 'dia', reduced());
+      const w = bub ? { d: 0, s: 0, w: 0 } : wearOf(e.id);
+      const sub = TIER[e.tier - 1] + ' · ' + (e.kind === 'showcase' ? 'Uptime' : e.kind === 'single' ? demoDate(e.id, 0) : demoDate(e.id, e.tier - 1));
+      FV.is3d = YTPM3D.start(c, bub ? 'bubble' : e.tier === 6 ? 'ruby' : e.tier === 5 ? 'dia' : 'medal', reduced(),
+        { metal: MET3[KIND[e.tier - 1]], icon: e.icon, title: e.title, sub, wear: [w.d, w.s, w.w] });
     }
     stage.classList.toggle('is3d', FV.is3d);
     if (FV.is3d) {
       back.innerHTML = ''; edge.innerHTML = '';
-      FV.yaw = 0; FV.pitch = bub ? 0 : -24; FV.vy = FV.vp = 0; FV.turn = FV.turnT = 0; FV.lastDrag = 0;
+      FV.yaw = 0; FV.pitch = bub ? 0 : e.tier < 5 ? -12 : -24; FV.vy = FV.vp = 0; FV.turn = FV.turnT = 0; FV.lastDrag = 0;
       slab.setAttribute('aria-label', `${e.title}, ${TIER[e.tier - 1]}. Drag to turn it in 3D; Enter or Space turns it over`);
       card.innerHTML = cardHtml(e);
       card.classList.toggle('has-tune', bub);
@@ -2495,7 +2932,7 @@ void main(){
       apply();
       return;
     }
-    front.innerHTML = cv({ tier: e.tier, icon: e.icon, size: S, dpr: 2 }) + `<div class="fv-glare${bub ? ' b' : ''}"></div>`;
+    front.innerHTML = cv({ tier: e.tier, icon: e.icon, size: S, dpr: 2, wid: e.id }) + `<div class="fv-glare${bub ? ' b' : ''}"></div>`;
     back.innerHTML = backHtml(e, bub);
     edge.innerHTML = '';
     FV.flip = FV.flipT = 0;
@@ -2659,7 +3096,7 @@ void main(){
     else if (ev.key === 'ArrowRight') { ev.preventDefault(); stepFV(1); }
     else if ((ev.key === 'Enter' || ev.key === ' ') && ev.target === slab && !ev.repeat) { ev.preventDefault(); flipIt(); }
     else if (ev.key === 'Tab') {
-      const f = [slab, $('#fvP'), $('#fvN'), $('#fvX')].filter((b) => !b.hidden), i = f.indexOf(document.activeElement);
+      const f = [slab, $('#wrPolish'), $('#wrAge'), $('#wrAge10'), $('#fvP'), $('#fvN'), $('#fvX')].filter((b) => b && !b.hidden), i = f.indexOf(document.activeElement);
       ev.preventDefault(); f[(i + (ev.shiftKey ? -1 : 1) + f.length) % f.length].focus();
     }
   });
