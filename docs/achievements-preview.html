@@ -956,23 +956,27 @@ void main(){
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(go, go); else go();
     return rec;
   }
-  /** The icon as a texture: its SVG drawn white on a 128 px canvas (an SVG data image never taints the canvas). */
+  /** The icon as a texture: its SVG drawn white on a 512 px canvas (an SVG data image never taints the canvas), mipmapped.
+      The edge is softened to ~4 texels so the engraved walls keep the width tuned at 128 px, without texel steps in the full view. */
   function icon(name) {
     if (icons.has(name)) return icons.get(name);
     const rec = { tex: null, ok: false };
     icons.set(name, rec);
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="128" height="128" fill="none" stroke="#fff" color="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${iconSrc(name) || ''}</svg>`;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="512" height="512" fill="none" stroke="#fff" color="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${iconSrc(name) || ''}</svg>`;
     const img = new Image();
     img.onload = () => {
       try {
-        const c = document.createElement('canvas'); c.width = 128; c.height = 128;
-        c.getContext('2d').drawImage(img, 0, 0, 128, 128);
+        const c = document.createElement('canvas'); c.width = 512; c.height = 512;
+        const x = c.getContext('2d');
+        if ('filter' in x) x.filter = 'blur(1.4px)';
+        x.drawImage(img, 0, 0, 512, 512);
         rec.tex = gl.createTexture();
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, rec.tex);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+        gl.generateMipmap(gl.TEXTURE_2D);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         rec.ok = true;
         for (const it of items) if (it.icon === name) it.fresh = true;
         if (still()) draw(performance.now());
@@ -2258,7 +2262,7 @@ void main(){
       apply();
       return;
     }
-    front.innerHTML = cv({ tier: e.tier, icon: e.icon, size: S, dpr: 1.5 }) + `<div class="fv-glare${bub ? ' b' : ''}"></div>`;
+    front.innerHTML = cv({ tier: e.tier, icon: e.icon, size: S, dpr: 2 }) + `<div class="fv-glare${bub ? ' b' : ''}"></div>`;
     back.innerHTML = backHtml(e, bub);
     edge.innerHTML = '';
     FV.flip = FV.flipT = 0;

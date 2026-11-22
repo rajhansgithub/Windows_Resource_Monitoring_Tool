@@ -32,7 +32,7 @@ cbuffer C : register(b0) {
   float  uP0; float uP1; float uP2; float uP3;     // spare
 };
 SamplerState smp : register(s0);
-Texture2D<float> uIcon : register(t0);     // 128x128 alpha (white-on-clear icon), mip chain
+Texture2D<float> uIcon : register(t0);     // 512x512 alpha (white-on-clear icon), mip chain
 static const float PI  = 3.14159265;
 static const float TAU = 6.2831853;
 static float2 gFrag = float2(0., 0.);      // gl_FragCoord.xy of the reference (y up inside the item)
@@ -331,11 +331,11 @@ float4 brill(float2 p, float r, float aa, float t){
   return float4(col*inside, inside);
 }
 
-// icon mask: 128 px square, half size .66 (badge units) centred on the medal; mip chosen from the on-screen size
+// icon mask: 512 px square, half size .66 (badge units) centred on the medal; mip chosen from the on-screen size
 float icA(float2 p){
   float2 iu = p/.66*.5 + .5;
   if (iu.x < 0. || iu.y < 0. || iu.x > 1. || iu.y > 1.) return 0.;
-  float lod = max(log2(128.*1.04/(.66*max(uPx, 8.))), 0.);
+  float lod = max(log2(512.*1.04/(.66*max(uPx, 8.))), 0.);
   return uIcon.SampleLevel(smp, float2(iu.x, 1. - iu.y), lod);
 }
 // ---- struck metal medals (tiers 1-4): polished raised rim, spun face with fine rings, icon engraved (frosted floor, bright cut walls)

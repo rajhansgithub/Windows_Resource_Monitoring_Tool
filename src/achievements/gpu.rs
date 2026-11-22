@@ -20,7 +20,7 @@
 //! `tilt` is the full view's pointer tilt (about -0.5..0.5 each axis; (0,0) = none) and moves the stone's view vector.
 //!
 //! Masks (both are optional; a badge without one is simply drawn without that detail):
-//! * `icon_mask`: 128x128 alpha bytes (row 0 = top), the icon drawn white on clear in a square that fills the mask.
+//! * `icon_mask`: ICON_N x ICON_N (512) alpha bytes (row 0 = top), the icon drawn white on clear in a square that fills the mask.
 //!   Metals show it engraved in the middle of the medal face (the square spans 63% of the medal diameter, centred).
 //!   Not used on Diamond, Ruby (no etching on stones, per the skill) or Emulsion.
 //! * `detail_mask`: accepted for API stability, currently ignored (the round medal has no text band).
@@ -74,14 +74,15 @@ pub struct Params<'a> {
     pub time_s: f32,
     pub seed: f32,
     pub tilt: (f32, f32),
-    /// 128x128 alpha, row 0 = top. Engraved into metal medals.
+    /// ICON_N x ICON_N alpha, row 0 = top. Engraved into metal medals.
     pub icon_mask: Option<&'a [u8]>,
     /// NxN alpha, currently ignored (see module docs).
     pub detail_mask: Option<(&'a [u8], u32)>,
 }
 
 const MAX_ATLAS: u32 = 4096;
-const ICON_N: u32 = 128;
+/// Icon mask side in px. 512 so the engraving stays crisp in the full view (128 showed texel steps on the walls).
+pub const ICON_N: u32 = 512;
 
 /// Per item constant buffer; mirrors `cbuffer C` in `shaders::COMMON` (5 rows of 4 floats).
 #[repr(C)]

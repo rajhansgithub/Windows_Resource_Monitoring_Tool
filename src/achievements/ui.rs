@@ -7,7 +7,7 @@
 //! available. Medals are premultiplied BGRA tiles from `gpu::render_batch` (one batch per repaint, for the medals
 //! that are visible and not cached yet; cached by badge id, tier and pixel size), composited over the canvas by
 //! this file. Without a GPU path a flat medal is drawn in code. Icons are tiny vector marks (stroke paths from the
-//! reference page) rasterised into 128x128 coverage masks on first use: no image files.
+//! reference page) rasterised into 512x512 coverage masks on first use: no image files.
 //!
 //! Windows:
 //! * `ResourceMonitor.Achievements`: the tab (header, racks, Emulsion gate, category cards) and, over it, the
@@ -247,7 +247,7 @@ fn make_colors(dark: bool, mica: bool) -> Colors {
     }
 }
 
-// ------------------------------------------------------------------ icons: stroke paths -> 128x128 masks
+// ------------------------------------------------------------------ icons: stroke paths -> 512x512 masks
 
 /// Marks from the reference page (24x24 view box, stroke only). Elements are separated by `|`:
 /// `p:` path data, `r:` x,y,w,h,rx, `c:` cx,cy,r, `e:` cx,cy,rx,ry.
@@ -553,9 +553,11 @@ fn ellipse(out: &mut Vec<Seg>, cx: f32, cy: f32, rx: f32, ry: f32) {
     }
 }
 
-/// 128x128 coverage of the mark: round-capped strokes, an SDF per pixel (row 0 = top).
+/// ICON_N x ICON_N (512) coverage of the mark: round-capped strokes, an SDF per pixel (row 0 = top).
+/// The edge ramp is N/128 texels wide, so the engraved walls keep the width they were tuned at with a 128 mask, only smooth.
 fn icon_mask(name: &str) -> Vec<u8> {
-    const N: usize = 128;
+    const N: usize = gpu::ICON_N as usize;
+    let ramp = N as f32 / 128.0;
     let segs = icon_segments(name);
     let k = N as f32 / 24.0;
     let half = 0.95 * k;
@@ -572,7 +574,7 @@ fn icon_mask(name: &str) -> Vec<u8> {
                 best = best.min(qx * qx + qy * qy);
             }
             let d = best.sqrt() * k;
-            out[py * N + px] = ((half + 0.5 - d).clamp(0.0, 1.0) * 255.0) as u8;
+            out[py * N + px] = ((((half - d) / ramp) + 0.5).clamp(0.0, 1.0) * 255.0) as u8;
         }
     }
     out
@@ -762,9 +764,10 @@ fn flat_medal(tier: u8, n: u32, mask: Option<&[u8]>) -> Vec<u32> {
             };
             if let Some(m) = mask {
                 let half = r0 * 0.63;
-                let (ix, iy) = ((dx / half * 0.5 + 0.5) * 128.0, (dy / half * 0.5 + 0.5) * 128.0);
-                if ix >= 0.0 && iy >= 0.0 && ix < 128.0 && iy < 128.0 {
-                    let c = m[iy as usize * 128 + ix as usize] as f32 / 255.0;
+                let mn = gpu::ICON_N as f32;
+                let (ix, iy) = ((dx / half * 0.5 + 0.5) * mn, (dy / half * 0.5 + 0.5) * mn);
+                if ix >= 0.0 && iy >= 0.0 && ix < mn && iy < mn {
+                    let c = m[iy as usize * gpu::ICON_N as usize + ix as usize] as f32 / 255.0;
                     let ink = if tier == 7 { WHITE } else { deep };
                     col = col.mix(ink, c * 0.9);
                 }
