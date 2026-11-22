@@ -441,69 +441,90 @@ float inner(vec2 c, vec3 v, vec3 n, float ior, float t){
 uniform vec3 uMetal;
 
 // ---- age: dust and cobwebs (uWear = dust, unused, cobweb, 0..1). 1 real hour = 1 day on the shelf; polishing removes it.
-// Real dust settles most on what faces up and in sheltered corners, in patches, with grit of several sizes and the odd lint fibre.
-// Real cobwebs are abandoned tangle webs: sagging threads strung from a sheltered corner, sticky silk that catches dust (grey beads
-// along it), a faint sheet where threads crowd. The silk glints where a thread runs across the light, with a faint rainbow.
-// uAge = the tuner (YTPMAge): [0] dust amount, patchiness, settles on top, dulls the shine; [1] grit, lint, web amount, threads;
-// [2] thread width, glint, sheet, dust on threads; [3] rainbow.
+// Dust: first on what faces up and in sheltered corners, in patches; as it builds up the patches join into a grey felt that
+// covers the whole medal (a year on the shelf), with grit and the odd lint fibre.
+// Cobweb: an old tangle web in the top-left corner, as it really looks: a thin felt of silk with holes, full of fine wavy
+// fibres (threads running out from the corner and sagging threads across them), held by one smooth sagging border thread,
+// with a couple of guy threads down to the face. Dust greys the silk; fibres glint where they cross the light.
+// uAge = the tuner (YTPMAge): [0] dust amount, patchiness, settles on top, dulls the shine; [1] grit, lint, web amount, web size;
+// [2] thread width, glint, silk felt, dust on silk; [3] rainbow.
 uniform vec3 uWear;
 uniform vec4 uAge[4];
 float wN(vec2 p){ vec2 i=floor(p), f=fract(p); vec2 u=f*f*(3.-2.*f); return mix(mix(hash(i),hash(i+vec2(1.,0.)),u.x),mix(hash(i+vec2(0.,1.)),hash(i+vec2(1.,1.)),u.x),u.y); }
 float wF(vec2 p){ return .5*wN(p)+.25*wN(p*2.03+3.1)+.125*wN(p*4.01+7.7); }
+float wRidge(float n, float k){ return pow(1.-abs(n*2.-1.),k); }
 vec2 wSeg(vec2 p, vec2 a, vec2 b){ vec2 pa=p-a, ba=b-a; float h=clamp(dot(pa,ba)/dot(ba,ba),0.,1.); return vec2(length(pa-ba*h),h); }
-// the cobweb: rgb = light from the silk and its dust (premultiplied), a = how much it covers
+// a tangle of straight silk threads (under tension silk runs straight): random lines through cells of size 1/sc,
+// two per cell, each crossing into the next cell. dens = how many of them exist.
+float wTangle(vec2 p, float sc, float aa, float dens){
+  vec2 q=p*sc, id=floor(q);
+  float m=0., w=.0011*uAge[2].x, cw=min(1.,w*2.4/(aa*1.5+1e-4))+.1;
+  for(int j=-1;j<=1;j++) for(int i=-1;i<=1;i++) for(int k=0;k<2;k++){
+    vec2 c=id+vec2(float(i),float(j)); float fk=float(k);
+    if(hash(c+fk*13.7)>dens) continue;
+    vec2 o=c+vec2(hash(c+3.1+fk),hash(c+5.3+fk));
+    float an=hash(c+7.9+fk*2.)*3.1416;
+    vec2 dir=vec2(cos(an),sin(an))*(.5+.5*hash(c+11.+fk));
+    float d=wSeg(q,o-dir,o+dir).x/sc;
+    m=max(m,smoothstep(w+aa,max(w-aa*.5,0.),d)*cw*(.35+.65*hash(c+17.+fk)));
+  }
+  return m;
+}
+// the cobweb: rgb = its light (premultiplied, never above a), a = how much it covers
 vec4 wWeb(vec2 p, float amt, float aa){
   if(amt<=.001) return vec4(0.);
-  const float A0=2.3;                                     // the sheltered corner: top left, under the light
-  vec2 cn=vec2(cos(A0),sin(A0));
-  if(dot(p-cn*.7,p-cn*.7)>.45) return vec4(0.);
-  vec2 L2=normalize(vec2(-.42,.46));
-  float cov=0., glint=0., grey=0.; vec3 iri=vec3(0.);
-  for(int i=0;i<28;i++){
-    float fi=float(i);
-    float h1=hash(vec2(fi,1.3)), h2=hash(vec2(fi,7.1)), h3=hash(vec2(fi,4.7)), h4=hash(vec2(fi,9.9));
-    if(h4>amt*1.15*uAge[1].w) continue;                  // more threads the longer it is left
-    float aA=A0+(h1-.5)*1.25, aB=A0+(h2-.5)*1.6;
-    vec2 a=vec2(cos(aA),sin(aA))*(.85+.07*h3);
-    vec2 b=fi<9.?vec2(cos(aB),sin(aB))*(.84+.08*h1):cn*.86+vec2(cos(fi*2.4),sin(fi*2.4))*(.18+.32*h3);
-    float Ls=length(b-a);
-    vec2 k=(a+b)*.5-vec2(0.,1.)*Ls*(.06+.16*h2)*2.;      // control point: the thread sags under gravity
-    vec2 P0=a, P1=mix(mix(a,k,.25),mix(k,b,.25),.25), P2=mix(mix(a,k,.5),mix(k,b,.5),.5), P3=mix(mix(a,k,.75),mix(k,b,.75),.75);
-    vec2 d1=wSeg(p,P0,P1), d2=wSeg(p,P1,P2), d3=wSeg(p,P2,P3), d4=wSeg(p,P3,b);
-    vec2 dd=d1; float tt=d1.y*.25; vec2 sd=P1-P0;
-    if(d2.x<dd.x){ dd=d2; tt=.25+d2.y*.25; sd=P2-P1; }
-    if(d3.x<dd.x){ dd=d3; tt=.5+d3.y*.25; sd=P3-P2; }
-    if(d4.x<dd.x){ dd=d4; tt=.75+d4.y*.25; sd=b-P3; }
-    float clump=smoothstep(.62,.95,wN(vec2(tt*Ls*55.,fi*5.3)))*(.3+.7*min(amt,1.))*uAge[2].w;   // dust caught on the sticky silk
-    float w=(.0016+.006*clump)*uAge[2].x;
-    float c=smoothstep(w+aa,w-aa*.5,dd.x)*min(1.,(w*2.)/(aa*1.5+1e-4))*(.55+.45*smoothstep(.0,.15,amt-h4*.8));
-    if(c>0.){
-      float g=pow(1.-abs(dot(normalize(sd),L2)),2.);       // glints where it runs across the light
-      cov=max(cov,c);
-      glint=max(glint,c*g*(1.-min(clump,1.)));
-      grey=max(grey,c*min(clump,1.));
-      iri=max(iri,c*g*(.5+.5*cos(6.283*(tt*2.+h1+vec3(0.,.33,.67)))));
-    }
+  float A=min(amt,1.5), A1=min(A,1.);
+  const float A0=2.3;                                          // the sheltered corner: top left, under the light
+  float span=(.32+.38*A1)*uAge[1].w;
+  vec2 P1=vec2(cos(A0-span),sin(A0-span))*.965, P2=vec2(cos(A0+span),sin(A0+span))*.965, C=vec2(cos(A0),sin(A0));
+  vec2 ch=P2-P1; float L=length(ch); vec2 cu=ch/L; vec2 nn=vec2(-cu.y,cu.x); if(dot(nn,C)>0.) nn=-nn;   // nn: towards the centre
+  float t=dot(p-P1,cu)/L, h=dot(p-P1,nn);
+  float depth=L*(.14+.2*A1);
+  if(t<-.1||t>1.1||h>depth*1.4+.35) return vec4(0.);
+  float tc=clamp(t,0.,1.);
+  float sag=depth*4.*tc*(1.-tc);                                // the border thread: one smooth sagging curve
+  float tear=sag*(.5+.5*smoothstep(.2,.8,wF(vec2(tc*5.,1.7)+3.)));   // the silk stops short of it, ragged
+  float ins=smoothstep(tear+aa*3.,tear-aa*3.,h)*smoothstep(-.01,.03,t)*smoothstep(1.01,.97,t);
+  vec2 pc=p-C; float rr=length(pc), th=atan(pc.y,pc.x);
+  float veil=smoothstep(.22,.72,wF(p*6.+2.))*(.45+.55*wF(p*21.+9.));  // a thin felt of silk with holes
+  float fib=ins>0.?max(wTangle(p,5.,aa,.85),wTangle(p+3.7,11.,aa,.5)*.75)*(.55+.45*smoothstep(.75,.05,rr)):0.;   // straight silk threads crossing every way
+  float dens=ins*min(A*1.3,1.)*(veil*uAge[2].z*1.6+fib*.6);
+  float bw=.0022*uAge[2].x, cw=min(1.,bw*2.4/(aa*1.5+1e-4))+.15;
+  float border=smoothstep(bw+aa,max(bw-aa*.5,0.),abs(h-sag))*smoothstep(-.02,.08,t)*smoothstep(1.02,.92,t)*min(A*2.,1.)*cw*.7*smoothstep(.25,.45,wN(vec2(t*9.,4.1)));
+  float guy=0.;                                                // two guy threads from the border down to the face
+  for(int i=0;i<2;i++){
+    float ti=i==0?.3:.72;
+    vec2 a=P1+cu*L*ti+nn*depth*4.*ti*(1.-ti);
+    vec2 b=a+nn*(.2+.08*float(i))+cu*(float(i)-.5)*.14;
+    vec2 k=(a+b)*.5+vec2(.0,-.03)+cu*.02;
+    vec2 q1=mix(mix(a,k,.33),mix(k,b,.33),.33), q2=mix(mix(a,k,.66),mix(k,b,.66),.66);
+    float d=min(min(wSeg(p,a,q1).x,wSeg(p,q1,q2).x),wSeg(p,q2,b).x);
+    guy=max(guy,smoothstep(bw*.8+aa,max(bw*.8-aa*.5,0.),d)*cw);
   }
-  // the sheet where threads crowd in the corner: thin, patchy, grey with dust
-  float sh=min(amt,1.)*smoothstep(.40,.0,length(p-cn*.86))*(.35+.65*smoothstep(.3,.8,wF(p*22.+4.)))*uAge[2].z;
-  float a=clamp(max(cov*.75,sh),0.,1.);
-  vec3 rgb=vec3(.78,.77,.74)*(cov*.35+glint*uAge[2].y)+iri*uAge[3].x+vec3(.50,.48,.44)*(grey*.75+sh*.9);
-  return vec4(rgb,a);
+  guy*=smoothstep(.35,.7,A);
+  vec2 L2=normalize(vec2(-.42,.46)), rd=rr>1e-4?pc/rr:vec2(1.,0.);
+  float glint=ins*min(A*1.3,1.)*fib*uAge[2].y*(.6+.4*(1.-abs(dot(rd,L2))))+border*.5+guy*.4;
+  float al=clamp(dens*.75+border*.7+guy*.5,0.,.9);
+  vec3 silk=vec3(.80,.79,.76), dusty=vec3(.56,.54,.50);
+  vec3 rgb=mix(silk,dusty,clamp(uAge[2].w*.55*(.4+.6*veil),0.,1.))*al*.6+silk*glint*.55
+          +uAge[3].x*glint*(.5+.5*cos(6.283*(th*3.+rr*4.+vec3(0.,.33,.67))));
+  return vec4(min(rgb,vec3(al)),al);
 }
 // age a (premultiplied) colour. p: on the face (radius 1, +y up). recess: how sheltered (dust collects there). metal: 1 metal, 0 stone.
 vec3 aged(vec3 col, float a, vec2 p, float recess, float metal, float aa){
-  float dust=min(uWear.x*uAge[0].x,1.5), web=uWear.z*uAge[1].z;
+  float dust=min(uWear.x*uAge[0].x,1.), web=uWear.z*uAge[1].z;
   if(dust+web<.002 || a<=0.) return col;
   float lum=dot(col,vec3(.299,.587,.114))/max(a,.01);
-  float film=smoothstep(.15,.85,wF(p*3.2+11.))*uAge[0].y+(1.-uAge[0].y);   // patches, like a real shelf
+  float film=mix(smoothstep(.15,.85,wF(p*3.2+11.))*uAge[0].y+(1.-uAge[0].y),1.,dust*dust);   // patches that join up as it builds
   float up=smoothstep(-.4,.95,p.y);                                     // settles on what faces up
-  float dd=dust*(.22+.55*recess+uAge[0].z*up)*film;
+  float where=mix(.22+.55*recess+uAge[0].z*up,1.,smoothstep(.35,1.,dust));   // ledges and corners first, then everywhere
+  float cover=clamp(dust*where*film*1.25,0.,.96);
+  float fluff=wF(p*26.+5.);
   float grit=smoothstep(.82,.97,wN(p*170.+3.))+.7*smoothstep(.9,.99,wN(p*60.+9.)); // fine grit and the odd coarse grain
   float lint=smoothstep(.012,0.,abs(wN(p*7.+31.)-.5))*smoothstep(.78,.86,wN(p*2.3+5.)); // a curly fibre here and there
   vec3 dc=vec3(.60,.57,.52)*a;
   col=mix(col,vec3(lum)*.8*a+.03*a,clamp(dust*uAge[0].w*(metal>.5?1.:1.6),0.,1.));  // the shine goes flat (stones lose their fire)
-  col=mix(col,dc*(.42+.38*lum),clamp(dd*1.15,0.,.72));                    // the film: grey, matte, lifts the darks
+  col=mix(col,dc*(.5+.2*lum+.25*fluff),cover);                         // grey felt; the relief still shows a little
   col=mix(col,dc*.9,clamp(grit*dust*uAge[1].x+lint*dust*uAge[1].y,0.,.6));
   vec4 wb=wWeb(p,web,aa);
   col=col*(1.-wb.a)+wb.rgb*a;
@@ -1180,74 +1201,95 @@ void main(){
   const api = { mount, set, only, icons: (fn) => { iconSrc = fn; root.YTPMIconSrc = fn; }, supported: () => setup() };
   /** Age look (the full view's "Tune the age" sliders). Shader part goes to uAge[4]; the rest drives the wear clock and motion. */
   root.YTPMAgeDefaults = { dustAmt: 1, dustPatch: .65, dustUp: .3, dull: .2, grit: .55, lint: .5, webAmt: 1, webThreads: 1, webWidth: 1, webGlint: .65, webSheet: .42, webDust: 1, webRainbow: .1,
-    dustDays: 30, webStart: 10, webSpan: 40, rubDust: .5, sway: .33, hover: .33, flick: 1, friction: 2.2 };
+    dustDays: 120, webStart: 10, webSpan: 40, rubDust: .5, sway: .33, hover: .33, flick: 1, friction: 2.2 };
   root.YTPMAge = Object.assign({}, root.YTPMAgeDefaults, root.YTPMAge || {});
   root.YTPMAgeVec = () => { const a = root.YTPMAge; return new Float32Array([a.dustAmt, a.dustPatch, a.dustUp, a.dull, a.grit, a.lint, a.webAmt, a.webThreads, a.webWidth, a.webGlint, a.webSheet, a.webDust, a.webRainbow, 0, 0, 0]); };
   root.YTPMWearGLSL = `
 // ---- age: dust and cobwebs (uWear = dust, unused, cobweb, 0..1). 1 real hour = 1 day on the shelf; polishing removes it.
-// Real dust settles most on what faces up and in sheltered corners, in patches, with grit of several sizes and the odd lint fibre.
-// Real cobwebs are abandoned tangle webs: sagging threads strung from a sheltered corner, sticky silk that catches dust (grey beads
-// along it), a faint sheet where threads crowd. The silk glints where a thread runs across the light, with a faint rainbow.
-// uAge = the tuner (YTPMAge): [0] dust amount, patchiness, settles on top, dulls the shine; [1] grit, lint, web amount, threads;
-// [2] thread width, glint, sheet, dust on threads; [3] rainbow.
+// Dust: first on what faces up and in sheltered corners, in patches; as it builds up the patches join into a grey felt that
+// covers the whole medal (a year on the shelf), with grit and the odd lint fibre.
+// Cobweb: an old tangle web in the top-left corner, as it really looks: a thin felt of silk with holes, full of fine wavy
+// fibres (threads running out from the corner and sagging threads across them), held by one smooth sagging border thread,
+// with a couple of guy threads down to the face. Dust greys the silk; fibres glint where they cross the light.
+// uAge = the tuner (YTPMAge): [0] dust amount, patchiness, settles on top, dulls the shine; [1] grit, lint, web amount, web size;
+// [2] thread width, glint, silk felt, dust on silk; [3] rainbow.
 uniform vec3 uWear;
 uniform vec4 uAge[4];
 float wN(vec2 p){ vec2 i=floor(p), f=fract(p); vec2 u=f*f*(3.-2.*f); return mix(mix(hash(i),hash(i+vec2(1.,0.)),u.x),mix(hash(i+vec2(0.,1.)),hash(i+vec2(1.,1.)),u.x),u.y); }
 float wF(vec2 p){ return .5*wN(p)+.25*wN(p*2.03+3.1)+.125*wN(p*4.01+7.7); }
+float wRidge(float n, float k){ return pow(1.-abs(n*2.-1.),k); }
 vec2 wSeg(vec2 p, vec2 a, vec2 b){ vec2 pa=p-a, ba=b-a; float h=clamp(dot(pa,ba)/dot(ba,ba),0.,1.); return vec2(length(pa-ba*h),h); }
-// the cobweb: rgb = light from the silk and its dust (premultiplied), a = how much it covers
+// a tangle of straight silk threads (under tension silk runs straight): random lines through cells of size 1/sc,
+// two per cell, each crossing into the next cell. dens = how many of them exist.
+float wTangle(vec2 p, float sc, float aa, float dens){
+  vec2 q=p*sc, id=floor(q);
+  float m=0., w=.0011*uAge[2].x, cw=min(1.,w*2.4/(aa*1.5+1e-4))+.1;
+  for(int j=-1;j<=1;j++) for(int i=-1;i<=1;i++) for(int k=0;k<2;k++){
+    vec2 c=id+vec2(float(i),float(j)); float fk=float(k);
+    if(hash(c+fk*13.7)>dens) continue;
+    vec2 o=c+vec2(hash(c+3.1+fk),hash(c+5.3+fk));
+    float an=hash(c+7.9+fk*2.)*3.1416;
+    vec2 dir=vec2(cos(an),sin(an))*(.5+.5*hash(c+11.+fk));
+    float d=wSeg(q,o-dir,o+dir).x/sc;
+    m=max(m,smoothstep(w+aa,max(w-aa*.5,0.),d)*cw*(.35+.65*hash(c+17.+fk)));
+  }
+  return m;
+}
+// the cobweb: rgb = its light (premultiplied, never above a), a = how much it covers
 vec4 wWeb(vec2 p, float amt, float aa){
   if(amt<=.001) return vec4(0.);
-  const float A0=2.3;                                     // the sheltered corner: top left, under the light
-  vec2 cn=vec2(cos(A0),sin(A0));
-  if(dot(p-cn*.7,p-cn*.7)>.45) return vec4(0.);
-  vec2 L2=normalize(vec2(-.42,.46));
-  float cov=0., glint=0., grey=0.; vec3 iri=vec3(0.);
-  for(int i=0;i<28;i++){
-    float fi=float(i);
-    float h1=hash(vec2(fi,1.3)), h2=hash(vec2(fi,7.1)), h3=hash(vec2(fi,4.7)), h4=hash(vec2(fi,9.9));
-    if(h4>amt*1.15*uAge[1].w) continue;                  // more threads the longer it is left
-    float aA=A0+(h1-.5)*1.25, aB=A0+(h2-.5)*1.6;
-    vec2 a=vec2(cos(aA),sin(aA))*(.85+.07*h3);
-    vec2 b=fi<9.?vec2(cos(aB),sin(aB))*(.84+.08*h1):cn*.86+vec2(cos(fi*2.4),sin(fi*2.4))*(.18+.32*h3);
-    float Ls=length(b-a);
-    vec2 k=(a+b)*.5-vec2(0.,1.)*Ls*(.06+.16*h2)*2.;      // control point: the thread sags under gravity
-    vec2 P0=a, P1=mix(mix(a,k,.25),mix(k,b,.25),.25), P2=mix(mix(a,k,.5),mix(k,b,.5),.5), P3=mix(mix(a,k,.75),mix(k,b,.75),.75);
-    vec2 d1=wSeg(p,P0,P1), d2=wSeg(p,P1,P2), d3=wSeg(p,P2,P3), d4=wSeg(p,P3,b);
-    vec2 dd=d1; float tt=d1.y*.25; vec2 sd=P1-P0;
-    if(d2.x<dd.x){ dd=d2; tt=.25+d2.y*.25; sd=P2-P1; }
-    if(d3.x<dd.x){ dd=d3; tt=.5+d3.y*.25; sd=P3-P2; }
-    if(d4.x<dd.x){ dd=d4; tt=.75+d4.y*.25; sd=b-P3; }
-    float clump=smoothstep(.62,.95,wN(vec2(tt*Ls*55.,fi*5.3)))*(.3+.7*min(amt,1.))*uAge[2].w;   // dust caught on the sticky silk
-    float w=(.0016+.006*clump)*uAge[2].x;
-    float c=smoothstep(w+aa,w-aa*.5,dd.x)*min(1.,(w*2.)/(aa*1.5+1e-4))*(.55+.45*smoothstep(.0,.15,amt-h4*.8));
-    if(c>0.){
-      float g=pow(1.-abs(dot(normalize(sd),L2)),2.);       // glints where it runs across the light
-      cov=max(cov,c);
-      glint=max(glint,c*g*(1.-min(clump,1.)));
-      grey=max(grey,c*min(clump,1.));
-      iri=max(iri,c*g*(.5+.5*cos(6.283*(tt*2.+h1+vec3(0.,.33,.67)))));
-    }
+  float A=min(amt,1.5), A1=min(A,1.);
+  const float A0=2.3;                                          // the sheltered corner: top left, under the light
+  float span=(.32+.38*A1)*uAge[1].w;
+  vec2 P1=vec2(cos(A0-span),sin(A0-span))*.965, P2=vec2(cos(A0+span),sin(A0+span))*.965, C=vec2(cos(A0),sin(A0));
+  vec2 ch=P2-P1; float L=length(ch); vec2 cu=ch/L; vec2 nn=vec2(-cu.y,cu.x); if(dot(nn,C)>0.) nn=-nn;   // nn: towards the centre
+  float t=dot(p-P1,cu)/L, h=dot(p-P1,nn);
+  float depth=L*(.14+.2*A1);
+  if(t<-.1||t>1.1||h>depth*1.4+.35) return vec4(0.);
+  float tc=clamp(t,0.,1.);
+  float sag=depth*4.*tc*(1.-tc);                                // the border thread: one smooth sagging curve
+  float tear=sag*(.5+.5*smoothstep(.2,.8,wF(vec2(tc*5.,1.7)+3.)));   // the silk stops short of it, ragged
+  float ins=smoothstep(tear+aa*3.,tear-aa*3.,h)*smoothstep(-.01,.03,t)*smoothstep(1.01,.97,t);
+  vec2 pc=p-C; float rr=length(pc), th=atan(pc.y,pc.x);
+  float veil=smoothstep(.22,.72,wF(p*6.+2.))*(.45+.55*wF(p*21.+9.));  // a thin felt of silk with holes
+  float fib=ins>0.?max(wTangle(p,5.,aa,.85),wTangle(p+3.7,11.,aa,.5)*.75)*(.55+.45*smoothstep(.75,.05,rr)):0.;   // straight silk threads crossing every way
+  float dens=ins*min(A*1.3,1.)*(veil*uAge[2].z*1.6+fib*.6);
+  float bw=.0022*uAge[2].x, cw=min(1.,bw*2.4/(aa*1.5+1e-4))+.15;
+  float border=smoothstep(bw+aa,max(bw-aa*.5,0.),abs(h-sag))*smoothstep(-.02,.08,t)*smoothstep(1.02,.92,t)*min(A*2.,1.)*cw*.7*smoothstep(.25,.45,wN(vec2(t*9.,4.1)));
+  float guy=0.;                                                // two guy threads from the border down to the face
+  for(int i=0;i<2;i++){
+    float ti=i==0?.3:.72;
+    vec2 a=P1+cu*L*ti+nn*depth*4.*ti*(1.-ti);
+    vec2 b=a+nn*(.2+.08*float(i))+cu*(float(i)-.5)*.14;
+    vec2 k=(a+b)*.5+vec2(.0,-.03)+cu*.02;
+    vec2 q1=mix(mix(a,k,.33),mix(k,b,.33),.33), q2=mix(mix(a,k,.66),mix(k,b,.66),.66);
+    float d=min(min(wSeg(p,a,q1).x,wSeg(p,q1,q2).x),wSeg(p,q2,b).x);
+    guy=max(guy,smoothstep(bw*.8+aa,max(bw*.8-aa*.5,0.),d)*cw);
   }
-  // the sheet where threads crowd in the corner: thin, patchy, grey with dust
-  float sh=min(amt,1.)*smoothstep(.40,.0,length(p-cn*.86))*(.35+.65*smoothstep(.3,.8,wF(p*22.+4.)))*uAge[2].z;
-  float a=clamp(max(cov*.75,sh),0.,1.);
-  vec3 rgb=vec3(.78,.77,.74)*(cov*.35+glint*uAge[2].y)+iri*uAge[3].x+vec3(.50,.48,.44)*(grey*.75+sh*.9);
-  return vec4(rgb,a);
+  guy*=smoothstep(.35,.7,A);
+  vec2 L2=normalize(vec2(-.42,.46)), rd=rr>1e-4?pc/rr:vec2(1.,0.);
+  float glint=ins*min(A*1.3,1.)*fib*uAge[2].y*(.6+.4*(1.-abs(dot(rd,L2))))+border*.5+guy*.4;
+  float al=clamp(dens*.75+border*.7+guy*.5,0.,.9);
+  vec3 silk=vec3(.80,.79,.76), dusty=vec3(.56,.54,.50);
+  vec3 rgb=mix(silk,dusty,clamp(uAge[2].w*.55*(.4+.6*veil),0.,1.))*al*.6+silk*glint*.55
+          +uAge[3].x*glint*(.5+.5*cos(6.283*(th*3.+rr*4.+vec3(0.,.33,.67))));
+  return vec4(min(rgb,vec3(al)),al);
 }
 // age a (premultiplied) colour. p: on the face (radius 1, +y up). recess: how sheltered (dust collects there). metal: 1 metal, 0 stone.
 vec3 aged(vec3 col, float a, vec2 p, float recess, float metal, float aa){
-  float dust=min(uWear.x*uAge[0].x,1.5), web=uWear.z*uAge[1].z;
+  float dust=min(uWear.x*uAge[0].x,1.), web=uWear.z*uAge[1].z;
   if(dust+web<.002 || a<=0.) return col;
   float lum=dot(col,vec3(.299,.587,.114))/max(a,.01);
-  float film=smoothstep(.15,.85,wF(p*3.2+11.))*uAge[0].y+(1.-uAge[0].y);   // patches, like a real shelf
+  float film=mix(smoothstep(.15,.85,wF(p*3.2+11.))*uAge[0].y+(1.-uAge[0].y),1.,dust*dust);   // patches that join up as it builds
   float up=smoothstep(-.4,.95,p.y);                                     // settles on what faces up
-  float dd=dust*(.22+.55*recess+uAge[0].z*up)*film;
+  float where=mix(.22+.55*recess+uAge[0].z*up,1.,smoothstep(.35,1.,dust));   // ledges and corners first, then everywhere
+  float cover=clamp(dust*where*film*1.25,0.,.96);
+  float fluff=wF(p*26.+5.);
   float grit=smoothstep(.82,.97,wN(p*170.+3.))+.7*smoothstep(.9,.99,wN(p*60.+9.)); // fine grit and the odd coarse grain
   float lint=smoothstep(.012,0.,abs(wN(p*7.+31.)-.5))*smoothstep(.78,.86,wN(p*2.3+5.)); // a curly fibre here and there
   vec3 dc=vec3(.60,.57,.52)*a;
   col=mix(col,vec3(lum)*.8*a+.03*a,clamp(dust*uAge[0].w*(metal>.5?1.:1.6),0.,1.));  // the shine goes flat (stones lose their fire)
-  col=mix(col,dc*(.42+.38*lum),clamp(dd*1.15,0.,.72));                    // the film: grey, matte, lifts the darks
+  col=mix(col,dc*(.5+.2*lum+.25*fluff),cover);                         // grey felt; the relief still shows a little
   col=mix(col,dc*.9,clamp(grit*dust*uAge[1].x+lint*dust*uAge[1].y,0.,.6));
   vec4 wb=wWeb(p,web,aa);
   col=col*(1.-wb.a)+wb.rgb*a;
@@ -2600,8 +2642,8 @@ void main(){
 
   /* ------------------------------------------------------------------ age tuner (full view of a metal or stone): drives YTPMAge */
   const AG_SPEC = [
-    ['Dust', [['dustAmt', 'Dust amount', 0, 2, 0.01], ['dustPatch', 'Patchiness', 0, 1, 0.01], ['dustUp', 'Settles on top', 0, 1, 0.01], ['dull', 'Dulls the shine', 0, .6, 0.01], ['grit', 'Grit specks', 0, 1.5, 0.01], ['lint', 'Lint fibres', 0, 1.5, 0.01], ['dustDays', 'Days to get dusty', 5, 120, 1]]],
-    ['Cobwebs', [['webAmt', 'Cobweb amount', 0, 2, 0.01], ['webThreads', 'Threads', 0.2, 1.5, 0.01], ['webWidth', 'Thread thickness', 0.3, 3, 0.01], ['webGlint', 'Silk glint', 0, 1.5, 0.01], ['webSheet', 'Sheet in the corner', 0, 1, 0.01], ['webDust', 'Dust on threads', 0, 2, 0.01], ['webRainbow', 'Rainbow on silk', 0, .5, 0.01], ['webStart', 'Cobwebs start after (days)', 0, 40, 1], ['webSpan', 'Days to full cobwebs', 5, 120, 1]]],
+    ['Dust', [['dustAmt', 'Dust amount', 0, 2, 0.01], ['dustPatch', 'Patchiness', 0, 1, 0.01], ['dustUp', 'Settles on top', 0, 1, 0.01], ['dull', 'Dulls the shine', 0, .6, 0.01], ['grit', 'Grit specks', 0, 1.5, 0.01], ['lint', 'Lint fibres', 0, 1.5, 0.01], ['dustDays', 'Days to get dusty (63%)', 10, 365, 1]]],
+    ['Cobwebs', [['webAmt', 'Cobweb amount', 0, 2, 0.01], ['webThreads', 'Web size', 0.4, 1.6, 0.01], ['webWidth', 'Border thread thickness', 0.3, 3, 0.01], ['webGlint', 'Silk glint', 0, 1.5, 0.01], ['webSheet', 'Silk felt (density)', 0, 1, 0.01], ['webDust', 'Dust on the silk', 0, 2, 0.01], ['webRainbow', 'Rainbow on silk', 0, .5, 0.01], ['webStart', 'Cobwebs start after (days)', 0, 40, 1], ['webSpan', 'Days to full cobwebs', 5, 120, 1]]],
     ['Polish', [['rubDust', 'Dust off per rub', 0.1, 0.9, 0.01]]],
     ['Motion', [['sway', 'Idle sway', 0, 1, 0.01], ['hover', 'Hover tilt', 0, 1, 0.01], ['flick', 'Flick speed', 0, 3, 0.01], ['friction', 'Flick slows down', 0.5, 8, 0.1]]]
   ];
@@ -2641,7 +2683,7 @@ void main(){
     const d = document.createElement('div'); d.className = 'fv-tune ag';
     const days = Math.round(wearOf(e.id).days);
     d.innerHTML = `<div class="mt" style="color:#d9b98a">Tune the age</div>
-      <fieldset class="tn-group"><legend>This medal</legend><label class="tn-row"><span>Days on the shelf (try it)</span><output class="ag-days">${days}</output><input type="range" class="ag-age" min="0" max="80" step="1" value="${Math.min(80, days)}"></label></fieldset>
+      <fieldset class="tn-group"><legend>This medal</legend><label class="tn-row"><span>Days on the shelf (try it)</span><output class="ag-days">${days}</output><input type="range" class="ag-age" min="0" max="400" step="1" value="${Math.min(400, days)}"></label></fieldset>
       <div class="tn-sliders"></div>
       <div class="tn-actions"><button type="button" class="tn-save ag-save"${TN.db ? '' : ' disabled'}>Save for Claude</button><button type="button" class="tn-reset ag-reset">Reset</button><span class="tn-status ag-status" role="status">${esc(AG.status || (TN.db ? 'Not changed yet' : 'Changes stay in this browser'))}</span></div>`;
     cardEl.appendChild(d);

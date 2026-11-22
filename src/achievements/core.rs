@@ -395,8 +395,8 @@ pub struct Care {
     pub n: u32,
 }
 
-/// How worn a medal looks now. Medals age with real time, 1 real hour = 1 day on the shelf: dust settles in about a
-/// month (63% at 30 days), cobwebs start after 10 days and are full by 50. Polishing: every rub clears the webs and
+/// How worn a medal looks now. Medals age with real time, 1 real hour = 1 day on the shelf: dust settles over months
+/// (63% at 120 days, a grey felt over the whole medal by a year), cobwebs start after 10 days and are full by 50. Polishing: every rub clears the webs and
 /// takes half the dust. `scratch` stays 0 (scratches were dropped).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Wear {
@@ -500,7 +500,7 @@ impl State {
             _ => (struck, 0.0, 0.0, 0),
         };
         let days = now_ms.saturating_sub(t) as f32 / WEAR_DAY_MS as f32;
-        let dust = 1.0 - (1.0 - d0) * (-days / 30.0).exp();
+        let dust = 1.0 - (1.0 - d0) * (-days / 120.0).exp(); // a year on the shelf covers it
         let _ = s0;
         let scratch = 0.0; // dust and cobwebs only: scratches looked wrong (the owner, 2026-11-22)
         let web = if days < 10.0 { 0.0 } else { ((days - 10.0) / 40.0).min(1.0).powf(0.8) };
@@ -2135,9 +2135,10 @@ mod tests {
         let w0 = s.wear("watch", at);
         assert!(w0.clean && w0.condition == 100);
         let w5 = s.wear("watch", at + 5 * WEAR_DAY_MS);
-        assert!(w5.dust > 0.1 && w5.dust < 0.2 && w5.web == 0.0, "{w5:?}");
+        assert!(w5.dust > 0.02 && w5.dust < 0.08 && w5.web == 0.0, "{w5:?}");
         let w30 = s.wear("watch", at + 30 * WEAR_DAY_MS);
-        assert!((w30.dust - 0.632).abs() < 0.01 && w30.web > 0.3 && w30.scratch < w30.dust, "{w30:?}");
+        assert!((w30.dust - 0.221).abs() < 0.01 && w30.web > 0.3 && w30.scratch == 0.0, "{w30:?}");
+        assert!(s.wear("watch", at + 365 * WEAR_DAY_MS).dust > 0.94, "a year covers it");
         assert!(w30.condition < w5.condition);
         assert!(s.wear("nope", at + 99 * WEAR_DAY_MS).clean);
     }
@@ -2161,7 +2162,7 @@ mod tests {
         assert_eq!(s.polish("watch", now).1, 0, "no shine for an already spotless medal");
         assert_eq!(s.sh, rubs as u64 * SHINE_RUB + SHINE_SPOTLESS);
         // it ages again from the polish
-        assert!(s.wear("watch", now + 20 * WEAR_DAY_MS).dust > 0.4);
+        assert!(s.wear("watch", now + 60 * WEAR_DAY_MS).dust > 0.35);
         // a new tier is a new, clean medal
         let mut up = s.clone();
         up.k.insert("watch".into(), 4);
