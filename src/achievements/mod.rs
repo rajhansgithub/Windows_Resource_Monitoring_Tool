@@ -3,6 +3,7 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod core;
+pub mod gpu;
 mod json;
 pub mod store;
 

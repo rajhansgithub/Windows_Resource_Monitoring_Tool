@@ -35,7 +35,7 @@ Only real use counts. Opening windows, clicking, settings changes never count.
 - **Day of real use**: ≥ 30 active minutes that day. Totals only, no streaks.
 - Counters are fed by the observer from the app's own events (samples, alerts, End task, updates). No timers of its own.
 
-## Catalog (33 badges)
+## Catalog (32 badges)
 
 Thresholds are per tier: Bronze, Silver, Gold, Platinum, Diamond, Ruby, Emulsion.
 
