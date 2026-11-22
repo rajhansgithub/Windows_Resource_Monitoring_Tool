@@ -23,9 +23,34 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Test
-        run: cargo test --release
+        run: cargo test --release -- --show-output
       - name: Build
         run: cargo build --release
+      - name: Run app, screenshot Achievements window
+        shell: pwsh
+        run: |
+          $p = Start-Process target/release/ResourceMonitor.exe -ArgumentList "--achievements" -PassThru
+          Start-Sleep -Seconds 12
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          New-Item -ItemType Directory -Force target/medal-shots | Out-Null
+          $bmp.Save("target/medal-shots/app-achievements.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          $log = "$env:LOCALAPPDATA/ResourceMonitor/diagnostics.log"
+          if (Test-Path $log) { Copy-Item $log target/medal-shots/; Get-Content $log }
+          if ($p.HasExited) { Write-Error "app exited early (code $($p.ExitCode))"; exit 1 }
+          Stop-Process -Id $p.Id
+          if ((Test-Path $log) -and (Select-String -Path $log -Pattern "achievements gpu" -Quiet)) {
+            Write-Error "GPU badge path failed in the app, see diagnostics.log"; exit 1
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: medal-shots
+          path: target/medal-shots/
+          if-no-files-found: warn
       - name: Installer
         shell: pwsh
         run: |

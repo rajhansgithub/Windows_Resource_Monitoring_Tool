@@ -1444,6 +1444,11 @@ impl App {
         };
     }
 
+    /// The Achievements window (tray menu entry, or `--achievements` on the command line).
+    pub fn open_achievements(&mut self) {
+        self.command(ID_ACHIEVE);
+    }
+
     fn command(&mut self, id: usize) {
         match id {
             ID_SETTINGS => return crate::settings_ui::open(self),
@@ -1862,6 +1867,10 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             // Second launch: make sure the user sees us.
             if w == 1 {
                 report::open(a);
+                return 0;
+            }
+            if w == 2 {
+                a.open_achievements();
                 return 0;
             }
             if !a.m.s.visible {

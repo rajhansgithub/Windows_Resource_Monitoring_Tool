@@ -692,3 +692,188 @@ impl Gpu {
         Ok(())
     }
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Windows only: compiles both pixel shaders with the real `D3DCompile` and renders every material (WARP on a CI
+// runner without a GPU). Fails on a compile error instead of quietly falling back to the flat medal. Writes a
+// contact sheet to `target/medal-shots/medals.png` (top row: still frames, bottom row: t = 2.5 s, tilted) so a
+// person can look at the result; CI uploads it.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ALL: [Material; 7] = [
+        Material::Bronze,
+        Material::Silver,
+        Material::Gold,
+        Material::Platinum,
+        Material::Diamond,
+        Material::Ruby,
+        Material::Emulsion,
+    ];
+    const PX: u32 = 192;
+
+    /// A test icon: a ring with a bar through it, white on clear.
+    fn icon() -> Vec<u8> {
+        let n = ICON_N as i32;
+        let mut v = vec![0u8; (n * n) as usize];
+        for y in 0..n {
+            for x in 0..n {
+                let (dx, dy) = ((x - n / 2) as f32, (y - n / 2) as f32);
+                let r = (dx * dx + dy * dy).sqrt();
+                let ring = (r - 44.0).abs() < 9.0;
+                let bar = dy.abs() < 8.0 && dx.abs() < 40.0;
+                if ring || bar {
+                    v[(y * n + x) as usize] = 255;
+                }
+            }
+        }
+        v
+    }
+
+    fn params<'a>(m: Material, t: f32, tilt: (f32, f32), ic: &'a [u8]) -> Params<'a> {
+        Params { material: m, size_px: PX, time_s: t, seed: 0.0, tilt, icon_mask: Some(ic), detail_mask: None }
+    }
+
+    fn render(gpu: &mut Gpu, items: &[Params]) -> Vec<Vec<u32>> {
+        let mut out = Vec::new();
+        match gpu.render(items, &mut out) {
+            Ok(()) => out,
+            Err(Fail::Lost) => panic!("render: device lost"),
+            Err(Fail::Other(e)) => panic!("render: {e}"),
+        }
+    }
+
+    /// (covered fraction, luminance std-dev of covered pixels, mean premultiplied rgb of covered pixels)
+    fn stats(px: &[u32]) -> (f32, f32, [f32; 3]) {
+        let (mut n, mut s, mut s2, mut rgb) = (0f32, 0f32, 0f32, [0f32; 3]);
+        for &p in px {
+            let a = (p >> 24) & 0xff;
+            if a < 128 {
+                continue;
+            }
+            let (r, g, b) = (((p >> 16) & 0xff) as f32, ((p >> 8) & 0xff) as f32, (p & 0xff) as f32);
+            let l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            n += 1.0;
+            s += l;
+            s2 += l * l;
+            rgb[0] += r;
+            rgb[1] += g;
+            rgb[2] += b;
+        }
+        let cov = n / px.len() as f32;
+        if n == 0.0 {
+            return (0.0, 0.0, rgb);
+        }
+        let mean = s / n;
+        (cov, (s2 / n - mean * mean).max(0.0).sqrt(), [rgb[0] / n, rgb[1] / n, rgb[2] / n])
+    }
+
+    #[test]
+    fn shaders_compile_and_every_material_renders() {
+        let mut gpu = match Gpu::new() {
+            Ok(g) => g,
+            Err(e) => panic!("GPU path unavailable, badges would fall back to flat medals: {e}"),
+        };
+        println!("device: {}", if gpu.hardware { "hardware" } else { "WARP" });
+        let ic = icon();
+        let still: Vec<Params> = ALL.iter().map(|&m| params(m, still_time(m), (0.0, 0.0), &ic)).collect();
+        let live: Vec<Params> = ALL.iter().map(|&m| params(m, 2.5, (0.35, -0.25), &ic)).collect();
+        let a = render(&mut gpu, &still);
+        let b = render(&mut gpu, &live);
+        assert_eq!(a.len(), ALL.len());
+
+        let mut means = Vec::new();
+        for (i, m) in ALL.iter().enumerate() {
+            assert_eq!(a[i].len(), (PX * PX) as usize);
+            let (cov, sd, mean) = stats(&a[i]);
+            println!("{m:?}: covered {:.0}%, luminance sd {sd:.1}, mean rgb {:.0} {:.0} {:.0}", cov * 100.0, mean[0], mean[1], mean[2]);
+            // a round badge in a square covers pi/4 = 79% at most; anything far off is a broken shader
+            assert!(cov > 0.25 && cov < 0.95, "{m:?}: {:.0}% of the tile covered", cov * 100.0);
+            // a flat disc has no shading; the real medal / stone / film varies strongly
+            assert!(sd > 6.0, "{m:?}: looks flat (luminance sd {sd:.1})");
+            assert!(a[i].iter().all(|&p| {
+                let al = p >> 24;
+                ((p >> 16) & 0xff) <= al && ((p >> 8) & 0xff) <= al && (p & 0xff) <= al
+            }), "{m:?}: not premultiplied (colour above alpha)");
+            assert_ne!(a[i], b[i], "{m:?}: time and tilt change nothing");
+            means.push(mean);
+        }
+        // the metals must actually differ in colour: gold is warmer (r - b) than silver
+        let warm = |c: [f32; 3]| c[0] - c[2];
+        assert!(warm(means[2]) > warm(means[1]) + 10.0, "gold and silver look alike: {:?} vs {:?}", means[2], means[1]);
+
+        // contact sheet over the app's dark background
+        let (w, h) = (PX * ALL.len() as u32, PX * 2);
+        let mut img = vec![0u8; (w * h * 3) as usize];
+        for (row, set) in [&a, &b].iter().enumerate() {
+            for (i, tile) in set.iter().enumerate() {
+                for y in 0..PX {
+                    for x in 0..PX {
+                        let p = tile[(y * PX + x) as usize];
+                        let al = (p >> 24) as f32 / 255.0;
+                        let bg = 30.0 * (1.0 - al);
+                        let o = (((row as u32 * PX + y) * w + i as u32 * PX + x) * 3) as usize;
+                        img[o] = (((p >> 16) & 0xff) as f32 + bg).min(255.0) as u8;
+                        img[o + 1] = (((p >> 8) & 0xff) as f32 + bg).min(255.0) as u8;
+                        img[o + 2] = ((p & 0xff) as f32 + bg).min(255.0) as u8;
+                    }
+                }
+            }
+        }
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("medal-shots");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("medals.png"), png_rgb(w, h, &img)).unwrap();
+    }
+
+    /// Minimal PNG writer (8-bit RGB, stored deflate blocks), test use only.
+    fn png_rgb(w: u32, h: u32, rgb: &[u8]) -> Vec<u8> {
+        fn crc(data: &[u8]) -> u32 {
+            let mut c = 0xffff_ffffu32;
+            for &b in data {
+                c ^= b as u32;
+                for _ in 0..8 {
+                    c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
+                }
+            }
+            !c
+        }
+        fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+            out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            let mut body = kind.to_vec();
+            body.extend_from_slice(data);
+            out.extend_from_slice(&body);
+            out.extend_from_slice(&crc(&body).to_be_bytes());
+        }
+        let mut raw = Vec::with_capacity(((w * 3 + 1) * h) as usize);
+        for y in 0..h as usize {
+            raw.push(0);
+            raw.extend_from_slice(&rgb[y * w as usize * 3..(y + 1) * w as usize * 3]);
+        }
+        let mut z = vec![0x78, 0x01];
+        let blocks: Vec<&[u8]> = raw.chunks(65535).collect();
+        for (i, blk) in blocks.iter().enumerate() {
+            z.push((i + 1 == blocks.len()) as u8);
+            let n = blk.len() as u16;
+            z.extend_from_slice(&n.to_le_bytes());
+            z.extend_from_slice(&(!n).to_le_bytes());
+            z.extend_from_slice(blk);
+        }
+        let (mut a, mut b) = (1u32, 0u32);
+        for &x in &raw {
+            a = (a + x as u32) % 65521;
+            b = (b + a) % 65521;
+        }
+        z.extend_from_slice(&((b << 16) | a).to_be_bytes());
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&w.to_be_bytes());
+        ihdr.extend_from_slice(&h.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        chunk(&mut out, b"IHDR", &ihdr);
+        chunk(&mut out, b"IDAT", &z);
+        chunk(&mut out, b"IEND", &[]);
+        out
+    }
+}
