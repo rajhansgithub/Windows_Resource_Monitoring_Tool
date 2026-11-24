@@ -2403,7 +2403,7 @@ impl Ui {
         }
         if big {
             y += sc(6);
-            text_c(cv, f.caps, "RESOURCE MONITOR BY RAJHANS", ccx, y + th(f.caps) / 2, dim);
+            text_c(cv, f.caps, "RESOURCE MONITOR BY EMULSION LABS", ccx, y + th(f.caps) / 2, dim);
         }
     }
 }
