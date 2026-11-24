@@ -402,7 +402,6 @@ pub fn warm() {
         if have {
             continue;
         }
-        let t0 = std::time::Instant::now();
         let code = unsafe { cached_compile(f, &shaders::coin_src(stone, layer), b"main\0", b"ps_5_0\0") };
         match code {
             Ok(code) => {
@@ -415,9 +414,6 @@ pub fn warm() {
                 crate::util::diag(&format!("achievements gpu: coin shader {stone}/{layer}: {e}"));
                 return;
             }
-        }
-        if t0.elapsed().as_millis() > 200 {
-            crate::util::diag(&format!("achievements gpu: coin shader {stone}/{layer} compiled in {} ms", t0.elapsed().as_millis()));
         }
     }
 }
