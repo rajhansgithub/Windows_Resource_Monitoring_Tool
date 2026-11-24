@@ -342,6 +342,22 @@ canvas { display: block; }
 }
 .tuner { display: grid; grid-template-columns: minmax(0, 250px) minmax(0, 1fr); gap: 18px; }
 .tuner > * { min-width: 0; }
+/* v6 coin designs */
+.cn { display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); gap: 24px; align-items: start; }
+.cn-stage { background: radial-gradient(circle at 50% 40%, #1c2028, #07080a 70%); border: 1px solid var(--line); border-radius: 16px; padding: 12px; display: grid; justify-items: center; gap: 8px; position: sticky; top: calc(var(--vbar-h, 60px) + 8px); }
+.cn-stage canvas { width: 100%; max-width: 396px; aspect-ratio: 1; display: block; touch-action: none; cursor: grab; }
+.cn-stage canvas:active { cursor: grabbing; }
+.cn-stage .cap { font-family: var(--mono); font-size: 11px; color: var(--dim); text-align: center; }
+.cn-info h3 { font-family: var(--display); font-size: 22px; margin: 0 0 4px; }
+.cn-info p { color: var(--dim); margin: 0 0 14px; max-width: 60ch; }
+.cn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.cn-card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 10px 10px 12px; cursor: pointer; text-align: center; color: var(--fg); font: inherit; display: grid; gap: 6px; justify-items: center; }
+.cn-card:hover { border-color: #3a4250; }
+.cn-card[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.cn-card canvas { width: 100%; max-width: 160px; aspect-ratio: 1; display: block; }
+.cn-card b { font-family: var(--display); font-size: 15px; }
+.cn-card span { font-size: 11.5px; color: var(--dim); font-family: var(--mono); }
+@media (max-width: 760px) { .cn { grid-template-columns: minmax(0, 1fr); } .cn-stage { position: static; } }
 .tn-prev { background: #000; border-radius: 12px; display: grid; justify-items: center; gap: 12px; padding: 16px 8px; align-self: start; position: sticky; top: calc(var(--vbar-h, 60px) + 8px); }
 .tn-prev .c3 { width: 210px; height: 210px; display: block; touch-action: none; cursor: grab; }
 .tn-prev .sm { display: flex; gap: 12px; align-items: center; }
@@ -2343,9 +2359,284 @@ void main(){
   gl_FragColor=vec4(col,1.);
 }`;
 
+  // ---- coin designs (v6): real relief, not a flat disc. One SDF per design (front), a shared reverse, and Diamond / Ruby
+  // set into the Dial design like a lens element in its barrel (closed-back cup behind the stone).
+  // uDesign: 0 Dial, 1 Heatsink, 2 Guilloche, 3 Silicon, 4 Turbine, 5 Rack. uStone: 0 none, 1 diamond, 2 ruby.
+  const COIN = COMMON + `
+uniform float uDesign, uStone; uniform vec3 uMetal, uMetal2;
+uniform sampler2D uIcon, uRing, uBack; uniform float uIconOn, uRingOn, uBackOn;
+float envS(vec3 d, float t){
+  d.xy=rot(.12*sin(t*.21))*d.xy;
+  float s=.09+.12*smoothstep(-.2,.9,d.y);
+  vec3 a=normalize(vec3(-.42,.46,.78));
+  vec3 ux=normalize(cross(vec3(0.,0.,1.),a)), uy=cross(a,ux);
+  float ca=dot(d,a);
+  if(ca>0.){ vec2 q=vec2(dot(d,ux),dot(d,uy))/ca; s+=2.6*smoothstep(.08,-.08,max(abs(q.x)-.55,abs(q.y)-.40))*(.8+.2*smoothstep(-.3,.3,q.y)); }
+  vec3 b=normalize(vec3(.82,0.,.57)); float cb=dot(d,b);
+  if(cb>0.){ vec3 bx=normalize(cross(vec3(0.,1.,0.),b)); vec2 q=vec2(dot(d,bx),d.y)/cb; s+=1.8*smoothstep(.05,-.05,max(abs(q.x)-.08,abs(q.y)-1.)); }
+  s+=.32*smoothstep(-.05,-.7,d.y)*smoothstep(-.4,.2,d.z);
+  s+=.25*exp(-pow((d.y+.1)/.03,2.))*smoothstep(-.5,.2,d.z);
+  s+=9.*pow(max(dot(d,normalize(vec3(.3,.62,.72))),0.),700.);
+  return s;
+}
+float envG(vec3 d){
+  d.xy=rot(uTime*.05)*d.xy;
+  float az=atan(d.y,d.x);
+  float s=.03+.45*smoothstep(-.1,.9,d.z);
+  s+=1.1*pow(max(cos(az*3.)*.5+.5,0.),5.)*smoothstep(-.2,.5,d.z)*smoothstep(.98,.75,d.z);
+  s+=pow(max(dot(d,normalize(vec3(.55,.55,.63))),0.),140.)*8.;
+  s+=pow(max(dot(d,normalize(vec3(-.72,.25,.64))),0.),100.)*5.;
+  s+=pow(max(dot(d,normalize(vec3(.05,-.78,.62))),0.),180.)*7.;
+  s+=1.5*smoothstep(.72,.9,d.z)*smoothstep(.99,.95,d.z)*(.75+.25*cos(az*8.));
+  s*=1.-.9*smoothstep(.975,.995,d.z);
+  return s;
+}
+vec3 aces(vec3 x){ return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),0.,1.); }
+float tex(sampler2D s, vec2 p, float k){ vec2 iu=p/k*.5+.5; vec2 c=clamp(iu,.001,.999); float m=step(0.,iu.x)*step(iu.x,1.)*step(0.,iu.y)*step(iu.y,1.); return texture2D(s,vec2(c.x,1.-c.y)).a*m; }
+${geo()}
+#define P(N,C) { vec3 nn=N; float dn=dot(nn,d); float tt=(C-dot(nn,o))/dn; if(dn<0.){ if(tt>tIn){ tIn=tt; nIn=nn; } } else { if(tt<tOut){ tOut=tt; nOut=nn; } } }
+void trav(vec3 o, vec3 d, out float tIn, out vec3 nIn, out float tOut, out vec3 nOut){
+  tIn=-1e9; tOut=1e9; nIn=vec3(0.,0.,1.); nOut=vec3(0.,0.,1.);
+  P(vec3(0.,0.,1.),TABC)
+  vec2 cs=vec2(1.,0.);
+  for(int k=0;k<16;k++){
+    vec2 ch=vec2(cs.x*HALF.x-cs.y*HALF.y, cs.y*HALF.x+cs.x*HALF.y);
+    P(vec3(cs,0.),1.)
+    P(vec3(ch*UGI.x,UGI.y),UGIC)
+    P(vec3(ch*LGI.x,LGI.y),LGIC)
+    if(k==2*(k/2)){ P(vec3(cs*BEZ.x,BEZ.y),BEZC) P(vec3(cs*PAV.x,PAV.y),PAVC) }
+    else { P(vec3(cs*STA.x,STA.y),STAC) }
+    cs=vec2(cs.x*ROT8.x-cs.y*ROT8.y, cs.y*ROT8.x+cs.x*ROT8.y);
+  }
+}
+float fres(float c, float ior){ float F0=pow((ior-1.)/(ior+1.),2.); return F0+(1.-F0)*pow(1.-clamp(c,0.,1.),5.); }
+
+// ---- shapes
+float box2(vec2 p, vec2 h, float rr){ vec2 d=abs(p)-h+rr; return length(max(d,0.))+min(max(d.x,d.y),0.)-rr; }
+float box3(vec3 p, vec3 h, float rr){ vec3 q=abs(p)-h+rr; return length(max(q,0.))+min(max(q.x,max(q.y,q.z)),0.)-rr; }
+float ringS(vec3 p, float R0, float R1, float z0, float z1, float rr){ return box2(vec2(length(p.xy),p.z)-vec2((R0+R1)*.5,(z0+z1)*.5), vec2((R1-R0)*.5,(z1-z0)*.5), rr); }
+float disc(vec3 p, float R, float z0, float z1, float rr){ return box2(vec2(length(p.xy),p.z-(z0+z1)*.5), vec2(R,(z1-z0)*.5), rr); }
+vec2 prep(vec2 q, float n){ float an=TAU/n; float a=mod(atan(q.y,q.x)+an*.5,an)-an*.5; return length(q)*vec2(cos(a),sin(a)); }
+vec2 U(vec2 a, vec2 b){ return b.x<a.x?b:a; }
+float Hb(float r){ return .12+.45*(1.-r*r/.41); }   // the closed cup behind a set stone (a lens's rear dome)
+const float SS=.57;                                  // set stone: girdle radius
+// ids: 1 polished, 2 spun (turned), 3 black anodised, 4 sandblasted, 6 second metal polished, 7 silicon die, 8 guilloche, 9 screw
+vec2 mapF(vec3 p){
+  float r=length(p.xy);
+  vec2 d=vec2(1e3,0.);
+  if(uDesign<.5){                                    // Dial: grip ring with beads, a sloped bezel with the scale, black barrel
+    d=U(d,vec2(ringS(p,.9,1.,-.01,.19,.025),1.));
+    vec2 bq=prep(p.xy,72.); d=U(d,vec2(length(vec3(bq.x-.948,bq.y,p.z-.186))-.016,1.));
+    d=U(d,vec2(max(ringS(p,.70,.905,-.01,.4,.0),(p.z-(.15+(r-.70)*.13))*.99),2.));
+    d=U(d,vec2(ringS(p,.60,.705,-.01,.08,.012),3.));
+    if(uStone<.5) d=U(d,vec2(max(r-.62,max(-.01-p.z,p.z-(.05+.04*(1.-r*r/.384))))*.95,2.));
+  } else if(uDesign<1.5){                            // Heatsink: copper slug, 40 aluminium fins, rim lip
+    d=U(d,vec2(disc(p,.99,-.01,.045,.02),4.));
+    d=U(d,vec2(ringS(p,.945,1.,-.01,.11,.02),1.));
+    vec2 fq=prep(p.xy,40.);
+    float top=.155-.06*clamp((r-.46)/.48,0.,1.);
+    d=U(d,vec2(max(box2(fq-vec2(.70,0.),vec2(.245,.011),.005),max(p.z-top,-.01-p.z))*.9,1.));
+    d=U(d,vec2(disc(p,.40,-.01,.15,.035),6.));
+  } else if(uDesign<2.5){                            // Guilloche: stepped rim, engine-turned field, beaded cartouche
+    d=U(d,vec2(ringS(p,.92,1.,-.01,.13,.025),1.));
+    d=U(d,vec2(ringS(p,.85,.925,-.01,.11,.012),1.));
+    d=U(d,vec2(disc(p,.855,-.01,.075,.005),8.));
+    d=U(d,vec2(disc(p,.39,-.01,.11,.035),1.));
+    vec2 bq=prep(p.xy,48.); d=U(d,vec2(length(vec3(bq.x-.435,bq.y,p.z-.075))-.014,1.));
+  } else if(uDesign<3.5){                            // Silicon: a CPU die with gold pins on a blasted field, traces to the rim
+    d=U(d,vec2(ringS(p,.9,1.,-.01,.12,.025),1.));
+    d=U(d,vec2(disc(p,.905,-.01,.07,.005),4.));
+    d=U(d,vec2(box3(p-vec3(0.,0.,.06),vec3(.27,.27,.07),.025),7.));
+    vec2 a2=abs(p.xy); if(a2.y>a2.x) a2=a2.yx;
+    float yy=a2.y-.07*clamp(floor(a2.y/.07+.5),0.,3.);
+    d=U(d,vec2(box3(vec3(a2.x-.31,yy,p.z-.075),vec3(.04,.014,.012),.006),6.));
+  } else if(uDesign<4.5){                            // Turbine: nine curved blades turning slowly in a black well
+    d=U(d,vec2(ringS(p,.84,1.,-.01,.13,.025),1.));
+    d=U(d,vec2(disc(p,.845,-.01,.02,.005),3.));
+    float an=TAU/9., a=mod(atan(p.y,p.x)-1.25*r+uTime*.35+an*.5,an)-an*.5;
+    float bl=max(max(abs(r*sin(a))-.02,max(r-.815,.2-r)),max(p.z-(.11-.045*(r-.2)),-.01-p.z));
+    d=U(d,vec2(bl*.55,1.));
+    d=U(d,vec2(disc(p,.23,-.01,.155,.045),2.));
+  } else {                                           // Rack: terraces like a 1U faceplate, four rack screws
+    d=U(d,vec2(ringS(p,.88,1.,-.01,.15,.02),1.));
+    d=U(d,vec2(ringS(p,.755,.885,-.01,.12,.012),2.));
+    d=U(d,vec2(ringS(p,.635,.76,-.01,.09,.012),1.));
+    d=U(d,vec2(disc(p,.64,-.01,.065,.01),2.));
+    vec2 sq=prep(rot(PI/4.)*p.xy,4.);
+    d=U(d,vec2((length(vec3(sq.x-.82,sq.y,(p.z-.12)*1.7))-.05)/1.7,9.));
+  }
+  return d;
+}
+vec2 mapB(vec3 p){                                   // the reverse: a rim and a turned field with the name
+  float r=length(p.xy), dep=uDesign<.5?.19:.12;
+  vec2 d=vec2(ringS(p,.9,1.,-dep,.01,.025),1.);
+  d=U(d,vec2(disc(p,.905,-dep+.05,.01,.01),2.));
+  if(uStone>.5) d=U(d,vec2(max(r-.64,max(-p.z-Hb(r),p.z-.01))/1.7,1.));
+  return d;
+}
+vec2 map(vec3 p){
+  vec2 d=U(mapF(p),mapB(p));
+  if(uStone>.5){ float r=length(p.xy); float h=max(r-.60,(-Hb(r)+.03)-p.z)/1.7; if(-h>d.x) d=vec2(-h,6.); }
+  return d;
+}
+vec3 nrm(vec3 p){ vec2 e=vec2(.0012,0.); return normalize(vec3(map(p+e.xyy).x-map(p-e.xyy).x,map(p+e.yxy).x-map(p-e.yxy).x,map(p+e.yyx).x-map(p-e.yyx).x)); }
+
+// the set stone, shaded like the full-view gem; light that leaves through the pavilion meets the polished cup
+vec3 stone(vec3 o, vec3 d, float tIn, vec3 nIn, vec3 M, out float cover, float pxw, float tOut){
+  bool ruby=uStone>1.5;
+  float ior=ruby?1.77:2.417;
+  vec3 iorC=ruby?vec3(1.762,1.77,1.778):vec3(2.37,2.417,2.47);
+  vec3 absorb=ruby?vec3(.12,3.4,2.7):vec3(.004,.006,.01);
+  cover=clamp((tOut-tIn)/(pxw*2.5),0.,1.);
+  vec3 p=o+d*tIn;
+  float F=fres(-dot(d,nIn),ior);
+  vec3 col=vec3(F*envG(uR*reflect(d,nIn)))*.8;
+  vec3 di=refract(d,nIn,1./ior);
+  vec3 thr=vec3(1.-F);
+  for(int b=0;b<6;b++){
+    float a1,a2; vec3 n1,n2;
+    trav(p+di*1e-4,di,a1,n1,a2,n2);
+    float L=max(a2,0.);
+    thr*=exp(-absorb*L);
+    p=p+di*L;
+    float c=dot(di,n2);
+    vec3 outM=refract(di,-n2,ior);
+    if(dot(outM,outM)<1e-4){ di=reflect(di,n2); continue; }
+    float Fo=fres(c,ior);
+    vec3 e;
+    if(n2.z<-.2){
+      // into the cup: polished metal sends it back up, a little warmer/cooler with the metal
+      vec3 up=normalize(vec3(outM.xy,abs(outM.z)));
+      e=M*(.18+.8*envS(uR*up,uTime))*vec3(.95);
+    } else {
+      vec3 oR=refract(di,-n2,iorC.r), oG=refract(di,-n2,iorC.g), oB=refract(di,-n2,iorC.b);
+      e.r=dot(oR,oR)>1e-4?envG(uR*oR):0.; e.g=envG(uR*oG); e.b=dot(oB,oB)>1e-4?envG(uR*oB):0.;
+    }
+    col+=thr*(1.-Fo)*e;
+    thr*=Fo;
+    di=reflect(di,n2);
+  }
+  col+=thr*.04;
+  if(ruby){
+    col*=vec3(1.,.55,.6);
+    col+=vec3(.16,.005,.025)+vec3(.5,.02,.06)*pow(.5+.5*sin(uTime*.8+dot(nIn,vec3(3.1,1.7,2.3))*4.),3.)*.35;
+    col=pow(col,vec3(1.15));
+  } else col=pow(col*.8,vec3(1.7))*1.25+.01;
+  return 1.-exp(-max(col,0.)*1.6);
+}
+
+void main(){
+  vec3 ow, dw; float pxw; cam(ow,dw,pxw,1.24);
+  vec3 ro=uRT*ow, rd=uRT*dw;
+  float b=dot(ro,rd), c=dot(ro,ro)-1.44, h=b*b-c;
+  if(h<0.){ gl_FragColor=vec4(0.); return; }
+  float t=max(-b-sqrt(h),0.), tmax=-b+sqrt(h), md=1e3; bool hit=false;
+  for(int i=0;i<140;i++){ float dd=map(ro+rd*t).x; md=min(md,dd); if(dd<.0005){ hit=true; break; } t+=dd*.8; if(t>tmax) break; }
+  vec3 M=uMetal;
+  // the set stone in front of the metal?
+  float scov=0.; vec3 sc=vec3(0.);
+  if(uStone>.5){
+    vec3 og=(ro-vec3(0.,0.,.15-TABC*SS))/SS;
+    float gIn,gOut; vec3 gnIn,gnOut;
+    trav(og,rd,gIn,gnIn,gOut,gnOut);
+    if(gIn<gOut && gOut>0. && (!hit || gIn*SS<t)){
+      sc=stone(og,rd,gIn,gnIn,M,scov,pxw/SS,gOut);
+      if(scov>.999 || !hit){ gl_FragColor=vec4(sc*scov,scov); return; }
+    }
+  }
+  if(!hit){ gl_FragColor=vec4(0.); return; }
+  vec3 p=ro+rd*t;
+  vec2 mm=map(p); float id=mm.y;
+  vec3 n=nrm(p);
+  float tt=uTime;
+  bool fr=p.z>0.;
+  vec2 q=fr?p.xy:vec2(-p.x,p.y);
+  float r=length(q); vec2 rq=r>1e-4?q/r:vec2(1.,0.);
+  float aa=pxw*1.2;
+  if(id>5.5&&id<6.5) M=uMetal2;
+  vec3 nl=n;
+  float matte=0., paint=0.;
+  bool face=abs(n.z)>.6;
+  // the outer wall: fine reeding
+  if(length(p.xy)>.975 && abs(n.z)<.6){ float ang=atan(p.y,p.x); vec3 tg=vec3(-sin(ang),cos(ang),0.); nl=normalize(nl+tg*sin(ang*220.)*.22); }
+  // engine turning: a waved rosette cut into the field
+  if(id>7.5&&id<8.5){
+    float ang=atan(q.y,q.x);
+    float g=r*150.+2.2*sin(ang*16.)+1.2*sin(ang*5.-r*9.);
+    vec2 gr=rq*150.*cos(g);
+    nl=normalize(nl+vec3(fr?gr:vec2(-gr.x,gr.y),0.)*.0016*smoothstep(.4,.46,r));
+  }
+  // the icon, engraved (matte floor, polished walls) where each design keeps it
+  float kI=uDesign<.5?.42:uDesign<1.5?.27:uDesign<2.5?.27:uDesign<3.5?.2:uDesign<4.5?.15:.4;
+  bool onDie=id>6.5&&id<7.5&&n.z>.7;
+  if(fr && face && uIconOn>0. && r<kI*1.1 && !(uStone>.5 && uDesign<.5)){
+    float dd=1.4*pxw;
+    float m=tex(uIcon,q,kI);
+    float gx=tex(uIcon,q+vec2(dd,0.),kI)-tex(uIcon,q-vec2(dd,0.),kI), gy=tex(uIcon,q+vec2(0.,dd),kI)-tex(uIcon,q-vec2(0.,dd),kI);
+    float w=clamp(length(vec2(gx,gy))*1.6,0.,1.);
+    if(onDie){ paint=-smoothstep(.2,.8,m); }                     // the mark on the die is bright metal (etched)
+    else { nl=normalize(nl+vec3(gx,gy,0.)*2.2*w); matte=smoothstep(.15,.85,m)*(1.-w); }
+  }
+  // the name on the reverse
+  if(!fr && face && uBackOn>0. && r<.9){
+    float dd=1.4*pxw;
+    float m=tex(uBack,q,.92);
+    float gx=tex(uBack,q+vec2(dd,0.),.92)-tex(uBack,q-vec2(dd,0.),.92), gy=tex(uBack,q+vec2(0.,dd),.92)-tex(uBack,q-vec2(0.,dd),.92);
+    float w=clamp(length(vec2(gx,gy))*1.6,0.,1.);
+    nl=normalize(nl+vec3(-gx,gy,0.)*2.2*w); matte=max(matte,smoothstep(.15,.85,m)*(1.-w));
+  }
+  // paint-filled engraving on the front: the ring text, the dial's scale, the die's traces
+  if(fr && n.z>.3){
+    if(uRingOn>0.) paint=max(paint,smoothstep(.1,.7,tex(uRing,q,1.)));
+    if(uDesign<.5 && id>1.5&&id<2.5 && r>.71){
+      float u=atan(q.y,q.x)/TAU*60., fi=floor(u+.5), du=abs(u-fi)*TAU/60.*r; bool maj=mod(fi+60.,5.)<.5;
+      float w=maj?.0065:.0035, r0=maj?.80:.84;
+      paint=max(paint,smoothstep(w+aa,w,du)*smoothstep(r0-aa,r0,r)*smoothstep(.888,.884,r)*step(-.35,q.y/max(r,1e-3)));
+    }
+  }
+  float trace=0.;
+  if(uDesign>2.5&&uDesign<3.5&&fr&&id>3.5&&id<4.5){
+    float an=TAU/24., a=atan(q.y,q.x), k=floor((a+an*.5)/an), la=a-k*an;
+    float jog=smoothstep(.56,.66,r)*an*.35*(mod(k,2.)<.5?1.:-1.);
+    float dl=abs(r*sin(la-jog))-.006;
+    float tr=smoothstep(aa,-aa,dl)*step(.36,r)*step(r,.84);
+    float pad=smoothstep(.022+aa,.022,length(q-.84*vec2(cos(k*an+jog),sin(k*an+jog))));
+    trace=max(tr,pad);
+  }
+  vec3 nw=uR*nl;
+  float cv=clamp(-dot(nw,dw),0.,1.);
+  vec3 R=reflect(dw,nw);
+  vec3 F=M+(1.-M)*pow(1.-cv,5.);
+  float fz=pow(1.-cv,5.);
+  vec3 col;
+  if(id>1.5&&id<2.5){                                // turned: light smeared round the centre
+    vec3 rw=uR*(fr?vec3(rq,0.):vec3(-rq.x,rq.y,0.));
+    float en=0.; for(int j=0;j<4;j++){ float o=(float(j)-1.5)/1.5; en+=envS(reflect(dw,normalize(nw+rw*o*.28)),tt); }
+    col=F*en*.25*.92;
+  } else if(id>2.5&&id<3.5){                         // black anodised
+    col=vec3(.012)+(.04+.96*fz)*envS(R,tt)*.5;
+  } else if(id>3.5&&id<4.5){                         // sandblasted
+    col=M*(.07+.12*envS(nw,tt))*(.85+.3*hash(floor(gl_FragCoord.xy)))+F*envS(R,tt)*.05;
+  } else if(id>6.5&&id<7.5&&n.z>.7){                 // the die: dark silicon, a glassy sheen
+    col=vec3(.02,.024,.034)+(.05+.95*fz)*envS(R,tt)*.45;
+  } else col=F*envS(R,tt);                           // polished
+  if(id>8.5){                                        // screw: a cross slot
+    vec2 sq=prep(rot(PI/4.)*p.xy,4.)-vec2(.82,0.);
+    vec2 sl=rot(.5)*sq;
+    float slot=max(smoothstep(.007+aa,.007,abs(sl.x)),smoothstep(.007+aa,.007,abs(sl.y)))*step(length(sq),.036);
+    col*=1.-.9*slot;
+  }
+  if(trace>0.){ vec3 G=uMetal2+(1.-uMetal2)*fz; col=mix(col,G*envS(R,tt),trace); }
+  if(matte>0.){ float grain=.85+.3*hash(floor(gl_FragCoord.xy)); col=mix(col,M*(.10+.10*envS(vec3(-.35,.4,.85),tt))*grain,matte); }
+  if(paint>0.) col=mix(col,vec3(.018),paint*.94);
+  if(paint<0.){ vec3 G=M+(1.-M)*fz; col=mix(col,G*envS(R,tt),-paint); }
+  col=aces(col*1.1);
+  gl_FragColor=vec4(mix(col,sc,scov),1.);
+}`;
+
   const LOOK3 = { lqRefr: 'uLqRefr', lqRefl: 'uLqRefl', lqFilm: 'uLqFilm', lqTint: 'uLqTint', lqWobble: 'uLqWob', lqDrops: 'uLqDrops', lqDropSize: 'uLqDropS', lqMove: 'uLqMove', dotRefr: 'uDotRefr', dotRing: 'uDotRing', refrPeriod: 'uRefrT', edgeWidth: 'uEdgeW', edgeVary: 'uEdgeVary', edgeColour: 'uEdgeCol', rimLine: 'uRim', saturation: 'uSat', filmInside: 'uFilmIn', filmThick: 'uThick', flowSpeed: 'uFlow', reflection: 'uRefl', glow: 'uGlow', breath: 'uBreath', motionAmt: 'uMotAmt', motionTime: 'uMotT' };
-  let gen = 0, cv = null, gl = null, glc = null, ctx2 = null, progs = {}, cur = null, raf = 0, t0 = 0, kind = 'dia', R = [1, 0, 0, 0, 1, 0, 0, 0, 1], dirty = true, still = false, wear = [0, 0], opt = {}, texI = null, texB = null;
-  const SRC = () => ({ bubble: BUBBLE, medal: MEDAL, gem: GEM });
+  let gen = 0, cv = null, gl = null, glc = null, ctx2 = null, progs = {}, cur = null, raf = 0, t0 = 0, kind = 'dia', R = [1, 0, 0, 0, 1, 0, 0, 0, 1], dirty = true, still = false, wear = [0, 0], opt = {}, texI = null, texB = null, texR = null;
+  const SRC = () => ({ bubble: BUBBLE, medal: MEDAL, gem: GEM, coin: COIN });
   /** The one WebGL context of the 3D view, made once and kept (making a context and compiling these shaders took a
       second or more: that was the freeze on opening the full view and on every arrow key). */
   function ctx() {
@@ -2379,7 +2670,7 @@ void main(){
       console.info('[RM] 3d shader:', gl.getShaderInfoLog(x.f) || gl.getProgramInfoLog(x.p)); x.ok = false; return null;
     }
     x.ok = true;
-    const U = {}; for (const k of ['uRes', 'uTime', 'uR', 'uRT', 'uKind', 'uWear', 'uAge', 'uMetal', 'uIcon', 'uIconOn', 'uBack', 'uBackOn']) U[k] = gl.getUniformLocation(x.p, k);
+    const U = {}; for (const k of ['uRes', 'uTime', 'uR', 'uRT', 'uKind', 'uWear', 'uAge', 'uMetal', 'uIcon', 'uIconOn', 'uBack', 'uBackOn', 'uDesign', 'uStone', 'uMetal2', 'uRing', 'uRingOn']) U[k] = gl.getUniformLocation(x.p, k);
     const L = {}; for (const k in LOOK3) L[k] = gl.getUniformLocation(x.p, LOOK3[k]);
     x.U = U; x.L = L;
     return x;
@@ -2404,7 +2695,7 @@ void main(){
     raf = 0;
     if (!gl || !cur) return;
     if (!document.hidden && (dirty || !still)) {
-      const t = still ? 9 : (now - t0) / (kind === 'bubble' ? 1000 : 3000);   // stones move at a third of real time
+      const t = still ? 9 : (now - t0) / (kind === 'bubble' ? 1000 : 3000) + (kind === 'coin' ? 9 : 0);   // stones move at a third of real time
       if (glc.width !== cv.width || glc.height !== cv.height) { glc.width = cv.width; glc.height = cv.height; }
       gl.viewport(0, 0, cv.width, cv.height);
       gl.useProgram(cur.p);
@@ -2416,6 +2707,7 @@ void main(){
       for (const k in cur.L) if (cur.L[k]) gl.uniform1f(cur.L[k], +(look[k] != null ? look[k] : 0));
       if (cur.U.uWear) gl.uniform3f(cur.U.uWear, wear[0], wear[1], wear[2] || 0);
       if (cur.U.uAge && root.YTPMAgeVec) gl.uniform4fv(cur.U.uAge, root.YTPMAgeVec());
+      if (kind === 'coin') coinUniforms(cur, opt, { I: texI, B: texB, R: texR });
       if (kind === 'medal') {
         gl.uniform3fv(cur.U.uMetal, opt.metal || [1, .77, .33]);
         gl.uniform1i(cur.U.uIcon, 0); gl.uniform1i(cur.U.uBack, 1);
@@ -2468,32 +2760,101 @@ void main(){
     };
     img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="512" height="512" fill="none" stroke="#fff" color="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${src}</svg>`);
   }
+  /** Coin textures: icon (front, engraved), name (reverse), ring text (front, paint-filled). Resolves when the icon is drawn. */
+  function coinTex(o) {
+    const g = gl;
+    const mk = () => { const c = document.createElement('canvas'); c.width = c.height = 1024; return c; };
+    const font = '"Chakra Petch", "Segoe UI", system-ui, sans-serif';
+    const arc = (x, text, rad, px, bottom) => {   // text along a circle (radius in coin units: 1 = rim), upright to the centre
+      x.font = `600 ${px}px ${font}`;
+      const R0 = rad * 512, tw = x.measureText(text).width, span = tw / R0;
+      let a = bottom ? Math.PI / 2 + span / 2 : -Math.PI / 2 - span / 2;
+      for (const ch of text) { const w = x.measureText(ch).width, mid = a + (bottom ? -1 : 1) * w / R0 / 2; x.save(); x.translate(512 + Math.cos(mid) * R0, 512 + Math.sin(mid) * R0); x.rotate(bottom ? mid - Math.PI / 2 : mid + Math.PI / 2); x.fillText(ch, 0, 0); x.restore(); a += (bottom ? -1 : 1) * w / R0; }
+    };
+    const out = { I: null, B: null, R: null };
+    if (!g) return Promise.resolve(out);
+    const b = mk(), x = b.getContext('2d');
+    x.fillStyle = '#fff'; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.font = `700 ${o.title && o.title.length > 14 ? 80 : 100}px ${font}`; x.fillText(o.title || '', 512, 472);
+    x.font = `600 52px ${font}`; x.fillText((o.sub || '').toUpperCase(), 512, 592);
+    arc(x, 'RESOURCE MONITOR  ·  UPTIME MEDAL', .82, 46, false);
+    arc(x, 'EMULSION LABS', .82, 40, true);
+    x.lineWidth = 6; x.strokeStyle = '#fff'; x.beginPath(); x.arc(512, 512, 330, 0, Math.PI * 2); x.stroke();
+    out.B = upload(b);
+    if (o.ring && o.ring.length) {
+      const c = mk(), y = c.getContext('2d'); y.fillStyle = '#fff'; y.textAlign = 'center'; y.textBaseline = 'middle';
+      for (const t of o.ring) arc(y, t.text, t.r, t.px, !!t.bottom);
+      out.R = upload(c);
+    }
+    const src = root.YTPMIconSrc && o.icon ? root.YTPMIconSrc(o.icon) : '';
+    if (!src) return Promise.resolve(out);
+    return new Promise((res) => {
+      const img = new Image();
+      img.onload = () => {
+        if (g === gl) { const c = document.createElement('canvas'); c.width = c.height = 512; const y = c.getContext('2d'); if ('filter' in y) y.filter = 'blur(1.4px)'; y.drawImage(img, 0, 0, 512, 512); out.I = upload(c); }
+        res(out);
+      };
+      img.onerror = () => res(out);
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="512" height="512" fill="none" stroke="#fff" color="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${src}</svg>`);
+    });
+  }
+  function coinUniforms(x, o, tx) {
+    gl.uniform1f(x.U.uDesign, o.design || 0); gl.uniform1f(x.U.uStone, o.stone || 0);
+    gl.uniform3fv(x.U.uMetal, o.metal || [1, .77, .33]); gl.uniform3fv(x.U.uMetal2, o.metal2 || [.95, .64, .54]);
+    gl.uniform1i(x.U.uIcon, 0); gl.uniform1i(x.U.uRing, 1); gl.uniform1i(x.U.uBack, 2);
+    gl.uniform1f(x.U.uIconOn, tx.I ? 1 : 0); gl.uniform1f(x.U.uRingOn, tx.R ? 1 : 0); gl.uniform1f(x.U.uBackOn, tx.B ? 1 : 0);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, tx.B);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, tx.R);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tx.I);
+  }
+  /** One still frame of a coin onto `target` (the design cards). Does not disturb the live view (it redraws next frame). */
+  function snap(target, o, yaw, pitch) {
+    if (!ctx()) return Promise.resolve(false);
+    const x = prog('coin');
+    if (!x) return Promise.resolve(false);
+    return coinTex(o).then((tx) => {
+      if (!gl) return false;
+      const w = target.width, h = target.height;
+      if (glc.width !== w || glc.height !== h) { glc.width = w; glc.height = h; }
+      gl.viewport(0, 0, w, h); gl.useProgram(x.p);
+      const M = mat(yaw, pitch, 0);
+      gl.uniform2f(x.U.uRes, w, h); gl.uniform1f(x.U.uTime, 9); gl.uniform1f(x.U.uKind, 0);
+      gl.uniformMatrix3fv(x.U.uR, false, [M[0], M[3], M[6], M[1], M[4], M[7], M[2], M[5], M[8]]); gl.uniformMatrix3fv(x.U.uRT, false, M);
+      coinUniforms(x, o, tx);
+      gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      const c2 = target.getContext('2d'); c2.clearRect(0, 0, w, h); c2.drawImage(glc, 0, 0);
+      [tx.I, tx.B, tx.R].forEach((t) => t && gl.deleteTexture(t));
+      dirty = true;
+      return true;
+    });
+  }
   function start(canvas, k, reduced, o) {
     stop();
     if (!ctx()) return false;
     try { ctx2 = canvas.getContext('2d'); } catch (e) { ctx2 = null; }
     if (!ctx2) return false;
     gen++; cv = canvas; kind = k; still = !!reduced; opt = o || {}; wear = opt.wear || [0, 0, 0];
-    if (texI) gl.deleteTexture(texI); if (texB) gl.deleteTexture(texB); texI = texB = null;
-    cur = prog(k === 'bubble' ? 'bubble' : k === 'medal' ? 'medal' : 'gem');
+    if (texI) gl.deleteTexture(texI); if (texB) gl.deleteTexture(texB); if (texR) gl.deleteTexture(texR); texI = texB = texR = null;
+    cur = prog(k === 'bubble' ? 'bubble' : k === 'medal' ? 'medal' : k === 'coin' ? 'coin' : 'gem');
     if (!cur) { cv = null; ctx2 = null; return false; }
     if (k === 'medal') medalTextures(opt, gl);
+    if (k === 'coin') { const my = gen; coinTex(opt).then((x) => { if (my !== gen || !gl) { [x.I, x.B, x.R].forEach((tx) => tx && gl && gl.deleteTexture(tx)); return; } texI = x.I; texB = x.B; texR = x.R; dirty = true; }); }
     t0 = performance.now(); dirty = true;
     raf = requestAnimationFrame(frame);
     return true;
   }
   /** Orientation in degrees: yaw about the vertical axis, pitch about the horizontal axis (screen), spin about the stone's own axis. */
-  function rot(yaw, pitch, spin) {
+  function rot(yaw, pitch, spin) { R = mat(yaw, pitch, spin); dirty = true; }
+  function mat(yaw, pitch, spin) {
     const a = yaw * D2R, b = pitch * D2R, s = (spin || 0) * D2R;
     const Ry = [Math.cos(a), 0, Math.sin(a), 0, 1, 0, -Math.sin(a), 0, Math.cos(a)];
     const Rx = [1, 0, 0, 0, Math.cos(b), -Math.sin(b), 0, Math.sin(b), Math.cos(b)];
     const Rz = [Math.cos(s), -Math.sin(s), 0, Math.sin(s), Math.cos(s), 0, 0, 0, 1];
     const mul = (A, B) => { const C = []; for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) C[i * 3 + j] = A[i * 3] * B[j] + A[i * 3 + 1] * B[3 + j] + A[i * 3 + 2] * B[6 + j]; return C; };
-    R = mul(mul(Ry, Rx), Rz);   // row-major, object -> world
-    dirty = true;
+    return mul(mul(Ry, Rx), Rz);   // row-major, object -> world
   }
   function stop() { if (raf) cancelAnimationFrame(raf); raf = 0; cur = null; cv = null; ctx2 = null; }   // the context and programs stay for next time
-  root.YTPM3D = { start, rot, stop, redraw: () => { dirty = true; }, active: () => !!cur, canvas: () => cv, wear: (w) => { wear = [+w[0] || 0, +w[1] || 0, +w[2] || 0]; dirty = true; } };
+  root.YTPM3D = { start, rot, stop, snap, prep: () => { if (ctx()) begin('coin'); }, redraw: () => { dirty = true; }, active: () => !!cur, canvas: () => cv, wear: (w) => { wear = [+w[0] || 0, +w[1] || 0, +w[2] || 0]; dirty = true; } };
 })(typeof window !== 'undefined' ? window : globalThis);
 </script>
 <script>
@@ -2615,7 +2976,8 @@ void main(){
   /* ------------------------------------------------------------------ versions: each stores only its settings; engines load once.
      To add a version: add an entry here (newest first) and a builder in BUILDERS. Earlier versions stay in the page, live. */
   const VERSIONS = [
-    { id: 'v5', label: 'v5 · Aging per plugin v0.6.0', note: 'Current. Aging follows the achievements plugin v0.6.0: each medal keeps [start, dust left, web cleared] per tier. The dust clock runs from the day the tier was earned; a rub clears the cobweb (it grows back from that day) and takes 30% of the dust. Spotless starts the clocks again, with a bonus. Your saved look (366 days) is the default; every medal has its own web. Tests cover the dust curve at 10 to 365 days, cobweb from day 20 to 350, rubs, new tiers, the bubble, and the same seed in the page and the app. Smooth: the bubble mark always faces you (only the glass turns); dust and cobweb are drawn once, not every frame; the badge grid keeps each frame under budget (badges take turns); the 3D view keeps one GL context.' },
+    { id: 'v6', label: 'v6 · Coin designs', note: 'Eight coin designs with real depth, drawn live in 3D: Dial (gauge bezel), Heatsink, Guilloché, Silicon, Turbine and Rack. Diamond and Ruby are set into the Dial coin like a lens element, not loose. Ideas to pick from: nothing in the app changes until you pick.' },
+    { id: 'v5', label: 'v5 · Aging per plugin v0.6.0', note: 'Aging follows the achievements plugin v0.6.0: each medal keeps [start, dust left, web cleared] per tier. The dust clock runs from the day the tier was earned; a rub clears the cobweb (it grows back from that day) and takes 30% of the dust. Spotless starts the clocks again, with a bonus. Your saved look (366 days) is the default; every medal has its own web. Tests cover the dust curve at 10 to 365 days, cobweb from day 20 to 350, rubs, new tiers, the bubble, and the same seed in the page and the app. Smooth: the bubble mark always faces you (only the glass turns); dust and cobweb are drawn once, not every frame; the badge grid keeps each frame under budget (badges take turns); the 3D view keeps one GL context.' },
     { id: 'v4', label: 'v4 · Shaders verified on Windows', note: 'The HLSL medal, stone and bubble shaders compiled and rendered on Windows (CI, 22 Nov 2026). No fallback to flat medals. In the full view every medal is a real 3D object: drag it. Medals age with real time (1 hour = 1 day): grainy dust that piles up in the hollows, and cobwebs that grow thread by thread after 20 days. Every medal gets its own web. Polish them in the full view.' },
     { id: 'v3', label: 'v3 · Built into the app', note: 'Core, observer, window, pop-ups and full view are in the app (v2.13.0). Build status as it stood before the Windows run.' },
     { id: 'v2', label: 'v2 · Uptime Medals picked', note: 'The theme is picked; the build status as it stood then.' },
@@ -3097,6 +3459,67 @@ void main(){
   }
   function buildV4() { return verifyHtml() + tunerHtml() + buildV2(BUILD_STATUS, '-4'); }
 
+  /* ------------------------------------------------------------------ v6: coin designs (live 3D; drag the big one) */
+  const CMET = { gold: [1, .77, .33], plat: [.72, .93, .91], silver: [.93, .94, .97], rose: [.98, .62, .52], bronze: [.86, .52, .30], copper: [.95, .55, .38] };
+  const COINS = [
+    { id: 'dia', name: 'Dial · Diamond', tag: 'Diamond tier', design: 0, stone: 1, metal: 'plat', icon: 'cpu', title: 'Night Watch', sub: 'Diamond · 2026', ring: 'RESOURCE MONITOR  ·  99.99%  ·  DIAMOND MEDAL', text: 'The Diamond is set into the coin like a lens element in its barrel: a closed cup behind it, a black barrel round it, the scale and the name on the bezel. Turn it over: the cup bulges out the back like a lens.' },
+    { id: 'ruby', name: 'Dial · Ruby', tag: 'Ruby tier', design: 0, stone: 2, metal: 'rose', icon: 'cpu', title: 'Night Watch', sub: 'Ruby · 2026', ring: 'RESOURCE MONITOR  ·  99.999%  ·  RUBY MEDAL', text: 'The same barrel in rose gold, holding the Ruby. Light that goes through the stone bounces off the polished cup and comes back red.' },
+    { id: 'dial', name: 'Dial', tag: 'gauge bezel', design: 0, stone: 0, metal: 'gold', icon: 'gauge', title: 'Night Watch', sub: 'Gold · 2026', ring: 'RESOURCE MONITOR  ·  99.9%  ·  GOLD MEDAL', text: 'A gauge you can hold: knurled grip ring with beads, a sloped bezel with a 60-step scale, a black barrel, and a turned dome with the icon engraved.' },
+    { id: 'heat', name: 'Heatsink', tag: 'CPU cooler', design: 1, metal: 'silver', metal2: 'copper', icon: 'cpu', title: 'Night Watch', sub: 'Silver · 2026', text: '40 machined fins round a copper slug, like the cooler on a CPU. The icon is engraved in the copper.' },
+    { id: 'guil', name: 'Guilloché', tag: 'engine-turned', design: 2, metal: 'gold', icon: 'activity', title: 'Night Watch', sub: 'Gold · 2026', text: 'A waved rosette cut into the field like a watch dial, under a stepped rim, with a beaded cartouche that carries the icon.' },
+    { id: 'sil', name: 'Silicon', tag: 'CPU die', design: 3, metal: 'plat', metal2: 'gold', icon: 'cpu', title: 'Night Watch', sub: 'Platinum · 2026', text: 'A black die with the icon etched in bright metal, gold pins on all four sides, and gold traces running out to pads at the rim.' },
+    { id: 'turb', name: 'Turbine', tag: 'case fan', design: 4, metal: 'gold', icon: 'snow', title: 'Night Watch', sub: 'Gold · 2026', text: 'Nine curved blades turn slowly in a black well, round a turned hub with the icon. The only coin that moves on its own.' },
+    { id: 'rack', name: 'Rack', tag: '1U faceplate', design: 5, metal: 'bronze', icon: 'server', title: 'Night Watch', sub: 'Bronze · 2026', ring: 'RACK 01  ·  WATCH', ringR: .82, ringTop: true, text: 'Terraces like a server faceplate, four rack screws, and the rack’s name on the middle step.' }
+  ];
+  const coinOpt = (c) => ({ design: c.design, stone: c.stone || 0, metal: CMET[c.metal], metal2: CMET[c.metal2 || 'copper'], icon: c.icon, title: c.title, sub: c.sub,
+    ring: c.ring ? [{ text: c.ring, r: c.ringR || .775, px: c.ringTop ? 34 : 30, bottom: !c.ringTop }] : null });
+  const CN = { sel: 0, on: false, raf: 0, yaw: 28, pitch: -16, drag: null, vy: 0, t0: 0, c: null };
+  function buildV6() {
+    const cards = COINS.map((c, i) => `<button type="button" class="cn-card" data-coin="${i}" aria-pressed="${i === 0}"><canvas width="320" height="320" aria-hidden="true"></canvas><b>${esc(c.name)}</b><span>${esc(c.tag)}</span></button>`).join('');
+    return `<section class="card"><div class="sec-h"><div class="eyebrow">v6 · Coin designs</div><h2>Coins with depth, stones set in metal</h2>
+      <p>Eight ideas, each a real 3D object with its own relief, drawn live. Diamond and Ruby are no longer loose stones: they sit in the Dial coin like a lens element in its barrel, as in your screenshot. Drag the big one to turn it over. Pick one design for every medal, or one design per tier.</p></div>
+      <div class="cn"><div class="cn-stage"><canvas class="cn-c" width="792" height="792" aria-label="Selected coin, drag to turn"></canvas><div class="cap">drag to turn · double-click to reset</div></div>
+      <div class="cn-info"><h3 class="cn-name"></h3><p class="cn-text"></p><div class="cn-grid" role="group" aria-label="Coin designs">${cards}</div></div></div></section>`;
+  }
+  function coinPick(i) {
+    CN.sel = i; const c = COINS[i];
+    $$('.cn-card').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.coin === i)));
+    const n = $('.cn-name'), t = $('.cn-text'); if (n) n.textContent = c.name; if (t) t.textContent = c.text;
+    coinStart();
+  }
+  function coinTick(ts) {
+    if (!CN.on) return;
+    const s = (ts - CN.t0) / 1000;
+    if (!CN.drag) { CN.yaw += CN.vy; CN.vy *= .94; }
+    const sw = reduced() || CN.drag ? 0 : 5;
+    YTPM3D.rot(CN.yaw + sw * Math.sin(s * .4), CN.pitch + sw * .4 * Math.sin(s * .29), 0);
+    CN.raf = requestAnimationFrame(coinTick);
+  }
+  function coinStart() {
+    const c = $('.cn-c'); if (!c || !window.YTPM3D) return;
+    const r = c.getBoundingClientRect(), px = Math.round(Math.min(r.width || 396, 396) * Math.min(window.devicePixelRatio || 1, 2));
+    if (px > 0 && c.width !== px) { c.width = px; c.height = px; }
+    coinStop();
+    CN.c = c; CN.on = YTPM3D.start(c, 'coin', reduced(), coinOpt(COINS[CN.sel]));
+    if (CN.on) { CN.t0 = performance.now(); CN.raf = requestAnimationFrame(coinTick); }
+  }
+  function coinStop() { if (!CN.on) return; CN.on = false; cancelAnimationFrame(CN.raf); CN.raf = 0; try { if (YTPM3D.canvas() === CN.c) YTPM3D.stop(); } catch (e) { /* ignore */ } }
+  function coinBind(p) {
+    const c = $('.cn-c', p); if (!c || c.dataset.bound) return; c.dataset.bound = '1';
+    $$('.cn-card', p).forEach((b) => b.addEventListener('click', () => coinPick(+b.dataset.coin)));
+    c.addEventListener('pointerdown', (ev) => { if (!CN.on || YTPM3D.canvas() !== c) coinStart(); CN.drag = { x: ev.clientX, y: ev.clientY, lx: ev.clientX, t: performance.now() }; c.setPointerCapture(ev.pointerId); });
+    c.addEventListener('pointermove', (ev) => { if (!CN.drag) return; const dx = ev.clientX - CN.drag.lx; CN.yaw += dx * .5; CN.pitch = Math.max(-70, Math.min(70, CN.pitch + (ev.clientY - CN.drag.y) * -.4)); CN.drag.y = ev.clientY; CN.vy = dx * .5; CN.drag.lx = ev.clientX; });
+    const up = () => { CN.drag = null; };
+    c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);
+    c.addEventListener('dblclick', () => { CN.yaw = 28; CN.pitch = -16; CN.vy = 0; });
+    const n = $('.cn-name', p), t = $('.cn-text', p); n.textContent = COINS[CN.sel].name; t.textContent = COINS[CN.sel].text;
+    // the cards: one still each, drawn one after another after the big one starts (no long block)
+    const list = $$('.cn-card canvas', p);
+    let i = 0;
+    const next = () => { if (i >= list.length) return; const k = i++; YTPM3D.snap(list[k], coinOpt(COINS[k]), 28, -16).then(() => setTimeout(next, 30)); };
+    setTimeout(next, 250);
+  }
+
   /* ------------------------------------------------------------------ v1: the three theme options (settings only) */
   const OPTIONS = [
     { id: 'badge', letter: 'A', name: 'Case Badges', world: 'PC builders show off their parts with the small metal badges on the front of the case: the CPU sticker, the GPU sticker, “Designed for Windows”. Here every award is one of those badges, and a full set of four becomes a <b>Certified Build</b> plate on the case panel.', shape: 'plaque', icon: 'cpu', hero: 'gold', plate: 'Certified Gold · The Watchtower', sets: 'The Watchtower (CPU, memory, GPU, disk active) · The Pipeline (upload, download, data tracked, adapters) · The Caretaker (alerts handled, tasks ended, cleanups, reports)' },
@@ -3120,7 +3543,7 @@ void main(){
   }
 
   /* ------------------------------------------------------------------ versions bar + panels */
-  const BUILDERS = { v5: buildV4, v4: buildV4, v3: buildV3, v2: () => buildV2(), v1: buildV1 };
+  const BUILDERS = { v6: buildV6, v5: buildV4, v4: buildV4, v3: buildV3, v2: () => buildV2(), v1: buildV1 };
   const panelsEl = $('#panels'), tabsEl = $('#vtabs');
   let cur = null;
   function renderTabs() {
@@ -3136,6 +3559,7 @@ void main(){
       if (sel && !p.dataset.built) { p.innerHTML = BUILDERS[v.id](); p.dataset.built = '1'; mountIn(p); bindPanel(p); }
     });
     if (id === 'v4') { if (TN.el && !TN.on) requestAnimationFrame(tnStart); } else tnStop();
+    if (id === 'v6') { coinBind($('#p-v6')); requestAnimationFrame(coinStart); } else coinStop();
     $('#vnote').textContent = VERSIONS.find((v) => v.id === id).note;
     if (focusTab) $('#vt-' + id).focus();
     store.set('rm-ach-version', id);
