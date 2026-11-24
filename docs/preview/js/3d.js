@@ -477,6 +477,7 @@ const float ZG6=.19;                                          // girdle height
 const float GZD=uDesign>5.5?(ZG6-.2795*SSD):(.15-TABC*SS);    // stone centre (z) / old Dial: table at .15
 const float FLOOR6=-.13;                                      // the culet stops just inside the back plate
 // Emulsion (stone 3): a soap-film dome in the same collet, over a dark well with the mark floating in it
+const float ZF=0., RF=.685;                                   // draft (stone 4): a whole bubble in an open ring, just inside the bezel
 const float ZB=-.456, RB=.856;                                // the film's sphere: top at z=.40, meets the collet's lip at r=.55
 const float SCUT=-(FLOOR6-GZD)/SSD;
 #define P(N,C) { vec3 nn=N; float dn=dot(nn,d); float tt=(C-dot(nn,o))/dn; if(dn<0.){ if(tt>tIn){ tIn=tt; nIn=nn; } } else { if(tt<tOut){ tOut=tt; nOut=nn; } } }
@@ -556,6 +557,7 @@ vec2 mapF(vec3 p){
     if(r>.9){ vec2 bq=prep(p.xy,72.); d=U(d,vec2(length(vec3(bq.x-.948,bq.y,p.z-.186))-.016,1.)); }
     else d.x=min(d.x,length(vec2(.932-r,max(abs(p.z-.186)-.016,0.))));
     d=U(d,vec2(max(ringS(p,.70,.905,-.01,.4,.0),(p.z-(.15+(r-.70)*.13))*.99),2.));
+    if(uStone>3.5) return d;                         // draft: open ring, nothing behind the bubble
     d=U(d,vec2(ringS(p,.595,.705,-.01,.08,.012),3.));
     if(r>.63) d.x=min(d.x,r-.6);
     else if(uStone<.5){
@@ -579,6 +581,7 @@ vec2 mapB(vec3 p){                                   // the reverse: a rim and a
   float r=length(p.xy), dep=(uDesign<.5||uDesign>5.5)?.19:.12;
   vec2 d=vec2(ringS(p,.9,1.,-dep,.01,.025),1.);
   d=U(d,vec2(disc(p,.905,-dep+.05,.01,.01),2.));
+  if(uStone>3.5) d.x=max(d.x,.705-r);                // draft: the ring is open right through
   if(uStone>.5 && uDesign<.5) d=U(d,vec2(max(r-.64,max(-p.z-Hb(r),p.z-.01))/1.7,1.));
   return d;
 }
@@ -634,9 +637,61 @@ vec3 stone(vec3 o, vec3 d, float tIn, vec3 nIn, vec3 M, out float cover, float p
   return 1.-exp(-max(col,0.)*1.6);
 }
 
+// Draft Emulsion: a whole soap bubble in the open ring. Film colour strongest in an uneven edge band, a thin bright outline,
+// dark glass in the middle, the inside of the far wall faintly, and the pulse floating in the centre as a glossy tube,
+// always facing the viewer.
+float thk(vec3 n){ float tt=uTime*.2; return 540.+190.*sin(4.*n.x+2.2*sin(3.*n.y+tt))+120.*sin(5.*n.y-2.5*n.z+tt*.8)-170.*n.y; }
+vec3 filmC(float th, float c){ float ct=sqrt(1.-(1.-c*c)/1.77); vec3 f=.5-.5*cos(TAU*2.*1.33*th*ct/vec3(640.,545.,455.)); return mix(vec3(dot(f,vec3(.3,.59,.11))),f,1.05); }
+float sg2(vec2 p, vec2 a, vec2 b){ vec2 pa=p-a, ba=b-a; float h=clamp(dot(pa,ba)/dot(ba,ba),0.,1.); return length(pa-ba*h); }
+vec4 bubbleFull(vec3 ro, vec3 rd, vec3 ow, vec3 dw, float tHit, vec4 base, float pxw){
+  vec3 oc=ro-vec3(0.,0.,ZF); float bb=dot(oc,rd), cc=dot(oc,oc)-RF*RF, hh=bb*bb-cc;
+  if(hh<=0.) return base;
+  float sh=sqrt(hh), t1=-bb-sh, t2=-bb+sh;
+  if(t1>tHit) return base;
+  float cover=clamp(sh/(pxw*1.6),0.,1.);
+  vec3 n1=(ro+rd*t1-vec3(0.,0.,ZF))/RF, n2=(ro+rd*t2-vec3(0.,0.,ZF))/RF;
+  float c1=clamp(-dot(rd,n1),0.,1.), rS=sqrt(1.-c1*c1);
+  vec3 wn=uRT*vec3(0.,0.,1.);
+  float uneven=.5+.5*sin(atan(n1.y,n1.x)*3.+uTime*.25+2.*n1.z);
+  float band=smoothstep(.88-.07*uneven,.997,rS);
+  vec3 f1=filmC(thk(n1),c1);
+  float F=.03+.97*pow(1.-c1,5.);
+  vec3 nw=uR*n1;
+  float e=min(envS(reflect(dw,nw),uTime),2.2);
+  // behind: what the far wall lets through (the ring's bore at an angle), darkened like glass
+  bool far=t2<tHit;
+  vec3 col=base.rgb*.55;
+  float a=base.a;
+  if(far){ vec3 f2=filmC(thk(n2),abs(dot(rd,n2))); col+=f2*.07*(.5+.5*envS(reflect(dw,-(uR*n2)),uTime)); }
+  // the pulse, in the middle, facing the viewer
+  vec3 cw=uR*vec3(0.,0.,ZF);
+  float tp=(cw.z-ow.z)/dw.z;
+  if(tp>t1 && tp<min(t2,tHit)){
+    vec2 q=((ow.xy+dw.xy*tp)-cw.xy)/RF;
+    q.y-=.012*sin(uTime*.6);
+    float aa=pxw*1.2/RF;
+    vec2 A=vec2(-.5511,-.0276), B=vec2(-.3031,-.0276), C=vec2(-.1653,.2273), D=vec2(-.0413,-.2756), E=vec2(.0827,.3169), Fp=vec2(.1998,-.0276), G=vec2(.5511,-.0276);
+    float dl=min(min(min(sg2(q,A,B),sg2(q,B,C)),min(sg2(q,C,D),sg2(q,D,E))),min(sg2(q,E,Fp),sg2(q,Fp,G)));
+    float rad=.085, m=smoothstep(rad+aa,rad-aa,dl);
+    if(m>0.){
+      float hz=sqrt(max(1.-(dl/rad)*(dl/rad),0.));
+      vec3 tube=mix(vec3(.16,.15,.19),vec3(.62,.58,.50),hz)*(.6+.4*hz);
+      tube+=(.5+.5*cos(TAU*(hz*.7+q.x*.6+vec3(0.,.33,.67))))*.18*hz;
+      tube+=vec3(1.)*pow(hz,30.)*.18*(.6+.4*sin(q.x*9.+uTime*.4));
+      tube*=1.-.45*smoothstep(.75,1.,dl/rad);             // a darker rim, like the outline in the badge
+      col=mix(col,tube,m); a=max(a,m);
+    }
+  }
+  // the front film: dark glass in the middle, colour in the edge band, a thin bright outline, the studio in it
+  col=col*(1.-F*.8)+f1*(F*(.25+.5*e)+.025+band*1.)+vec3(.95,.97,1.)*smoothstep(.965,.995,rS)*.45+vec3(1.)*F*max(e-1.,0.)*.3;
+  a=a+(1.-a)*(.5+.5*max(band,F));
+  return vec4(col,a)*cover+base*(1.-cover);
+}
+
 // Emulsion: the film over the dome. Thin-film colour (per channel interference), Fresnel edge band, studio reflections;
 // the mark floats inside and always faces the viewer (only the glass turns). base = what is behind (premultiplied).
 vec4 bubble(vec3 ro, vec3 rd, vec3 ow, vec3 dw, float tHit, vec4 base, float pxw){
+  if(uStone>3.5) return bubbleFull(ro,rd,ow,dw,tHit,base,pxw);
   vec3 oc=ro-vec3(0.,0.,ZB); float bb=dot(oc,rd), cc=dot(oc,oc)-RB*RB, hh=bb*bb-cc;
   if(hh<=0.) return base;
   float sh=sqrt(hh), t1=-bb-sh;
