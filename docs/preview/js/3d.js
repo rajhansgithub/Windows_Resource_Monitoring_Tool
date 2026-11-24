@@ -476,7 +476,7 @@ const float SS=.57;                                  // set stone: girdle radius
 // Dial family (design 6): the stone sits forward in a raised collet: girdle level with the grip ring, the whole crown proud;
 // the pavilion rests in a fitted polished cup, the back stays flat (no bulge)
 const float SSD=uDesign>5.5?.55:SS;
-const float ZG6=.19;                                          // girdle height
+const float ZG6=.25;                                          // girdle height
 const float GZD=uDesign>5.5?(ZG6-.2795*SSD):(.15-TABC*SS);    // stone centre (z) / old Dial: table at .15
 const float FLOOR6=-.13;                                      // the culet stops just inside the back plate
 // Emulsion (stone 3): a soap-film dome in the same collet, over a dark well with the mark floating in it
@@ -569,9 +569,17 @@ vec2 mapF(vec3 p){
       float yy=a2.y-.06*clamp(floor(a2.y/.06+.5),0.,3.);
       d=U(d,vec2(box3(vec3(a2.x-.27,yy,p.z-.065),vec3(.035,.012,.011),.005),6.));
     } else {                                         // the collet: a polished cup rising out of the barrel, a thin lip at the girdle
-      float body=box2(vec2(r-.3,p.z-(ZG6+.012-.12)*.5),vec2(.3,(ZG6+.012+.12)*.5),.01);
-      float k=.602, zc=GZD-.602*SSD-.004, pocket=max(r-(SSD+.003),(zc+k*r-p.z)/sqrt(1.+k*k));
+      // a bezel setting: the wall tapers in as it rises out of the barrel, its lip folds over the girdle, and six claws
+      // reach up onto the crown; inside, a deep cone follows the pavilion down into the coin
+      float top=ZG6+.02;
+      float body=max(box2(vec2(r-.32,p.z-(top-.12)*.5),vec2(.32,(top+.12)*.5),.008),(r-(.645-.38*(p.z-.08)))*.93);
+      float k=.602, zc=GZD-.602*SSD-.004;
+      float pocket=min(max(r-(SSD+.003),(zc+k*r-p.z)/sqrt(1.+k*k)), max(r-(SSD-.014),ZG6-.002-p.z));
       d=U(d,vec2(max(body,-pocket),6.));
+      vec2 cq=prep(rot(PI/6.)*p.xy,6.);
+      vec3 a0=vec3(.6,0.,ZG6-.05), a1=vec3(.49,0.,ZG6+.066), pa=vec3(cq,p.z)-a0, ba=a1-a0;
+      float hc=clamp(dot(pa,ba)/dot(ba,ba),0.,1.);
+      d=U(d,vec2(length(pa-ba*hc)-(.044-.016*hc),6.));
     }
   }
   return d;
@@ -620,6 +628,9 @@ vec3 stone(vec3 o, vec3 d, float tIn, vec3 nIn, vec3 M, out float cover, float p
       // into the cup: polished metal sends it back up, a little warmer/cooler with the metal
       vec3 up=normalize(vec3(outM.xy,abs(outM.z)));
       e=M*(.18+.8*envS(uR*up,uTime))*vec3(.95);
+      if(uDesign>5.5){                               // the seat reads as a deep cone: darker towards the culet, eight cut walls
+        e*=mix(.5,1.,smoothstep(-.6,.2,p.z));
+      }
     } else {
       vec3 oR=refract(di,-n2,iorC.r), oG=refract(di,-n2,iorC.g), oB=refract(di,-n2,iorC.b);
       e.r=dot(oR,oR)>1e-4?envG(uR*oR):0.; e.g=envG(uR*oG); e.b=dot(oB,oB)>1e-4?envG(uR*oB):0.;
@@ -651,10 +662,10 @@ void main(){
   float b=dot(ro,rd), c=dot(ro,ro)-1.44, h=b*b-c;
   if(h<0.){ gl_FragColor=vec4(0.); return; }
   float t=max(-b-sqrt(h),0.), tmax=-b+sqrt(h); bool hit=false;
-  if(uDesign>5.5){                                   // the metal fits in r<1, -.2<z<.215: clip the march to that cylinder
+  if(uDesign>5.5){                                   // the metal fits in r<1, -.2<z<.36: clip the march to that cylinder
     float a2=dot(rd.xy,rd.xy), b2=dot(ro.xy,rd.xy), c2=dot(ro.xy,ro.xy)-1.;
     if(a2>1e-6){ float h2=b2*b2-a2*c2; if(h2<0.) tmax=-1.; else { h2=sqrt(h2); t=max(t,(-b2-h2)/a2); tmax=min(tmax,(-b2+h2)/a2); } }
-    if(abs(rd.z)>1e-6){ float z0=(-.2-ro.z)/rd.z, z1=(.215-ro.z)/rd.z; t=max(t,min(z0,z1)); tmax=min(tmax,max(z0,z1)); }
+    if(abs(rd.z)>1e-6){ float z0=(-.2-ro.z)/rd.z, z1=(.36-ro.z)/rd.z; t=max(t,min(z0,z1)); tmax=min(tmax,max(z0,z1)); }
   }
   float eps=max(.0005,pxw*.3); for(int i=0;i<140;i++){ if(t>tmax) break; float dd=map(ro+rd*t).x; if(dd<eps){ hit=true; break; } t+=dd*.9; }
   vec3 M=uMetal;
