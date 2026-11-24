@@ -29,7 +29,7 @@ cbuffer C : register(b0) {
   float  uTime; float  uSeed; float uKind; float uShape;
   float3 uMetal; float uPx;                // metal colour, item size in px
   float2 uTilt; float uIconOn; float uP4;
-  float3 uWear; float uP3;                // age: dust, scratches, cobweb (0..1); uP3 spare
+  float3 uWear; float uLayer;             // age: dust, seed, cobweb (0..1); uLayer: 0 colour, 1 age layer L, 2 age haze h
 };
 SamplerState smp : register(s0);
 Texture2D<float> uIcon : register(t0);     // 512x512 alpha (white-on-clear icon), mip chain
@@ -603,13 +603,17 @@ float4 wWeb(float2 p, float amt, float dust, float aa){
           +AGE_RAINBOW*max(rope,fine)*(1.-dust)*.3*(.5+.5*cos(6.283*(p.x*5.+p.y*3.+float3(0.,.33,.67))));
   return float4(min(rgb,v3(al)),al+(1.-al)*max(shd*.4,gza*.15));
 }
-// age a (premultiplied) colour. p: on the face (radius 1, +y up). recess: how sheltered (dust piles up there).
-// flt: 1 on a flt surface, lower on a steep wall (dust slides off). metal: 1 metal, 0 stone.
-float3 aged(float3 col, float a, float2 p, float recess, float flt, float metal, float aa){
+float4 wOver(float4 L, float3 c, float k){ return float4(L.rgb*(1.-k)+c*k,L.a+k-L.a*k); }   // a layer over a premultiplied layer
+// The age of one spot, as layers over its colour that do not depend on the colour (so a still medal can work them out
+// once and keep them): h = the haze (amount, tint, grey), L = dust, fibres and cobweb as one premultiplied layer.
+// p: on the face (radius 1, +y up). recess: how sheltered (dust piles up there). flt: 1 on a flat surface, lower on a
+// steep wall (dust slides off). False: nothing on it.
+bool ageLayers(float2 p, float recess, float flt, float aa, out float3 h, out float4 L){
   float dust=min(uWear.x,1.), web=uWear.z*AGE1.z;
   wS=uWear.y; wC=2.175+(wS-.5)*2.;   // upper left on average; from the top right to the left side
   float2 ps=p+wS*float2(3.7,5.3);         // this medal's own dust pattern
-  if(dust+web<.002 || a<=0.) return col;
+  h=v3(0.); L=float4(0., 0., 0., 0.);
+  if(dust+web<.002) return false;
   float rc=min(recess,1.);
   // how much has settled here: the top first (the bottom's share = dust^(1+2*how low)), little on steep walls, more in hollows
   float low=1.-smoothstep(-1.,1.,p.y+(wF(p*2.5+3.)-.5)*.3);
@@ -628,25 +632,35 @@ float3 aged(float3 col, float a, float2 p, float recess, float flt, float metal,
   float thick=smoothstep(0.,.3,n-thr);
   float2 Ld=float2(-.6,.8)*.006;                                  // towards the light
   float sh=clamp(1.+((g1-wN((ps+Ld)*38.+1.))*.35*f1+(g2-wN((ps+Ld*.5)*95.+7.))*.65*f2)*1.1,.78,1.22);
-  // a thin layer: the mirror goes hazy (dust scatters the light), the colour still shows through
-  float mx=max(max(col.r,col.g),max(col.b,.001));
-  float3 matte=(col/mx*(.17+.07*smoothstep(-1.,1.,p.y))+float3(.15,.145,.135))*a*(1.-.12*rc);
-  col=lerp(col,matte,smoothstep(0.,.6,T)*AGE0.w);
+  // a thin layer: the mirror goes hazy (dust scatters the light), the colour still shows through (see ageApply)
+  h=float3(smoothstep(0.,.6,T)*AGE0.w,(.17+.07*smoothstep(-1.,1.,p.y))*(1.-.12*rc),1.-.12*rc);
   // the grains themselves: light grey, each a little different, lit from the top left; dark specks and pale grains
   float3 dc=float3(.60,.585,.55);
   float tone=(.50+.10*smoothstep(-1.,1.,p.y)+.16*thick)*(.80+.22*lerp(.5,g2,f2)+.22*lerp(.5,g3,f3)+.25*(clump-.5)+.3*(wF(ps*13.+2.)-.44))*sh*(1.-.18*rc);
   float3 dustc=dc*tone;
   dustc*=1.-.5*smoothstep(.86,.95,wN(ps*150.+3.))*f2*AGE1.x;
   dustc+=dc*.22*smoothstep(.9,.97,wN(ps*60.+9.))*f1*AGE1.x;
-  col=lerp(col,dustc*a,cov*(.45+.52*thick));
+  L=wOver(L,dustc,cov*(.45+.52*thick));
   // lint: long fibres lie anywhere (on clean metal too), short fuzz grows in the thick dust
   float lint=wHair(ps,8.,.0022,aa,.4*smoothstep(.05,.7,dl)*AGE1.y);
   float fuzz=wHair(ps+5.3,19.,.0017,aa,.8*smoothstep(.3,.9,T)*AGE1.y);
-  col=lerp(col,float3(.72,.71,.68)*a,lint*.5);
-  col=lerp(col,float3(.70,.69,.66)*a,fuzz*.4);
+  L=wOver(L,float3(.72,.71,.68),lint*.5);
+  L=wOver(L,float3(.70,.69,.66),fuzz*.4);
   float4 wb=wWeb(p,web,dust,aa);
-  col=col*(1.-wb.a)+wb.rgb*a;
-  return col;
+  L=float4(L.rgb*(1.-wb.a)+wb.rgb,L.a+wb.a-L.a*wb.a);
+  return true;
+}
+// put the age layers on a premultiplied colour (coverage a)
+float3 ageApply(float3 col, float a, float3 h, float4 L){
+  float mx=max(max(col.r,col.g),max(col.b,.001));
+  col=lerp(col,(col/mx*h.y+float3(.15,.145,.135)*h.z)*a,h.x);
+  return col*(1.-L.a)+L.rgb*a;
+}
+// age a (premultiplied) colour (see ageLayers). metal: 1 metal, 0 stone.
+float3 aged(float3 col, float a, float2 p, float recess, float flt, float metal, float aa){
+  float3 h; float4 L;
+  if(a<=0. || !ageLayers(p,recess,flt,aa,h,L)) return col;
+  return ageApply(col,a,h,L);
 }
 
 float4 main(float4 sv : SV_Position) : SV_Target {
@@ -657,14 +671,8 @@ float4 main(float4 sv : SV_Position) : SV_Target {
   float aa = 2./S*1.04;
   float t = uTime + uSeed;
   if (r > 1. + aa) return float4(0., 0., 0., 0.);
-  float4 c; float rec;
-  if (uKind > 1.5){
-    c = medal(p, r, aa, t);
-    rec = (uIconOn > 0. && r < .83 ? icA(p) : 0.) + smoothstep(.1, 0., abs(r - .83))*.8 + smoothstep(.62, .83, r)*step(r, .83)*.3;
-  } else {
-    c = brill(p, r, aa, t);
-    rec = smoothstep(.86, 1., r)*.6;
-  }
+  float rec = uKind > 1.5 ? (uIconOn > 0. && r < .83 ? icA(p) : 0.) + smoothstep(.1, 0., abs(r - .83))*.8 + smoothstep(.62, .83, r)*step(r, .83)*.3
+                          : smoothstep(.86, 1., r)*.6;
   float fl = 1. - .3*smoothstep(.5, 1., r);            // how flat it is here: dust slides off the steep parts
   if (uKind > 1.5){
     fl = 1.;
@@ -675,6 +683,14 @@ float4 main(float4 sv : SV_Position) : SV_Target {
       fl = 1./sqrt(1. + dot(gi, gi)*5.);
     }
   }
+  // The full view asks for the age layers once per medal (they do not change while it moves) and puts them on each
+  // frame itself (`ui.rs`, age_apply): the dust and cobweb were most of a frame's cost.
+  if (uLayer > .5){
+    float3 h; float4 L;
+    if (!ageLayers(p, rec, fl, aa, h, L)) return float4(0., 0., 0., 0.);
+    return uLayer < 1.5 ? L : float4(h.x, h.y*4., h.z, 1.);
+  }
+  float4 c = uKind > 1.5 ? medal(p, r, aa, t) : brill(p, r, aa, t);
   c.rgb = aged(c.rgb, c.a, p, rec, fl, uKind > 1.5 ? 1. : 0., aa);
   return c;
 }

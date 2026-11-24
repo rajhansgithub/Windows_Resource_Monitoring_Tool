@@ -565,13 +565,17 @@ vec4 wWeb(vec2 p, float amt, float dust, float aa){
           +uAge[3].x*max(rope,fine)*(1.-dust)*.3*(.5+.5*cos(6.283*(p.x*5.+p.y*3.+vec3(0.,.33,.67))));
   return vec4(min(rgb,vec3(al)),al+(1.-al)*max(shd*.4,gza*.15));
 }
-// age a (premultiplied) colour. p: on the face (radius 1, +y up). recess: how sheltered (dust piles up there).
-// flt: 1 on a flat surface, lower on a steep wall (dust slides off). metal: 1 metal, 0 stone.
-vec3 aged(vec3 col, float a, vec2 p, float recess, float flt, float metal, float aa){
+vec4 wOver(vec4 L, vec3 c, float k){ return vec4(L.rgb*(1.-k)+c*k,L.a+k-L.a*k); }   // a layer over a premultiplied layer
+// The age of one spot, as layers over its colour that do not depend on the colour (so a still medal can work them out
+// once and keep them): h = the haze (amount, tint, grey), L = dust, fibres and cobweb as one premultiplied layer.
+// p: on the face (radius 1, +y up). recess: how sheltered (dust piles up there). flt: 1 on a flat surface, lower on a
+// steep wall (dust slides off). False: nothing on it.
+bool ageLayers(vec2 p, float recess, float flt, float aa, out vec3 h, out vec4 L){
   float dust=min(uWear.x,1.), web=uWear.z*uAge[1].z;
   wS=uWear.y; wC=2.175+(wS-.5)*2.;   // upper left on average; from the top right to the left side
   vec2 ps=p+wS*vec2(3.7,5.3);         // this medal's own dust pattern
-  if(dust+web<.002 || a<=0.) return col;
+  h=vec3(0.); L=vec4(0.);
+  if(dust+web<.002) return false;
   float rc=min(recess,1.);
   // how much has settled here: the top first (the bottom's share = dust^(1+2*how low)), little on steep walls, more in hollows
   float low=1.-smoothstep(-1.,1.,p.y+(wF(p*2.5+3.)-.5)*.3);
@@ -590,25 +594,35 @@ vec3 aged(vec3 col, float a, vec2 p, float recess, float flt, float metal, float
   float thick=smoothstep(0.,.3,n-thr);
   vec2 Ld=vec2(-.6,.8)*.006;                                  // towards the light
   float sh=clamp(1.+((g1-wN((ps+Ld)*38.+1.))*.35*f1+(g2-wN((ps+Ld*.5)*95.+7.))*.65*f2)*1.1,.78,1.22);
-  // a thin layer: the mirror goes hazy (dust scatters the light), the colour still shows through
-  float mx=max(max(col.r,col.g),max(col.b,.001));
-  vec3 matte=(col/mx*(.17+.07*smoothstep(-1.,1.,p.y))+vec3(.15,.145,.135))*a*(1.-.12*rc);
-  col=mix(col,matte,smoothstep(0.,.6,T)*uAge[0].w);
+  // a thin layer: the mirror goes hazy (dust scatters the light), the colour still shows through (see ageApply)
+  h=vec3(smoothstep(0.,.6,T)*uAge[0].w,(.17+.07*smoothstep(-1.,1.,p.y))*(1.-.12*rc),1.-.12*rc);
   // the grains themselves: light grey, each a little different, lit from the top left; dark specks and pale grains
   vec3 dc=vec3(.60,.585,.55);
   float tone=(.50+.10*smoothstep(-1.,1.,p.y)+.16*thick)*(.80+.22*mix(.5,g2,f2)+.22*mix(.5,g3,f3)+.25*(clump-.5)+.3*(wF(ps*13.+2.)-.44))*sh*(1.-.18*rc);
   vec3 dustc=dc*tone;
   dustc*=1.-.5*smoothstep(.86,.95,wN(ps*150.+3.))*f2*uAge[1].x;
   dustc+=dc*.22*smoothstep(.9,.97,wN(ps*60.+9.))*f1*uAge[1].x;
-  col=mix(col,dustc*a,cov*(.45+.52*thick));
+  L=wOver(L,dustc,cov*(.45+.52*thick));
   // lint: long fibres lie anywhere (on clean metal too), short fuzz grows in the thick dust
   float lint=wHair(ps,8.,.0022,aa,.4*smoothstep(.05,.7,dl)*uAge[1].y);
   float fuzz=wHair(ps+5.3,19.,.0017,aa,.8*smoothstep(.3,.9,T)*uAge[1].y);
-  col=mix(col,vec3(.72,.71,.68)*a,lint*.5);
-  col=mix(col,vec3(.70,.69,.66)*a,fuzz*.4);
+  L=wOver(L,vec3(.72,.71,.68),lint*.5);
+  L=wOver(L,vec3(.70,.69,.66),fuzz*.4);
   vec4 wb=wWeb(p,web,dust,aa);
-  col=col*(1.-wb.a)+wb.rgb*a;
-  return col;
+  L=vec4(L.rgb*(1.-wb.a)+wb.rgb,L.a+wb.a-L.a*wb.a);
+  return true;
+}
+// put the age layers on a premultiplied colour (coverage a)
+vec3 ageApply(vec3 col, float a, vec3 h, vec4 L){
+  float mx=max(max(col.r,col.g),max(col.b,.001));
+  col=mix(col,(col/mx*h.y+vec3(.15,.145,.135)*h.z)*a,h.x);
+  return col*(1.-L.a)+L.rgb*a;
+}
+// age a (premultiplied) colour (see ageLayers). metal: 1 metal, 0 stone.
+vec3 aged(vec3 col, float a, vec2 p, float recess, float flt, float metal, float aa){
+  vec3 h; vec4 L;
+  if(a<=0. || !ageLayers(p,recess,flt,aa,h,L)) return col;
+  return ageApply(col,a,h,L);
 }
 float envM(vec3 d, float t){
   d.xy=rot(t*.25)*d.xy;
@@ -1416,13 +1430,17 @@ vec4 wWeb(vec2 p, float amt, float dust, float aa){
           +uAge[3].x*max(rope,fine)*(1.-dust)*.3*(.5+.5*cos(6.283*(p.x*5.+p.y*3.+vec3(0.,.33,.67))));
   return vec4(min(rgb,vec3(al)),al+(1.-al)*max(shd*.4,gza*.15));
 }
-// age a (premultiplied) colour. p: on the face (radius 1, +y up). recess: how sheltered (dust piles up there).
-// flt: 1 on a flat surface, lower on a steep wall (dust slides off). metal: 1 metal, 0 stone.
-vec3 aged(vec3 col, float a, vec2 p, float recess, float flt, float metal, float aa){
+vec4 wOver(vec4 L, vec3 c, float k){ return vec4(L.rgb*(1.-k)+c*k,L.a+k-L.a*k); }   // a layer over a premultiplied layer
+// The age of one spot, as layers over its colour that do not depend on the colour (so a still medal can work them out
+// once and keep them): h = the haze (amount, tint, grey), L = dust, fibres and cobweb as one premultiplied layer.
+// p: on the face (radius 1, +y up). recess: how sheltered (dust piles up there). flt: 1 on a flat surface, lower on a
+// steep wall (dust slides off). False: nothing on it.
+bool ageLayers(vec2 p, float recess, float flt, float aa, out vec3 h, out vec4 L){
   float dust=min(uWear.x,1.), web=uWear.z*uAge[1].z;
   wS=uWear.y; wC=2.175+(wS-.5)*2.;   // upper left on average; from the top right to the left side
   vec2 ps=p+wS*vec2(3.7,5.3);         // this medal's own dust pattern
-  if(dust+web<.002 || a<=0.) return col;
+  h=vec3(0.); L=vec4(0.);
+  if(dust+web<.002) return false;
   float rc=min(recess,1.);
   // how much has settled here: the top first (the bottom's share = dust^(1+2*how low)), little on steep walls, more in hollows
   float low=1.-smoothstep(-1.,1.,p.y+(wF(p*2.5+3.)-.5)*.3);
@@ -1441,25 +1459,35 @@ vec3 aged(vec3 col, float a, vec2 p, float recess, float flt, float metal, float
   float thick=smoothstep(0.,.3,n-thr);
   vec2 Ld=vec2(-.6,.8)*.006;                                  // towards the light
   float sh=clamp(1.+((g1-wN((ps+Ld)*38.+1.))*.35*f1+(g2-wN((ps+Ld*.5)*95.+7.))*.65*f2)*1.1,.78,1.22);
-  // a thin layer: the mirror goes hazy (dust scatters the light), the colour still shows through
-  float mx=max(max(col.r,col.g),max(col.b,.001));
-  vec3 matte=(col/mx*(.17+.07*smoothstep(-1.,1.,p.y))+vec3(.15,.145,.135))*a*(1.-.12*rc);
-  col=mix(col,matte,smoothstep(0.,.6,T)*uAge[0].w);
+  // a thin layer: the mirror goes hazy (dust scatters the light), the colour still shows through (see ageApply)
+  h=vec3(smoothstep(0.,.6,T)*uAge[0].w,(.17+.07*smoothstep(-1.,1.,p.y))*(1.-.12*rc),1.-.12*rc);
   // the grains themselves: light grey, each a little different, lit from the top left; dark specks and pale grains
   vec3 dc=vec3(.60,.585,.55);
   float tone=(.50+.10*smoothstep(-1.,1.,p.y)+.16*thick)*(.80+.22*mix(.5,g2,f2)+.22*mix(.5,g3,f3)+.25*(clump-.5)+.3*(wF(ps*13.+2.)-.44))*sh*(1.-.18*rc);
   vec3 dustc=dc*tone;
   dustc*=1.-.5*smoothstep(.86,.95,wN(ps*150.+3.))*f2*uAge[1].x;
   dustc+=dc*.22*smoothstep(.9,.97,wN(ps*60.+9.))*f1*uAge[1].x;
-  col=mix(col,dustc*a,cov*(.45+.52*thick));
+  L=wOver(L,dustc,cov*(.45+.52*thick));
   // lint: long fibres lie anywhere (on clean metal too), short fuzz grows in the thick dust
   float lint=wHair(ps,8.,.0022,aa,.4*smoothstep(.05,.7,dl)*uAge[1].y);
   float fuzz=wHair(ps+5.3,19.,.0017,aa,.8*smoothstep(.3,.9,T)*uAge[1].y);
-  col=mix(col,vec3(.72,.71,.68)*a,lint*.5);
-  col=mix(col,vec3(.70,.69,.66)*a,fuzz*.4);
+  L=wOver(L,vec3(.72,.71,.68),lint*.5);
+  L=wOver(L,vec3(.70,.69,.66),fuzz*.4);
   vec4 wb=wWeb(p,web,dust,aa);
-  col=col*(1.-wb.a)+wb.rgb*a;
-  return col;
+  L=vec4(L.rgb*(1.-wb.a)+wb.rgb,L.a+wb.a-L.a*wb.a);
+  return true;
+}
+// put the age layers on a premultiplied colour (coverage a)
+vec3 ageApply(vec3 col, float a, vec3 h, vec4 L){
+  float mx=max(max(col.r,col.g),max(col.b,.001));
+  col=mix(col,(col/mx*h.y+vec3(.15,.145,.135)*h.z)*a,h.x);
+  return col*(1.-L.a)+L.rgb*a;
+}
+// age a (premultiplied) colour (see ageLayers). metal: 1 metal, 0 stone.
+vec3 aged(vec3 col, float a, vec2 p, float recess, float flt, float metal, float aa){
+  vec3 h; vec4 L;
+  if(a<=0. || !ageLayers(p,recess,flt,aa,h,L)) return col;
+  return ageApply(col,a,h,L);
 }
 `;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

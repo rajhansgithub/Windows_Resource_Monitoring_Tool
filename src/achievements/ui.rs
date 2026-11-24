@@ -860,6 +860,8 @@ fn wear_rgba(c: u8) -> Rgba {
 struct Medals {
     masks: HashMap<&'static str, Vec<u8>>,
     cache: HashMap<MedalKey, Vec<u32>>,
+    /// The full view's age layers (L, haze) for one medal, size and wear step: worked out once, put on every frame.
+    age: Option<(MedalKey, Vec<u32>, Vec<u32>)>,
 }
 
 impl Medals {
@@ -899,6 +901,7 @@ impl Medals {
                     wear: if t >= 7 { [0.0; 3] } else { let w = wear_of_code(wc); [w[0], web_seed(id), w[2]] },
                     icon_mask: self.masks.get(icon_of(id)).map(|m| &m[..]),
                     detail_mask: None,
+                    layer: 0,
                 })
                 .collect();
             done = gpu::render_batch(&params, &mut out) && out.len() == need.len();
@@ -915,28 +918,53 @@ impl Medals {
     }
 
     /// One live frame (full view): GPU at time `t` and `tilt`; the flat medal when there is no GPU.
+    /// Dust and cobweb do not move with the medal, so their layers are drawn once (per medal, size and wear step) and
+    /// put on each frame here; the GPU then only draws the clean medal (the aged shader cost 10x a frame).
     fn frame(&mut self, id: &'static str, tier: u8, px: u32, t: f32, tilt: (f32, f32), wear: [f32; 3]) -> Vec<u32> {
         let icon = icon_of(id);
         self.ensure_mask(icon);
         if gpu::available() {
-            let params = [gpu::Params {
+            let mask = self.masks.get(icon).map(|m| &m[..]);
+            let full = [wear[0], web_seed(id), wear[2]];
+            let mk = |layer: u8, wear: [f32; 3]| gpu::Params {
                 material: material_of(tier),
                 size_px: px,
                 time_s: t,
                 seed: seed_of(id, tier),
                 tilt,
-                wear: [wear[0], web_seed(id), wear[2]],
-                icon_mask: self.masks.get(icon).map(|m| &m[..]),
+                wear,
+                icon_mask: mask,
                 detail_mask: None,
-            }];
+                layer,
+            };
+            let aged = tier < 7 && wear[0] + wear[2] >= 0.002;
+            let q = |x: f32| (x.clamp(0.0, 1.0) * 15.0).round() as u16;
+            let akey: MedalKey = (id, tier, px, q(wear[0]) | q(wear[2]) << 8);
+            if aged && self.age.as_ref().map(|a| a.0) != Some(akey) {
+                let mut out: Vec<Vec<u32>> = Vec::new();
+                self.age = if gpu::render_batch(&[mk(1, full), mk(2, full)], &mut out) && out.len() == 2 {
+                    let h = out.pop().unwrap_or_default();
+                    let l = out.pop().unwrap_or_default();
+                    Some((akey, l, h))
+                } else {
+                    None
+                };
+            }
+            let layers = if aged { self.age.as_ref().filter(|a| a.0 == akey) } else { None };
+            let base = if layers.is_some() { [0.0, full[1], 0.0] } else { full };
             let mut out: Vec<Vec<u32>> = Vec::new();
-            if gpu::render_batch(&params, &mut out) && out.len() == 1 {
-                return out.swap_remove(0);
+            if gpu::render_batch(&[mk(0, base)], &mut out) && out.len() == 1 {
+                let mut f = out.swap_remove(0);
+                if let Some((_, l, h)) = layers {
+                    gpu::age_apply(&mut f, l, h);
+                }
+                return f;
             }
         }
         flat_medal(tier, px, self.masks.get(icon).map(|m| &m[..]))
     }
 }
+
 
 // ------------------------------------------------------------------ text helpers
 

@@ -80,6 +80,9 @@ pub struct Params<'a> {
     pub icon_mask: Option<&'a [u8]>,
     /// NxN alpha, currently ignored (see module docs).
     pub detail_mask: Option<(&'a [u8], u32)>,
+    /// 0 = the badge. Metals and stones only: 1 = its age layer L (premultiplied dust + fibres + cobweb, a = coverage),
+    /// 2 = its age haze (r = amount, g = tint x 4, b = grey). `wear` as for the badge; see `shaders::ageLayers`.
+    pub layer: u8,
 }
 
 const MAX_ATLAS: u32 = 4096;
@@ -210,6 +213,41 @@ pub fn render_batch(items: &[Params], out: &mut Vec<Vec<u32>>) -> bool {
                 return false;
             }
         }
+    }
+}
+
+/// Put the age layers (see `shaders::ageLayers`, `gpu::Params::layer`) on a premultiplied BGRA frame: the haze, then
+/// dust, fibres and cobweb. Same maths as the shader's `ageApply`.
+pub fn age_apply(f: &mut [u32], l: &[u32], h: &[u32]) {
+    let n = f.len().min(l.len()).min(h.len());
+    let ch = |v: u32, s: u32| ((v >> s) & 255) as f32 / 255.0;
+    const GREY: [f32; 3] = [0.15, 0.145, 0.135];
+    for i in 0..n {
+        let (p, lp, hp) = (f[i], l[i], h[i]);
+        let a8 = p >> 24;
+        if a8 == 0 || (lp == 0 && hp & 0x00ff_0000 == 0) {
+            continue;
+        }
+        let a = a8 as f32 / 255.0;
+        let mut c = [ch(p, 16), ch(p, 8), ch(p, 0)];
+        let hm = ch(hp, 16);
+        if hm > 0.0 {
+            let (g1, g2) = (ch(hp, 8) / 4.0, ch(hp, 0));
+            let mx = c[0].max(c[1]).max(c[2]).max(0.001);
+            for k in 0..3 {
+                let m = (c[k] / mx * g1 + GREY[k] * g2) * a;
+                c[k] += (m - c[k]) * hm;
+            }
+        }
+        let la = ch(lp, 24);
+        if la > 0.0 || lp != 0 {
+            let lc = [ch(lp, 16), ch(lp, 8), ch(lp, 0)];
+            for k in 0..3 {
+                c[k] = c[k] * (1.0 - la) + lc[k] * a;
+            }
+        }
+        let to = |x: f32| (x.clamp(0.0, a) * 255.0 + 0.5) as u32;
+        f[i] = a8 << 24 | to(c[0]) << 16 | to(c[1]) << 8 | to(c[2]);
     }
 }
 
@@ -690,6 +728,7 @@ impl Gpu {
                 c[16] = p.wear[0];
                 c[17] = p.wear[1];
                 c[18] = p.wear[2];
+                c[19] = p.layer as f32;
                 let mut ms = D3D11_MAPPED_SUBRESOURCE::default();
                 ctx.Map(&self.cb, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut ms)).map_err(|e| self.fail("map cb", e))?;
                 std::ptr::copy_nonoverlapping(c.as_ptr(), ms.pData as *mut f32, 20);
@@ -778,7 +817,7 @@ mod tests {
     }
 
     fn params<'a>(m: Material, t: f32, tilt: (f32, f32), ic: &'a [u8]) -> Params<'a> {
-        Params { material: m, size_px: PX, time_s: t, seed: 0.0, tilt, wear: [0.0; 3], icon_mask: Some(ic), detail_mask: None }
+        Params { material: m, size_px: PX, time_s: t, seed: 0.0, tilt, wear: [0.0; 3], icon_mask: Some(ic), detail_mask: None, layer: 0 }
     }
 
     fn render(gpu: &mut Gpu, items: &[Params]) -> Vec<Vec<u32>> {
@@ -861,6 +900,42 @@ mod tests {
                 render(&mut gpu, &[q]);
             }
             println!("perf: full view 560 px {name}: {:.1} ms a frame", t.elapsed().as_secs_f64() * 1e3 / 5.0);
+        }
+    }
+
+    /// The full view draws the clean medal and puts the age layers on it (`age_apply`): it must look like the medal
+    /// drawn aged in one go, and cost about what a clean frame does.
+    #[test]
+    fn age_layers_match_the_aged_shader() {
+        use std::time::Instant;
+        let mut gpu = Gpu::new().expect("gpu");
+        let ic = icon();
+        for m in [Material::Gold, Material::Bronze, Material::Ruby] {
+            let p = |layer: u8, wear: [f32; 3]| {
+                let mut q = params(m, 1.0, (0.1, 0.1), &ic);
+                q.size_px = 560;
+                q.wear = wear;
+                q.layer = layer;
+                q
+            };
+            let w = [0.8, 0.3, 0.9];
+            let one = render(&mut gpu, &[p(0, w)]).swap_remove(0);
+            let lay = render(&mut gpu, &[p(1, w), p(2, w)]);
+            let t = Instant::now();
+            let mut f = render(&mut gpu, &[p(0, [0.0, 0.3, 0.0])]).swap_remove(0);
+            age_apply(&mut f, &lay[0], &lay[1]);
+            println!("perf: {m:?} full view 560 px aged via layers: {:.1} ms (draw + apply)", t.elapsed().as_secs_f64() * 1e3);
+            let (mut worst, mut sum, mut n) = (0i32, 0f64, 0f64);
+            for (a, b) in one.iter().zip(f.iter()) {
+                for s in [0, 8, 16, 24] {
+                    let d = (((a >> s) & 255) as i32 - ((b >> s) & 255) as i32).abs();
+                    worst = worst.max(d);
+                    sum += d as f64;
+                    n += 1.0;
+                }
+            }
+            println!("perf: {m:?} layers vs aged shader: mean diff {:.2}, worst {worst} (of 255)", sum / n);
+            assert!(sum / n < 1.0 && worst <= 24, "{m:?}: layers differ from the aged shader (mean {:.2}, worst {worst})", sum / n);
         }
     }
 
