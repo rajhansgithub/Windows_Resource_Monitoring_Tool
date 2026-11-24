@@ -7,7 +7,7 @@
 //! available. Medals are premultiplied BGRA tiles from `gpu::render_batch` (one batch per repaint, for the medals
 //! that are visible and not cached yet; cached by badge id, tier and pixel size), composited over the canvas by
 //! this file. Without a GPU path a flat medal is drawn in code. Icons are tiny vector marks (stroke paths from the
-//! reference page) rasterised into 128x128 coverage masks on first use: no image files.
+//! reference page) rasterised into 512x512 coverage masks on first use: no image files.
 //!
 //! Windows:
 //! * `ResourceMonitor.Achievements`: the tab (header, racks, Emulsion gate, category cards) and, over it, the
@@ -247,7 +247,7 @@ fn make_colors(dark: bool, mica: bool) -> Colors {
     }
 }
 
-// ------------------------------------------------------------------ icons: stroke paths -> 128x128 masks
+// ------------------------------------------------------------------ icons: stroke paths -> 512x512 masks
 
 /// Marks from the reference page (24x24 view box, stroke only). Elements are separated by `|`:
 /// `p:` path data, `r:` x,y,w,h,rx, `c:` cx,cy,r, `e:` cx,cy,rx,ry.
@@ -553,9 +553,11 @@ fn ellipse(out: &mut Vec<Seg>, cx: f32, cy: f32, rx: f32, ry: f32) {
     }
 }
 
-/// 128x128 coverage of the mark: round-capped strokes, an SDF per pixel (row 0 = top).
+/// ICON_N x ICON_N (512) coverage of the mark: round-capped strokes, an SDF per pixel (row 0 = top).
+/// The edge ramp is N/128 texels wide, so the engraved walls keep the width they were tuned at with a 128 mask, only smooth.
 fn icon_mask(name: &str) -> Vec<u8> {
-    const N: usize = 128;
+    const N: usize = gpu::ICON_N as usize;
+    let ramp = N as f32 / 128.0;
     let segs = icon_segments(name);
     let k = N as f32 / 24.0;
     let half = 0.95 * k;
@@ -572,7 +574,7 @@ fn icon_mask(name: &str) -> Vec<u8> {
                 best = best.min(qx * qx + qy * qy);
             }
             let d = best.sqrt() * k;
-            out[py * N + px] = ((half + 0.5 - d).clamp(0.0, 1.0) * 255.0) as u8;
+            out[py * N + px] = ((((half - d) / ramp) + 0.5).clamp(0.0, 1.0) * 255.0) as u8;
         }
     }
     out
@@ -762,9 +764,10 @@ fn flat_medal(tier: u8, n: u32, mask: Option<&[u8]>) -> Vec<u32> {
             };
             if let Some(m) = mask {
                 let half = r0 * 0.63;
-                let (ix, iy) = ((dx / half * 0.5 + 0.5) * 128.0, (dy / half * 0.5 + 0.5) * 128.0);
-                if ix >= 0.0 && iy >= 0.0 && ix < 128.0 && iy < 128.0 {
-                    let c = m[iy as usize * 128 + ix as usize] as f32 / 255.0;
+                let mn = gpu::ICON_N as f32;
+                let (ix, iy) = ((dx / half * 0.5 + 0.5) * mn, (dy / half * 0.5 + 0.5) * mn);
+                if ix >= 0.0 && iy >= 0.0 && ix < mn && iy < mn {
+                    let c = m[iy as usize * gpu::ICON_N as usize + ix as usize] as f32 / 255.0;
                     let ink = if tier == 7 { WHITE } else { deep };
                     col = col.mix(ink, c * 0.9);
                 }
@@ -796,13 +799,215 @@ fn seed_of(id: &str, tier: u8) -> f32 {
     }
 }
 
-type MedalKey = (&'static str, u8, u32);
+/// (badge id, tier, pixel size, wear code). The wear code packs dust, scratches and cobweb in 16 steps each, so a
+/// list tile is drawn again only when its age visibly changes (about once a day of wear = once a real hour).
+type MedalKey = (&'static str, u8, u32, u16);
+
+fn wear_code(w: &Wear) -> u16 {
+    let q = |x: f32| (x.clamp(0.0, 1.0) * 15.0).round() as u16;
+    q(w.dust) | q(w.scratch) << 4 | q(w.web) << 8
+}
+
+/// This medal's own seed for its cobweb and dust (0..1), sent in wear[1]. Same as the preview's `webSeed`:
+/// FNV-1a of the id, then a murmur3 finish so ids one letter apart still get very different webs.
+fn web_seed(id: &str) -> f32 {
+    let mut h = hash32(id);
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x85eb_ca6b);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0xc2b2_ae35);
+    h ^= h >> 16;
+    (h as f64 / 4294967296.0) as f32
+}
+
+fn wear_of_code(c: u16) -> [f32; 3] {
+    let f = |sh: u16| ((c >> sh) & 15) as f32 / 15.0;
+    [f(0), f(4), f(8)]
+}
+
+fn wear_words(w: &Wear) -> String {
+    if w.clean {
+        return "Spotless. It shines like the day you earned it.".to_string();
+    }
+    let dust = if w.dust < 0.08 { "" } else if w.dust < 0.3 { "a little dust" } else if w.dust < 0.6 { "dusty" } else { "thick with dust" };
+    let web = if w.web < 0.02 { "" } else if w.web < 0.35 { "a cobweb starting" } else if w.web < 0.75 { "cobwebs" } else { "thick with cobwebs" };
+    let scr = if w.scratch < 0.04 { "" } else if w.scratch < 0.15 { "a few hairline scratches" } else if w.scratch < 0.35 { "scratched" } else { "well worn" };
+    let days = w.days.floor() as u32;
+    let when = if w.polishes > 0 {
+        match days {
+            0 => "Polished today".to_string(),
+            1 => "Polished 1 day ago".to_string(),
+            d => format!("Polished {d} days ago"),
+        }
+    } else {
+        format!("On the shelf {days} days")
+    };
+    let parts: Vec<&str> = [dust, web, scr].into_iter().filter(|x| !x.is_empty()).collect();
+    format!("{when} \u{b7} {}", if parts.is_empty() { "nearly clean".to_string() } else { parts.join(", ") })
+}
+
+fn wear_rgba(c: u8) -> Rgba {
+    match c {
+        90..=100 => Rgba::rgb(0x6f, 0xd3, 0x8a),
+        70..=89 => Rgba::rgb(0xc9, 0xd4, 0x6a),
+        50..=69 => Rgba::rgb(0xe0, 0xa8, 0x4f),
+        _ => Rgba::rgb(0xd9, 0x78, 0x5a),
+    }
+}
+
+// ------------------------------------------------------------------ coin text masks (preview `coinTex`)
+
+/// `s` in white with GDI (grey anti-aliasing): (width, height, coverage), 4 px margin all round.
+fn text_strip(s: &str, px: i32, weight: i32) -> (i32, i32, Vec<u8>) {
+    let font = create_font(px.max(6), weight, ui_face(), true);
+    let mut cv = Canvas::new();
+    cv.resize(8, 8);
+    let (tw, th) = cv.measure(font, s);
+    let (w, h) = (tw + 8, th + 8);
+    cv.resize(w, h);
+    cv.clear(Rgba(0, 0, 0, 0));
+    cv.text(font, s, 4, 4, Rgba(255, 255, 255, 255));
+    let a: Vec<u8> = cv.pixels().iter().map(|p| (p >> 24) as u8).collect();
+    unsafe { DeleteObject(font) };
+    if a.len() != (w * h) as usize {
+        return (0, 0, Vec::new());
+    }
+    (w, h, a)
+}
+
+fn strip_at(st: &(i32, i32, Vec<u8>), x: f32, y: f32) -> f32 {
+    let (w, h, a) = st;
+    let (x, y) = (x - 0.5, y - 0.5);
+    let (x0, y0) = (x.floor(), y.floor());
+    let (fx, fy) = (x - x0, y - y0);
+    let g = |xx: i32, yy: i32| if xx < 0 || yy < 0 || xx >= *w || yy >= *h { 0.0 } else { a[(yy * w + xx) as usize] as f32 };
+    let (xi, yi) = (x0 as i32, y0 as i32);
+    (g(xi, yi) * (1.0 - fx) * (1.0 - fy) + g(xi + 1, yi) * fx * (1.0 - fy) + g(xi, yi + 1) * (1.0 - fx) * fy + g(xi + 1, yi + 1) * fx * fy) / 255.0
+}
+
+/// Text drawn twice as big as it lands, then sampled: smooth edges on the curve.
+const TSS: f32 = 2.0;
+
+/// Text along a circle into a RING_N mask: `rad` in half-sizes (1 = the edge), `px` the font size in mask pixels.
+/// Upright towards the centre along the top, or along the bottom (`bottom`), left to right, centred.
+fn arc_text(m: &mut [u8], text: &str, rad: f32, px: f32, weight: i32, bottom: bool) {
+    let n = gpu::RING_N as i32;
+    let half = n as f32 / 2.0;
+    let st = text_strip(text, (px * TSS).round() as i32, weight);
+    if st.0 == 0 {
+        return;
+    }
+    let tw = (st.0 as f32 - 8.0) / TSS;
+    let r0 = rad * half;
+    let span = tw / r0;
+    let hh = st.1 as f32 / TSS / 2.0 + 1.0;
+    let a0 = if bottom { std::f32::consts::FRAC_PI_2 + span / 2.0 } else { -std::f32::consts::FRAC_PI_2 - span / 2.0 };
+    let mid = st.1 as f32 / 2.0;
+    let (ya, yb) = if bottom { ((half + r0 * (span / 2.0).min(1.5).cos() - hh) as i32 - 2, n) } else { (0, (half - r0 * (span / 2.0).min(1.5).cos() + hh) as i32 + 2) };
+    for y in ya.max(0)..yb.min(n) {
+        for x in 0..n {
+            let (dx, dy) = (x as f32 + 0.5 - half, y as f32 + 0.5 - half);
+            let rho = (dx * dx + dy * dy).sqrt();
+            if (rho - r0).abs() > hh {
+                continue;
+            }
+            let th = dy.atan2(dx);
+            let (sa, v) = if bottom { ((a0 - th) * r0, rho - r0) } else { ((th - a0) * r0, r0 - rho) };
+            if sa < -2.0 || sa > tw + 2.0 {
+                continue;
+            }
+            let c = strip_at(&st, 4.0 + sa * TSS, mid + v * TSS);
+            let i = (y * n + x) as usize;
+            m[i] = m[i].max((c * 255.0 + 0.5).min(255.0) as u8);
+        }
+    }
+}
+
+/// One line of text centred at (RING_N / 2, `cy`), shrunk to fit `max_w`.
+fn line_text(m: &mut [u8], text: &str, cy: f32, px: f32, weight: i32, max_w: f32) {
+    let n = gpu::RING_N as i32;
+    let mut st = text_strip(text, (px * TSS).round() as i32, weight);
+    let tw = (st.0 as f32 - 8.0) / TSS;
+    if tw > max_w && tw > 0.0 {
+        st = text_strip(text, (px * TSS * max_w / tw).floor() as i32, weight);
+    }
+    if st.0 == 0 {
+        return;
+    }
+    let (w, h) = (st.0 as f32 / TSS, st.1 as f32 / TSS);
+    let (l, t) = (n as f32 / 2.0 - w / 2.0, cy - h / 2.0);
+    for y in (t.floor() as i32).max(0)..((t + h).ceil() as i32).min(n) {
+        for x in (l.floor() as i32).max(0)..((l + w).ceil() as i32).min(n) {
+            let c = strip_at(&st, (x as f32 + 0.5 - l) * TSS, (y as f32 + 0.5 - t) * TSS);
+            let i = (y * n + x) as usize;
+            m[i] = m[i].max((c * 255.0 + 0.5).min(255.0) as u8);
+        }
+    }
+}
+
+/// The front's ring text for a tier, along the bottom at r = .775 (paint-filled in the coin).
+fn ring_mask(tier: u8) -> Vec<u8> {
+    let n = gpu::RING_N as usize;
+    let mut m = vec![0u8; n * n];
+    let name = TIER_NAMES[(tier.clamp(1, 7) - 1) as usize].to_uppercase();
+    arc_text(&mut m, &format!("RESOURCE MONITOR  \u{b7}  {name} MEDAL"), 0.775, 30.0, 600, true);
+    m
+}
+
+/// The reverse: the medal's name and tier with the date, the maker round the rim, a ring line (engraved in the coin).
+fn back_mask(title: &str, sub: &str) -> Vec<u8> {
+    let n = gpu::RING_N as usize;
+    let mut m = vec![0u8; n * n];
+    line_text(&mut m, title, 472.0, if title.chars().count() > 14 { 80.0 } else { 100.0 }, 700, 600.0);
+    line_text(&mut m, &sub.to_uppercase(), 592.0, 52.0, 600, 620.0);
+    arc_text(&mut m, "RESOURCE MONITOR  \u{b7}  ACHIEVEMENT MEDAL", 0.82, 46.0, 600, false);
+    arc_text(&mut m, "EMULSION LABS", 0.82, 40.0, 600, true);
+    let half = n as f32 / 2.0;
+    for y in 0..n {
+        for x in 0..n {
+            let (dx, dy) = (x as f32 + 0.5 - half, y as f32 + 0.5 - half);
+            let c = (3.5 - ((dx * dx + dy * dy).sqrt() - 330.0).abs()).clamp(0.0, 1.0);
+            if c > 0.0 {
+                m[y * n + x] = m[y * n + x].max((c * 255.0) as u8);
+            }
+        }
+    }
+    m
+}
+
+/// Halve a premultiplied BGRA square (2n -> n), a 2x2 box: the tiles are drawn at twice their size, then this.
+fn down2(src: &[u32], n: u32) -> Vec<u32> {
+    let (n, s) = (n as usize, 2 * n as usize);
+    let mut out = vec![0u32; n * n];
+    if src.len() < s * s {
+        return out;
+    }
+    for y in 0..n {
+        for x in 0..n {
+            let (a, b, c, d) = (src[2 * y * s + 2 * x], src[2 * y * s + 2 * x + 1], src[(2 * y + 1) * s + 2 * x], src[(2 * y + 1) * s + 2 * x + 1]);
+            let ch = |sh: u32| (((a >> sh) & 255) + ((b >> sh) & 255) + ((c >> sh) & 255) + ((d >> sh) & 255) + 2) / 4;
+            out[y * n + x] = ch(24) << 24 | ch(16) << 16 | ch(8) << 8 | ch(0);
+        }
+    }
+    out
+}
+
+/// The coin's pose in the list (preview cards): turned a little to the right and tipped back, so it reads as 3D.
+const COIN_YAW: f32 = 28.0;
+const COIN_PITCH: f32 = -16.0;
 
 /// Cache of medal tiles by (badge id, tier, pixel size) and of icon masks by name.
 #[derive(Default)]
 struct Medals {
     masks: HashMap<&'static str, Vec<u8>>,
     cache: HashMap<MedalKey, Vec<u32>>,
+    /// The full view's age layers (L, haze) for one medal, size and wear step: worked out once, put on every frame.
+    age: Option<(MedalKey, Vec<u32>, Vec<u32>)>,
+    /// The tiles in `cache` are coins (the coin programs were ready when they were drawn).
+    coins: bool,
+    /// Ring text per tier, and the reverse of the coin in the full view (id, tier, mask).
+    rings: HashMap<u8, Vec<u8>>,
+    back: Option<(&'static str, u8, Vec<u8>)>,
 }
 
 impl Medals {
@@ -814,8 +1019,57 @@ impl Medals {
         self.masks.entry(icon).or_insert_with(|| icon_mask(icon));
     }
 
+    fn ensure_ring(&mut self, tier: u8) {
+        self.rings.entry(tier).or_insert_with(|| ring_mask(tier));
+    }
+
+    fn ensure_back(&mut self, id: &'static str, tier: u8, title: &str, sub: &str) {
+        if !matches!(&self.back, Some((i, t, _)) if *i == id && *t == tier) {
+            self.back = Some((id, tier, back_mask(title, sub)));
+        }
+    }
+
+    /// One live coin frame (full view), `n` px square. `age_px`: the size its dust is drawn for (kept while `n` drops
+    /// to keep the frame rate). None when the coin programs are not ready: draw the medal.
+    #[allow(clippy::too_many_arguments)]
+    fn coin_frame(&mut self, id: &'static str, tier: u8, n: u32, age_px: u32, t: f32, yaw: f32, pitch: f32, tilt: (f32, f32), wear: [f32; 3]) -> Option<Vec<u32>> {
+        if !gpu::coins_ready() {
+            return None;
+        }
+        let icon = icon_of(id);
+        self.ensure_mask(icon);
+        self.ensure_ring(tier);
+        let p = gpu::Params {
+            material: material_of(tier),
+            size_px: n.clamp(8, 2048),
+            time_s: t,
+            seed: seed_of(id, tier),
+            tilt,
+            wear: if tier >= 7 { [0.0; 3] } else { [wear[0], web_seed(id), wear[2]] },
+            icon_mask: self.masks.get(icon).map(|m| &m[..]),
+            detail_mask: None,
+            layer: 0,
+            coin: Some(gpu::Coin {
+                yaw,
+                pitch,
+                ext: 1.24,
+                ring: self.rings.get(&tier).map(|m| &m[..]),
+                back: self.back.as_ref().filter(|b| b.0 == id && b.1 == tier).map(|b| &b.2[..]),
+                age_px,
+            }),
+        };
+        let mut out = Vec::new();
+        (gpu::render_batch(&[p], &mut out) && out.len() == 1).then(|| out.swap_remove(0))
+    }
+
     /// Render everything missing in ONE batch (flat fallback when the GPU path is unavailable or fails).
+    /// Coins (once their programs are ready) are drawn at twice the tile size and halved: clean edges on small tiles.
     fn ensure(&mut self, reqs: &[MedalKey]) {
+        let coins = gpu::coins_ready();
+        if coins != self.coins {
+            self.cache.clear();
+            self.coins = coins;
+        }
         let mut need: Vec<MedalKey> = Vec::new();
         for r in reqs {
             if r.1 > 0 && !self.cache.contains_key(r) && !need.contains(r) {
@@ -827,26 +1081,46 @@ impl Medals {
         }
         for k in &need {
             self.ensure_mask(icon_of(k.0));
+            if coins {
+                self.ensure_ring(k.1);
+            }
         }
+        let ss = |px: u32| if coins && px * 2 <= 2048 { px * 2 } else { px };
         let mut out: Vec<Vec<u32>> = Vec::new();
         let mut done = false;
         if gpu::available() {
             let params: Vec<gpu::Params> = need
                 .iter()
-                .map(|&(id, t, px)| gpu::Params {
+                .map(|&(id, t, px, wc)| gpu::Params {
                     material: material_of(t),
-                    size_px: px,
+                    size_px: ss(px),
                     time_s: gpu::still_time(material_of(t)),
                     seed: seed_of(id, t),
                     tilt: (0.0, 0.0),
+                    wear: if t >= 7 { [0.0; 3] } else { let w = wear_of_code(wc); [w[0], web_seed(id), w[2]] },
                     icon_mask: self.masks.get(icon_of(id)).map(|m| &m[..]),
                     detail_mask: None,
+                    layer: 0,
+                    coin: coins.then(|| gpu::Coin {
+                        yaw: COIN_YAW,
+                        pitch: COIN_PITCH,
+                        ext: 1.14,
+                        ring: self.rings.get(&t).map(|m| &m[..]),
+                        back: None,
+                        age_px: 0,
+                    }),
                 })
                 .collect();
             done = gpu::render_batch(&params, &mut out) && out.len() == need.len();
         }
         for (i, &k) in need.iter().enumerate() {
-            let tile = if done { std::mem::take(&mut out[i]) } else { flat_medal(k.1, k.2, self.masks.get(icon_of(k.0)).map(|m| &m[..])) };
+            let tile = if !done {
+                flat_medal(k.1, k.2, self.masks.get(icon_of(k.0)).map(|m| &m[..]))
+            } else if ss(k.2) != k.2 {
+                down2(&out[i], k.2)
+            } else {
+                std::mem::take(&mut out[i])
+            };
             self.cache.insert(k, tile);
         }
         // Keep the cache bounded (sizes change with DPI and the full view).
@@ -857,27 +1131,54 @@ impl Medals {
     }
 
     /// One live frame (full view): GPU at time `t` and `tilt`; the flat medal when there is no GPU.
-    fn frame(&mut self, id: &'static str, tier: u8, px: u32, t: f32, tilt: (f32, f32)) -> Vec<u32> {
+    /// Dust and cobweb do not move with the medal, so their layers are drawn once (per medal, size and wear step) and
+    /// put on each frame here; the GPU then only draws the clean medal (the aged shader cost 10x a frame).
+    fn frame(&mut self, id: &'static str, tier: u8, px: u32, t: f32, tilt: (f32, f32), wear: [f32; 3]) -> Vec<u32> {
         let icon = icon_of(id);
         self.ensure_mask(icon);
         if gpu::available() {
-            let params = [gpu::Params {
+            let mask = self.masks.get(icon).map(|m| &m[..]);
+            let full = [wear[0], web_seed(id), wear[2]];
+            let mk = |layer: u8, wear: [f32; 3]| gpu::Params {
                 material: material_of(tier),
                 size_px: px,
                 time_s: t,
                 seed: seed_of(id, tier),
                 tilt,
-                icon_mask: self.masks.get(icon).map(|m| &m[..]),
+                wear,
+                icon_mask: mask,
                 detail_mask: None,
-            }];
+                layer,
+                coin: None,
+            };
+            let aged = tier < 7 && wear[0] + wear[2] >= 0.002;
+            let q = |x: f32| (x.clamp(0.0, 1.0) * 15.0).round() as u16;
+            let akey: MedalKey = (id, tier, px, q(wear[0]) | q(wear[2]) << 8);
+            if aged && self.age.as_ref().map(|a| a.0) != Some(akey) {
+                let mut out: Vec<Vec<u32>> = Vec::new();
+                self.age = if gpu::render_batch(&[mk(1, full), mk(2, full)], &mut out) && out.len() == 2 {
+                    let h = out.pop().unwrap_or_default();
+                    let l = out.pop().unwrap_or_default();
+                    Some((akey, l, h))
+                } else {
+                    None
+                };
+            }
+            let layers = if aged { self.age.as_ref().filter(|a| a.0 == akey) } else { None };
+            let base = if layers.is_some() { [0.0, full[1], 0.0] } else { full };
             let mut out: Vec<Vec<u32>> = Vec::new();
-            if gpu::render_batch(&params, &mut out) && out.len() == 1 {
-                return out.swap_remove(0);
+            if gpu::render_batch(&[mk(0, base)], &mut out) && out.len() == 1 {
+                let mut f = out.swap_remove(0);
+                if let Some((_, l, h)) = layers {
+                    gpu::age_apply(&mut f, l, h);
+                }
+                return f;
             }
         }
         flat_medal(tier, px, self.masks.get(icon).map(|m| &m[..]))
     }
 }
+
 
 // ------------------------------------------------------------------ text helpers
 
@@ -996,6 +1297,8 @@ const WHEEL_STEP: i32 = 48;
 const FIRST_LADDERS: usize = 5;
 const T_SCROLL: usize = 1;
 const T_FV: usize = 2;
+/// Waits for the coin programs (compiled in the background on the first start after an update), then redraws.
+const T_COINS: usize = 3;
 const WM_MOUSELEAVE_: u32 = 0x02A3;
 const WM_DWMCOLORIZATIONCOLORCHANGED: u32 = 0x0320;
 
@@ -1122,6 +1425,22 @@ struct Fv {
     reduced: bool,
     frame: Vec<u32>,
     frame_key: Option<MedalKey>,
+    /// Polish feedback ("+1 shine") and when it was shown (now_s).
+    pop: Option<(String, f64)>,
+    /// The live 3D coin (Dial family) instead of the flat medal: drag turns it (yaw, pitch in degrees, vy = spin
+    /// left after a throw), a click turns it over.
+    coin: bool,
+    yaw: f32,
+    pitch: f32,
+    vy: f32,
+    /// Dragging: last pointer position and how far it has moved in all (a short one is a click).
+    grab: Option<(i32, i32, i32)>,
+    /// Side of `frame` in px; `scale` = frame / stage, lowered when a frame costs too much (`cost`, ms, smoothed).
+    frame_n: i32,
+    scale: f32,
+    cost: f32,
+    /// A slow device (software rendering): no new frame before this (now_s), so input stays quick.
+    next_at: f64,
 }
 
 struct FvGeom {
@@ -1173,8 +1492,12 @@ struct Ui {
     ov: Option<Surface>,
     snap: Vec<u32>,
     snap_ok: bool,
+    /// T_COINS is running.
+    coin_poll: bool,
     medals: Medals,
     fv: Option<Fv>,
+    /// The full view's Polish button, as last drawn (empty when there is none).
+    polish_r: std::cell::Cell<Rect>,
 }
 
 static mut MAIN: *mut Ui = std::ptr::null_mut();
@@ -1235,8 +1558,10 @@ impl Ui {
             ov: None,
             snap: Vec::new(),
             snap_ok: false,
+            coin_poll: false,
             medals: Medals::default(),
             fv: None,
+            polish_r: std::cell::Cell::new(Rect::default()),
         }
     }
 
@@ -1644,7 +1969,7 @@ impl Ui {
         for row in &self.rows {
             let r = shift(row.r, dy);
             if row.d.tier > 0 && r.b > 0 && r.t < self.ch {
-                v.push(Slot { key: (row.d.id, row.d.tier, rp), cx: r.l + self.sc(6) + self.sc(32), cy: r.t + r.h() / 2 });
+                v.push(Slot { key: (row.d.id, row.d.tier, rp, self.wear_key(row.d.id, row.d.tier)), cx: r.l + self.sc(6) + self.sc(32), cy: r.t + r.h() / 2 });
             }
         }
         for rk in &self.racks {
@@ -1653,7 +1978,7 @@ impl Ui {
                 let tier = self.state.tier(id).min(7);
                 let r = shift(*w, dy);
                 if tier > 0 && r.b > 0 && r.t < self.ch {
-                    v.push(Slot { key: (id, tier, wp), cx: (r.l + r.r) / 2, cy: r.t + self.sc(8) + self.sc(36) });
+                    v.push(Slot { key: (id, tier, wp, self.wear_key(id, tier)), cx: (r.l + r.r) / 2, cy: r.t + self.sc(8) + self.sc(36) });
                 }
             }
         }
@@ -1978,6 +2303,10 @@ impl Ui {
     // -------------------------------------------------------------- painting
 
     fn paint(&mut self, dc: HDC) {
+        if !self.coin_poll && !gpu::coins_ready() && gpu::available() {
+            self.coin_poll = true;
+            unsafe { SetTimer(self.hwnd, T_COINS, 400, None) };
+        }
         let (w, h) = (self.cw.max(1), self.ch.max(1));
         let mut surf = match self.surf.take() {
             Some(s) if s.w == w && s.h == h => s,
@@ -2047,13 +2376,17 @@ enum Cl {
     T(String, HFONT, Rgba, i32),
     Pips(u8, i32),
     Rule(i32),
+    /// Condition: label, percent and bar.
+    Cond(u8, i32),
+    /// The Polish button.
+    Btn(bool, i32),
 }
 
 impl Ui {
     fn fv_geom(&self, tier: u8) -> FvGeom {
         let sc = |v: i32| self.sc(v);
         let mut s = ((self.cw as f32 * 0.44).min(self.ch as f32 * 0.64) as i32).min(sc(520));
-        if tier == 7 {
+        if tier == 7 && !self.fv.as_ref().is_some_and(|f| f.coin) {
             s = s.min(sc(360));
         }
         s = s.max(sc(200));
@@ -2070,6 +2403,51 @@ impl Ui {
             next: Rect { l: self.cw - sc(12) - sc(46), t: self.ch / 2 - sc(32), r: self.cw - sc(12), b: self.ch / 2 + sc(32) },
             close: Rect { l: self.cw - sc(16) - sc(42), t: sc(14), r: self.cw - sc(16), b: sc(14) + sc(42) },
         }
+    }
+
+    /// How worn the medal looks now (the bubble never ages).
+    fn wear_now(&self, id: &str, tier: u8) -> Wear {
+        if tier >= 7 {
+            return Wear { condition: 100, clean: true, ..Wear::default() };
+        }
+        self.state.wear(id, super::observer::unix_ms())
+    }
+
+    fn wear_key(&self, id: &str, tier: u8) -> u16 {
+        if tier >= 7 {
+            0
+        } else {
+            wear_code(&self.wear_now(id, tier))
+        }
+    }
+
+    /// One rub of the polishing cloth on the medal in the full view. Saved right away (merged with the file).
+    fn fv_polish(&mut self) {
+        let Some(fv) = self.fv.as_ref() else { return };
+        let id = fv.ids[fv.i];
+        if self.fv_tier() >= 7 {
+            return;
+        }
+        let (w, gain) = self.state.polish(id, super::observer::unix_ms());
+        let msg = if gain == 0 {
+            "Already spotless".to_string()
+        } else if w.clean {
+            format!("Spotless! +{gain} shine")
+        } else {
+            format!("+{gain} shine")
+        };
+        if gain > 0 {
+            if let Ok(m) = store::save(&self.state) {
+                self.state = m;
+            }
+        }
+        if let Some(fv) = self.fv.as_mut() {
+            fv.pop = if fv.reduced { None } else { Some((msg, now_s())) };
+            fv.frame_key = None;
+        }
+        self.snap_ok = false;
+        self.fv_render();
+        invalidate(self.hwnd);
     }
 
     fn fv_tier(&self) -> u8 {
@@ -2096,6 +2474,16 @@ impl Ui {
             reduced,
             frame: Vec::new(),
             frame_key: None,
+            pop: None,
+            coin: gpu::coins_ready(),
+            yaw: COIN_YAW,
+            pitch: COIN_PITCH,
+            vy: 0.0,
+            grab: None,
+            frame_n: 0,
+            scale: if gpu::is_hardware() { 1.0 } else { 0.5 },
+            cost: 5.0,
+            next_at: 0.0,
         });
         self.hover = None;
         self.snap_ok = false;
@@ -2116,18 +2504,83 @@ impl Ui {
         }
     }
 
+    /// Render the live coin for its pose and time. One coin, the one on screen: nothing while the window is minimised.
+    /// Frame rate first: when a frame costs more than ~12 ms it is drawn with fewer pixels (down to half, scaled up on
+    /// screen), and back up when there is room; the dust keeps the full size (drawn once, see gpu::Coin::age_px).
+    fn fv_render_coin(&mut self) {
+        let Some(fv) = self.fv.as_ref() else { return };
+        if unsafe { IsIconic(self.hwnd) } != 0 {
+            return;
+        }
+        let (id, reduced, t0, scale, grab, last_n) = (fv.ids[fv.i], fv.reduced, fv.t0, fv.scale, fv.grab.is_some(), fv.frame_n);
+        let (yaw0, pitch0, flip) = (fv.yaw, fv.pitch, fv.flip);
+        let tier = self.fv_tier();
+        let s = self.fv_geom(tier).stage.w() as u32;
+        let st = (now_s() - t0) as f32;
+        let sw = if reduced || grab { 0.0 } else { 5.0 };   // a slow idle sway, as the preview
+        let ease = flip * flip * (3.0 - 2.0 * flip);
+        let yaw = yaw0 + sw * (st * 0.4).sin() + 180.0 * ease;
+        let pitch = pitch0 + sw * 0.4 * (st * 0.29).sin();
+        let t = if reduced { gpu::still_time(material_of(tier)) } else { st };
+        let w = self.wear_now(id, tier);
+        let key = (id, tier, s, wear_code(&w));
+        let wear = if tier >= 7 { [0.0; 3] } else { [w.dust, w.scratch, w.web] };
+        if !matches!(&self.medals.back, Some((i, tr, _)) if *i == id && *tr == tier) {
+            if let Some(e) = self.entry(id) {
+                let sub = format!("{} \u{b7} {}", TIER_NAMES[(tier.clamp(1, 7) - 1) as usize], fmt_date(e.earned_ms, self.tz));
+                self.medals.ensure_back(id, tier, &e.title, &sub);
+            }
+        }
+        let n = ((s as f32 * scale).round() as u32).max(64);
+        let c0 = std::time::Instant::now();
+        let frame = self.medals.coin_frame(id, tier, n, s, t, yaw, pitch, (0.0, 0.0), wear);
+        let ms = c0.elapsed().as_secs_f32() * 1000.0;
+        let Some(fv) = self.fv.as_mut() else { return };
+        match frame {
+            Some(f) => {
+                fv.frame = f;
+                fv.frame_n = n as i32;
+                fv.frame_key = Some(key);
+            }
+            None => {
+                fv.coin = false; // the coin path failed: the flat medal from the next frame on
+                fv.frame_key = None;
+                return;
+            }
+        }
+        if last_n == n as i32 && !reduced {
+            fv.cost = fv.cost * 0.8 + ms * 0.2;
+            if fv.cost > 12.0 && fv.scale > 0.5 {
+                fv.scale = (fv.scale - 0.1).max(0.5);
+                fv.cost = 8.0;
+            } else if fv.cost < 5.0 && fv.scale < 1.0 {
+                fv.scale = (fv.scale + 0.05).min(1.0);
+                fv.cost = 5.0;
+            }
+            // already at half the pixels and still slow: leave the UI thread as much time again before the next one
+            fv.next_at = if fv.scale <= 0.5 && fv.cost > 14.0 { now_s() + fv.cost as f64 / 1000.0 } else { 0.0 };
+        }
+    }
+
     /// Render the live medal for the current tilt and time.
     fn fv_render(&mut self) {
         let Some(fv) = self.fv.as_ref() else { return };
+        if fv.coin {
+            return self.fv_render_coin();
+        }
         let (id, reduced, rx, ry, t0, key_old) = (fv.ids[fv.i], fv.reduced, fv.rx, fv.ry, fv.t0, fv.frame_key);
         let tier = self.fv_tier();
         let px = self.fv_geom(tier).stage.w() as u32;
-        let key = (id, tier, px);
+        let w = self.wear_now(id, tier);
+        let key = (id, tier, px, wear_code(&w));
         if !gpu::available() && key_old == Some(key) {
             return;
         }
-        let t = if reduced { gpu::still_time(material_of(tier)) } else { (now_s() - t0) as f32 };
-        let frame = self.medals.frame(id, tier, px, t, (ry / 22.0 * 0.5, rx / 16.0 * 0.5));
+        // metals and stones move at a third of real time (calm); the bubble keeps its own pace
+        let pace = if tier >= 7 { 1.0 } else { 1.0 / 3.0 };
+        let t = if reduced { gpu::still_time(material_of(tier)) } else { (now_s() - t0) as f32 * pace };
+        let wear = if tier >= 7 { [0.0; 3] } else { [w.dust, w.scratch, w.web] };
+        let frame = self.medals.frame(id, tier, px, t, (ry / 22.0 * 0.5, rx / 16.0 * 0.5), wear);
         if let Some(fv) = self.fv.as_mut() {
             fv.frame = frame;
             fv.frame_key = Some(key);
@@ -2139,17 +2592,19 @@ impl Ui {
         let Some(fv) = self.fv.as_ref() else { return (0.0, 0.0) };
         let g = self.fv_geom(self.fv_tier());
         let now = now_s();
+        // metals and stones: a third of the hover tilt and idle sway (calm); the bubble keeps its own
+        let amp = if self.fv_tier() >= 7 { 1.0 } else { 1.0 / 3.0 };
         match fv.ptr {
             Some((px, py)) if now - fv.moved < 4.0 => {
                 let (cx, cy) = ((g.stage.l + g.stage.r) as f32 / 2.0, (g.stage.t + g.stage.b) as f32 / 2.0);
-                let ty = ((px as f32 - cx) / (self.cw as f32 / 2.0)).clamp(-1.0, 1.0) * 22.0;
-                let tx = -((py as f32 - cy) / (self.ch as f32 / 2.0)).clamp(-1.0, 1.0) * 16.0;
+                let ty = ((px as f32 - cx) / (self.cw as f32 / 2.0)).clamp(-1.0, 1.0) * 22.0 * amp;
+                let tx = -((py as f32 - cy) / (self.ch as f32 / 2.0)).clamp(-1.0, 1.0) * 16.0 * amp;
                 (tx, ty)
             }
             _ if fv.reduced => (0.0, 0.0),
             _ => {
                 let t = (now - fv.t0) as f32;
-                (3.5 * (0.7 * t).sin(), 9.0 * (0.5 * t).sin())
+                (3.5 * amp * (0.7 * t).sin(), 9.0 * amp * (0.5 * t).sin())
             }
         }
     }
@@ -2166,9 +2621,20 @@ impl Ui {
             let k = 1.0 - (-dt * 16.0).exp();
             fv.rx += (tx - fv.rx) * k;
             fv.ry += (ty - fv.ry) * k;
+            if fv.coin && fv.grab.is_none() && !fv.reduced && fv.vy != 0.0 {
+                let f = dt * 60.0; // the spin after a throw runs down (preview: .94 a frame)
+                fv.yaw = (fv.yaw + fv.vy * f).rem_euclid(360.0);
+                fv.vy *= 0.94f32.powf(f);
+                if fv.vy.abs() < 0.01 {
+                    fv.vy = 0.0;
+                }
+            }
             fv.flip += (fv.flip_t - fv.flip) * (1.0 - (-dt * 6.5).exp());
             if (fv.flip_t - fv.flip).abs() < 0.004 {
                 fv.flip = fv.flip_t;
+            }
+            if fv.coin && now < fv.next_at {
+                return;
             }
         }
         self.fv_render();
@@ -2176,6 +2642,9 @@ impl Ui {
     }
 
     fn fv_flip(&mut self) {
+        if self.fv_tier() >= 7 && !self.fv.as_ref().is_some_and(|f| f.coin) {
+            return; // the bubble is a sphere: it has no back to turn to, and its mark always faces you
+        }
         if let Some(fv) = self.fv.as_mut() {
             fv.flip_t = 1.0 - fv.flip_t;
             if fv.reduced {
@@ -2195,6 +2664,8 @@ impl Ui {
             fv.flip = 0.0;
             fv.flip_t = 0.0;
             fv.frame_key = None;
+            fv.coin = gpu::coins_ready();
+            fv.frame_n = 0;
         }
         self.fv_render();
         invalidate(self.hwnd);
@@ -2216,6 +2687,9 @@ impl Ui {
         let r = g.stage.w() / 2;
         if (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r {
             return 1;
+        }
+        if self.polish_r.get().contains(x, y) {
+            return 6;
         }
         if x >= g.card_l && x < g.card_l + g.card_w {
             return 5; // the info card: inert
@@ -2255,8 +2729,10 @@ impl Ui {
         let (cx, cy) = (((g.stage.l + g.stage.r) / 2) as f32, ((g.stage.t + g.stage.b) / 2) as f32);
         let ang = fv.flip * std::f32::consts::PI;
         let c = ang.cos();
-        let sxm = (c.abs() * fv.ry.to_radians().cos()).max(0.02);
-        let sym = fv.rx.to_radians().cos();
+        // The bubble is a sphere: tilting it does not squash it, and its mark never turns (only the film's light moves).
+        let bub = self.fv_tier() >= 7;
+        let sxm = if bub { 1.0 } else { (c.abs() * fv.ry.to_radians().cos()).max(0.02) };
+        let sym = if bub { 1.0 } else { fv.rx.to_radians().cos() };
         let sh = Rect {
             l: (cx - s as f32 * 0.35 * (1.0 - 0.28 * ang.sin().abs())) as i32,
             t: (cy + s as f32 * 0.5 + s as f32 * 0.02) as i32,
@@ -2264,7 +2740,7 @@ impl Ui {
             b: (cy + s as f32 * 0.5 + s as f32 * 0.02) as i32 + (s as f32 * 0.05) as i32,
         };
         cv.fill_round(sh, sh.h() as f32 / 2.0, Rgba(0, 0, 0, 100));
-        if c < 0.0 {
+        if c < 0.0 && !fv.coin {
             self.draw_back(cv, &e, cx, cy, s, sxm, sym);
         }
         if fv.focus == 0 && self.focus_visible {
@@ -2289,7 +2765,26 @@ impl Ui {
             items.push(Cl::T(cv.ellipsize(f.normal, nline, inner), f.normal, if i + 1 == e.notes.len() { soft } else { ink }, if i == 0 { sc(10) } else { sc(2) }));
         }
         items.push(Cl::Rule(sc(12)));
-        let hint = "Tilt with the pointer. Click, Enter or Space turns the medal to its spec sheet. \u{2190} \u{2192} go through the list, Esc closes.";
+        if e.tier < 7 {
+            let w = self.wear_now(e.id, e.tier);
+            items.push(Cl::Cond(w.condition, sc(10)));
+            for (i, l) in wrap_dc(mdc, f.small, &wear_words(&w), inner, 2).into_iter().enumerate() {
+                items.push(Cl::T(l, f.small, soft, if i == 0 { sc(6) } else { 0 }));
+            }
+            items.push(Cl::Btn(w.clean, sc(10)));
+            let note = format!("Ages like the real thing: 1 hour here is 1 day on the shelf. Cobwebs start after 20 days and grow for months. One rub clears the webs, the dust takes a few more. Shine {}", self.state.sh);
+            for (i, l) in wrap_dc(mdc, f.small, &note, inner, 4).into_iter().enumerate() {
+                items.push(Cl::T(l, f.small, soft, if i == 0 { sc(8) } else { 0 }));
+            }
+            items.push(Cl::Rule(sc(12)));
+        } else {
+            self.polish_r.set(Rect::default());
+        }
+        let hint = if fv.coin {
+            "Drag the coin to turn it. Click, Enter or Space turns it over. \u{2190} \u{2192} go through the list, Esc closes."
+        } else {
+            "Tilt with the pointer. Click, Enter or Space turns the medal to its spec sheet. \u{2190} \u{2192} go through the list, Esc closes."
+        };
         for (i, l) in wrap_dc(mdc, f.small, hint, inner, 4).into_iter().enumerate() {
             items.push(Cl::T(l, f.small, soft, if i == 0 { sc(8) } else { 0 }));
         }
@@ -2300,6 +2795,8 @@ impl Ui {
                 Cl::T(_, font, _, gap) => gap + th(*font),
                 Cl::Pips(_, gap) => gap + sc(8),
                 Cl::Rule(gap) => gap + 1,
+                Cl::Cond(_, gap) => gap + th(self.x.title) + sc(4) + sc(8),
+                Cl::Btn(_, gap) => gap + sc(42),
             })
             .sum::<i32>()
             + 2 * pad;
@@ -2326,12 +2823,54 @@ impl Ui {
                     cv.fill_rect(Rect { l: card.l + pad, t: y, r: card.r - pad, b: y + 1 }, Rgba(255, 255, 255, 0x22));
                     y += 1;
                 }
+                Cl::Cond(c, gap) => {
+                    y += gap;
+                    let hh = th(self.x.title);
+                    cv.text(f.caps, "CONDITION", card.l + pad, y + hh - th(f.caps) - sc(2), soft);
+                    let pct = format!("{c}%");
+                    let pw = measure_dc(mdc, self.x.title, &pct).0;
+                    cv.text(self.x.title, &pct, card.r - pad - pw, y, ink);
+                    y += hh + sc(4);
+                    let track = Rect { l: card.l + pad, t: y, r: card.r - pad, b: y + sc(8) };
+                    cv.fill_round(track, sc(4) as f32, Rgba(255, 255, 255, 0x1c));
+                    let fw = (track.w() as f32 * *c as f32 / 100.0) as i32;
+                    if fw > sc(4) {
+                        cv.fill_round(Rect { r: track.l + fw, ..track }, sc(4) as f32, wear_rgba(*c));
+                    }
+                    y += sc(8);
+                }
+                Cl::Btn(clean, gap) => {
+                    y += gap;
+                    let r = Rect { l: card.l + pad, t: y, r: card.r - pad, b: y + sc(42) };
+                    self.polish_r.set(r);
+                    let hot = fv.hover == 6;
+                    cv.fill_round(r, sc(10) as f32, if hot { Rgba(52, 60, 72, 245) } else { Rgba(36, 42, 50, 240) });
+                    cv.stroke_round(r, sc(10) as f32, if *clean { Rgba(0x6f, 0xd3, 0x8a, 255) } else if hot { accent } else { Rgba(0x5c, 0x66, 0x75, 255) });
+                    text_c(cv, f.bold, if *clean { "Spotless" } else { "Polish" }, (r.l + r.r) / 2, (r.t + r.b) / 2, if *clean { Rgba::rgb(0x9f, 0xf0, 0xb4) } else { ink });
+                    if fv.focus == 4 && self.focus_visible {
+                        focus_ring(cv, inflate(r, sc(2)), sc(12) as f32, accent);
+                    }
+                    if let Some((msg, at)) = &fv.pop {
+                        let age = (now_s() - at) as f32;
+                        if age < 0.9 {
+                            let a = (255.0 * (1.0 - age / 0.9)) as u8;
+                            let mw = measure_dc(mdc, f.bold, msg).0;
+                            cv.text(f.bold, msg, r.r - mw, r.t - th(f.bold) - (age * sc(30) as f32) as i32, Rgba(0xff, 0xe0, 0x8a, a));
+                        }
+                    }
+                    y += sc(42);
+                }
             }
         }
 
         ov.load(cv);
         surf.over_surface(ov);
-        if c >= 0.0 && !fv.frame.is_empty() {
+        if fv.coin && fv.frame_n > 0 && !fv.frame.is_empty() {
+            // the coin turns itself (3D): drawn square, scaled up when it was drawn with fewer pixels
+            let (w, h) = (surf.w, surf.h);
+            let k = s as f32 / fv.frame_n as f32;
+            draw_tile(surf.px(), w, h, &fv.frame, fv.frame_n, cx, cy, k, k, 1.0, (0, h));
+        } else if c >= 0.0 && !fv.frame.is_empty() && !fv.coin {
             let (w, h) = (surf.w, surf.h);
             let px = fv.frame_key.map_or(s, |k| k.2 as i32);
             draw_tile(surf.px(), w, h, &fv.frame, px, cx, cy, sxm, sym, 1.0, (0, h));
@@ -2443,7 +2982,10 @@ fn on_key(hwnd: HWND, key: u16) {
             VK_RIGHT => u.fv_step(1),
             VK_TAB => {
                 let n = u.fv.as_ref().map_or(0, |f| f.ids.len());
-                let order: Vec<u8> = if n > 1 { vec![0, 1, 2, 3] } else { vec![0, 3] };
+                let mut order: Vec<u8> = if n > 1 { vec![0, 1, 2, 3] } else { vec![0, 3] };
+                if u.fv_tier() < 7 {
+                    order.insert(1, 4); // the Polish button
+                }
                 let cur = u.fv.as_ref().map_or(0, |f| f.focus);
                 let i = order.iter().position(|x| *x == cur).unwrap_or(0) as i32;
                 let next = order[(i + if shift_down { -1 } else { 1 }).rem_euclid(order.len() as i32) as usize];
@@ -2458,6 +3000,7 @@ fn on_key(hwnd: HWND, key: u16) {
                     0 => u.fv_flip(),
                     1 => u.fv_step(-1),
                     2 => u.fv_step(1),
+                    4 => u.fv_polish(),
                     _ => u.close_fv(),
                 }
             }
@@ -2516,6 +3059,22 @@ fn on_mouse_move(hwnd: HWND, x: i32, y: i32) {
         let mut t = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
         u.tracking = unsafe { TrackMouseEvent(&mut t) } != 0;
     }
+    if let Some(fv) = u.fv.as_mut() {
+        if let Some((lx, ly, moved)) = fv.grab {
+            // drag turns the coin (preview: .5 degree a pixel across, .4 up and down; down tips the top away)
+            let k = 96.0 / u.dpi.max(96) as f32;
+            let (dx, dy) = (x - lx, y - ly);
+            fv.yaw = (fv.yaw + dx as f32 * 0.5 * k).rem_euclid(360.0);
+            fv.pitch = (fv.pitch + dy as f32 * 0.4 * k).clamp(-70.0, 70.0);
+            fv.vy = dx as f32 * 0.5 * k;
+            fv.grab = Some((x, y, moved + dx.abs() + dy.abs()));
+            if fv.reduced {
+                u.fv_render();
+                invalidate(hwnd);
+            }
+            return;
+        }
+    }
     if u.fv.is_some() {
         let region = u.fv_region(x, y);
         let hover = if region == 5 || region == 0 { 0 } else { region };
@@ -2565,9 +3124,22 @@ fn on_button_down(hwnd: HWND, x: i32, y: i32) {
             4 => u.close_fv(),
             2 => u.fv_step(-1),
             3 => u.fv_step(1),
+            6 => {
+                if let Some(fv) = u.fv.as_mut() {
+                    fv.focus = 4;
+                }
+                u.fv_polish();
+            }
             1 => {
                 if let Some(fv) = u.fv.as_mut() {
                     fv.focus = 0;
+                    if fv.coin {
+                        fv.grab = Some((x, y, 0));
+                        fv.vy = 0.0;
+                        unsafe { SetCapture(hwnd) };
+                        invalidate(hwnd);
+                        return;
+                    }
                 }
                 u.fv_flip();
             }
@@ -2609,6 +3181,18 @@ fn on_button_down(hwnd: HWND, x: i32, y: i32) {
 
 fn on_button_up(hwnd: HWND, x: i32, y: i32) {
     let Some(u) = ui() else { return };
+    let click = u.sc(4);
+    if let Some(g) = u.fv.as_mut().and_then(|f| f.grab.take()) {
+        unsafe { ReleaseCapture() };
+        if g.2 < click {
+            if let Some(fv) = u.fv.as_mut() {
+                fv.vy = 0.0;
+            }
+            u.fv_flip(); // a click, not a drag: turn it over
+        }
+        invalidate(hwnd);
+        return;
+    }
     if u.drag != Drag::None {
         u.drag = Drag::None;
         unsafe { ReleaseCapture() };
@@ -2736,6 +3320,9 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         WM_CAPTURECHANGED => {
             if let Some(u) = ui() {
                 u.drag = Drag::None;
+                if let Some(f) = u.fv.as_mut() {
+                    f.grab = None;
+                }
             }
             0
         }
@@ -2757,6 +3344,21 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
                 T_FV => {
                     if let Some(u) = ui() {
                         u.fv_tick();
+                    }
+                }
+                T_COINS => {
+                    if gpu::coins_ready() {
+                        KillTimer(hwnd, T_COINS);
+                        if let Some(u) = ui() {
+                            u.coin_poll = false;
+                            if let Some(f) = u.fv.as_mut() {
+                                f.coin = true;
+                                f.frame_key = None;
+                                f.frame_n = 0;
+                            }
+                            u.fv_render();
+                        }
+                        invalidate(hwnd);
                     }
                 }
                 _ => {}
@@ -2832,6 +3434,7 @@ pub fn register(hinst: HINSTANCE) {
 /// Open the Achievements window, or focus the open one (it keeps its own copy of the state).
 pub fn open(_owner: HWND, state: &State, dark: bool) {
     unsafe {
+        let state = &merge(state, &store::load()); // polishing is saved by this window; the app's copy may lag
         if let Some(u) = ui() {
             let hwnd = u.hwnd;
             u.state = state.clone();
@@ -2867,7 +3470,7 @@ pub fn open(_owner: HWND, state: &State, dark: bool) {
 /// Update an open Achievements window with a new state (nothing happens when it is closed).
 pub fn refresh(state: &State) {
     let Some(u) = ui() else { return };
-    u.state = state.clone();
+    u.state = merge(state, &u.state); // keep polishing done here since the app last saved
     u.layout();
     u.snap_ok = false;
     if let Some(fv) = u.fv.as_ref() {
@@ -3052,7 +3655,7 @@ impl Pop {
             } else {
                 6.0
             };
-            self.medals.ensure(&[(cur.medal_id, cur.tier, cur.mpx)]);
+            self.medals.ensure(&[(cur.medal_id, cur.tier, cur.mpx, 0)]);
             let (dur, hwnd) = (cur.dur, self.hwnd);
             self.cur = Some(cur);
             self.place();
@@ -3229,7 +3832,7 @@ impl Pop {
         let scale = if self.reduced { 1.0 } else { 0.35 + 0.65 * rise };
         let scale = if is_level && !self.reduced { scale * (1.0 + 0.06 * ((t / 0.45).clamp(0.0, 1.0) as f32 * std::f32::consts::PI).sin()) } else { scale };
         let off_y = if self.reduced { 0.0 } else { 40.0 * dpi_scale(self.dpi) * (1.0 - rise) };
-        if let Some(tile) = self.medals.get((cur.medal_id, cur.tier, cur.mpx)) {
+        if let Some(tile) = self.medals.get((cur.medal_id, cur.tier, cur.mpx, 0)) {
             let (sw, sh) = (surf.w, surf.h);
             let n = cur.mpx as i32;
             draw_tile(surf.px(), sw, sh, tile, n, (mcx - n / 2) as f32 + n as f32 / 2.0, (mcy - n / 2) as f32 + n as f32 / 2.0 + off_y, scale, scale, all, (0, sh));
@@ -3387,5 +3990,22 @@ pub fn close_all() {
             let h = p.hwnd;
             DestroyWindow(h);
         }
+    }
+}
+
+#[cfg(test)]
+mod seed_tests {
+    use super::web_seed;
+
+    /// Same badge id = same cobweb and dust every time, and the same seed as the preview page's `webSeed`
+    /// (values from the page's own function).
+    #[test]
+    fn web_seed_matches_the_preview() {
+        for (id, h) in [("watch", 79835757u32), ("tier0", 2413277403), ("flow", 517522467)] {
+            let want = (h as f64 / 4294967296.0) as f32;
+            assert_eq!(web_seed(id), want, "{id}");
+            assert_eq!(web_seed(id), web_seed(id));
+        }
+        assert!((web_seed("tier0") - web_seed("tier1")).abs() > 0.1, "ids one letter apart differ a lot");
     }
 }

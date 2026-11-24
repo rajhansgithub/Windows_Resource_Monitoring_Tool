@@ -2,7 +2,7 @@
 
 Built with the `achievements` skill (rajhansgithub/Coding-Harness-Plugins, v0.3.0).
 Live preview (the one living artifact): https://claude.ai/artifact/LwqFbEA6tyBFGF5jUNpCNX
-Source of that page: `docs/achievements-preview.html`.
+Source of that page: `docs/preview/` (index.html, styles.css, js/: gl.js shared WebGL context and shader compiles, age.js, 3d.js, app.js, and gem.js, bubble.js, versions.js loaded when an older version tab opens).
 
 ## Mode and theme
 
@@ -105,3 +105,19 @@ Records: gate open and all 4 pieces at Emulsion. Checked by the observer after r
 `%APPDATA%\ResourceMonitor\achievements.json` (roaming = follows the user) mirrored to
 `%LOCALAPPDATA%\ResourceMonitor\achievements.json`. Under 4 KB. Merge = union / max (earliest dates, max tiers/counters/XP).
 Pending moments in `achievements-new.json` (local). State version `v: 1`.
+
+## Aging (v4 rules, achievements plugin v0.6.0)
+
+- 1 real hour = 1 day on the shelf. The clock starts when that tier is earned. A new tier is a new, clean medal.
+- Dust and cobwebs only, no scratches. The Emulsion bubble never ages.
+- State: `ag` in achievements.json, `"badgeId:tier": [startMs, dustLeft, webClearedMs]`. Entries for passed tiers drop.
+  Merge: the newest start wins, then the least dust.
+- Dust shown = dustLeft x `min(1, 2(1 - e^(-days/527)))` (days from start; full at a year).
+- Cobweb = `((days - 20) / 330)^0.8`, capped at 1, days from the last rub (none before day 20, full at day 350).
+- Polish (several clicks): a rub clears the cobweb (it regrows from that day) and keeps 70% of the dust; the dust clock
+  keeps running. Spotless (dust left < 5%, or shown dust < 2%): the clocks start again. 1 shine point per rub, +10 at spotless.
+  Shine points are their own counter (`sh`), never XP.
+- Every medal has its own cobweb and dust pattern: seed = FNV-1a of the badge id + murmur3 finish (`web_seed`, same as the
+  preview's `webSeed`).
+- Look = the owner's saved tuning (preview "Save for Claude", 366 days): see the HLSL constants in `src/achievements/shaders.rs`.
+
