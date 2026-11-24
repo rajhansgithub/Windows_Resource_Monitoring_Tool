@@ -2059,7 +2059,7 @@ vec3 dcol(float y){   // the pulse's colour by height (mark units)
   vec3 dc=mix(vec3(1.,.42,.23), vec3(1.,.86,.45), smoothstep(-.9,-.3,y));
   dc=mix(dc, vec3(1.), smoothstep(-.25,0.,y)); dc=mix(dc, vec3(.55,.85,1.), smoothstep(.1,.45,y)); return mix(dc, vec3(.31,.55,1.), smoothstep(.5,.95,y));
 }
-// ---- the pulse as a liquid: a tube of liquid in the shape of the mark, floating inside the sphere (object space, turns with it)
+// ---- the pulse as a liquid: a tube of liquid in the shape of the mark, floating inside the sphere (view space: it never turns)
 float sg3(vec3 p, vec3 a, vec3 b){ vec3 pa=p-a, ba=b-a; float h=clamp(dot(pa,ba)/dot(ba,ba),0.,1.); return length(pa-ba*h); }
 float smn(float a, float b, float k){ float h=clamp(.5+.5*(b-a)/k,0.,1.); return mix(b,a,h)-k*h*(1.-h); }
 // tiny bubbles that belong to the pulse: fixed places round the line (same in the flat badge), drifting a little
@@ -2126,8 +2126,8 @@ void main(){
   vec3 f2=film(thick(p2),ct2);
   vec3 back=f2*(uFilmIn*.03+uEdgeCol*1.4*F2)*(.25+uRefl*(min(env(reflect(d,-n2)),1.65)-.05))*.6;
   float tz=(0.-o.z)/d.z; vec2 q0=(o+d*tz).xy;
-  // the pulse inside: a tube of liquid, ray-marched in the bubble's own space so it turns with it
-  vec3 ro=uRT*p1, rdo=uRT*d;
+  // the pulse inside: a tube of liquid, ray-marched in view space: it always faces you while the bubble (its film) turns
+  vec3 ro=p1, rdo=d;
   float tmax=2.*sh, tt=0., hmin=1e3; bool hit=false;
   // only march where the ray passes the pulse's box
   vec3 bi=1./rdo, t0=(-vec3(.75,.5,.2)-ro)*bi, t1=(vec3(.75,.5,.2)-ro)*bi;
@@ -2144,13 +2144,13 @@ void main(){
       if(tt>tb) break;
     }
   }
-  // soft light round the pulse (centre light, breathing), in the bubble's space too
+  // soft light round the pulse (centre light, breathing), facing you too
   vec3 ph=ro+rdo*clamp(-ro.z/(abs(rdo.z)>1e-3?rdo.z:1e-3),0.,tmax);
   inner+=glow(ph.xy/.62,k)*.38*smoothstep(.0,.35,abs(rdo.z));
   if(hit){
     // clear water: mostly what is behind it, bent (refraction), dark where the surface turns away (light leaves the
     // other way), the studio on its surface (reflection), a hint of soap-film colour, and a little of the logo's colour
-    vec3 pp=ro+rdo*tt, no=liqN(pp), nw=uR*no, pw=uR*pp;
+    vec3 pp=ro+rdo*tt, no=liqN(pp), nw=no, pw=pp;
     float ndv=clamp(-dot(nw,d),0.,1.);
     float Fl=.02+.98*pow(1.-ndv,5.);
     vec3 R=reflect(d,nw);
@@ -2159,7 +2159,7 @@ void main(){
     vec3 pb=pw+rr*(-bb+sqrt(hb)), nb=normalize(pb);
     float cb=clamp(dot(rr,nb),0.,1.);
     vec3 behind=film(thick(pb),sqrt(1.-(1.-cb*cb)/1.77))*(uFilmIn*.03+uEdgeCol*1.4*(.02+.98*pow(1.-cb,5.)))*.6;
-    vec3 ro2=uRT*pw, rd2=uRT*rr;
+    vec3 ro2=pw, rd2=rr;
     vec3 pg=ro2+rd2*clamp(-ro2.z/(abs(rd2.z)>1e-3?rd2.z:1e-3),0.,2.);
     behind+=glow(pg.xy/.62,k)*.38+min(env(rr),2.)*.05;
     float edge=mix(1.,smoothstep(.05,.55,ndv),clamp(uLqRefr*1.6,0.,1.));
@@ -2304,22 +2304,68 @@ void main(){
 }`;
 
   const LOOK3 = { lqRefr: 'uLqRefr', lqRefl: 'uLqRefl', lqFilm: 'uLqFilm', lqTint: 'uLqTint', lqWobble: 'uLqWob', lqDrops: 'uLqDrops', lqDropSize: 'uLqDropS', lqMove: 'uLqMove', dotRefr: 'uDotRefr', dotRing: 'uDotRing', refrPeriod: 'uRefrT', edgeWidth: 'uEdgeW', edgeVary: 'uEdgeVary', edgeColour: 'uEdgeCol', rimLine: 'uRim', saturation: 'uSat', filmInside: 'uFilmIn', filmThick: 'uThick', flowSpeed: 'uFlow', reflection: 'uRefl', glow: 'uGlow', breath: 'uBreath', motionAmt: 'uMotAmt', motionTime: 'uMotT' };
-  let cv = null, gl = null, progs = {}, cur = null, raf = 0, t0 = 0, kind = 'dia', R = [1, 0, 0, 0, 1, 0, 0, 0, 1], dirty = true, still = false, wear = [0, 0], opt = {}, texI = null, texB = null;
-  function prog(src) {
-    const sh = (type, s) => { const x = gl.createShader(type); gl.shaderSource(x, s); gl.compileShader(x); if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) { console.info('[RM] 3d shader:', gl.getShaderInfoLog(x)); return null; } return x; };
-    const v = sh(gl.VERTEX_SHADER, VS), f = sh(gl.FRAGMENT_SHADER, src);
-    if (!v || !f) return null;
-    const p = gl.createProgram(); gl.attachShader(p, v); gl.attachShader(p, f); gl.bindAttribLocation(p, 0, 'a'); gl.linkProgram(p);
-    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) return null;
-    const U = {}; for (const k of ['uRes', 'uTime', 'uR', 'uRT', 'uKind', 'uWear', 'uAge', 'uMetal', 'uIcon', 'uIconOn', 'uBack', 'uBackOn']) U[k] = gl.getUniformLocation(p, k);
-    const L = {}; for (const k in LOOK3) L[k] = gl.getUniformLocation(p, LOOK3[k]);
-    return { p, U, L };
+  let gen = 0, cv = null, gl = null, glc = null, ctx2 = null, progs = {}, cur = null, raf = 0, t0 = 0, kind = 'dia', R = [1, 0, 0, 0, 1, 0, 0, 0, 1], dirty = true, still = false, wear = [0, 0], opt = {}, texI = null, texB = null;
+  const SRC = () => ({ bubble: BUBBLE, medal: MEDAL, gem: GEM });
+  /** The one WebGL context of the 3D view, made once and kept (making a context and compiling these shaders took a
+      second or more: that was the freeze on opening the full view and on every arrow key). */
+  function ctx() {
+    if (gl && !gl.isContextLost()) return gl;
+    progs = {}; gl = null;
+    glc = glc || document.createElement('canvas');
+    if (!glc._lost) { glc._lost = true; glc.addEventListener('webglcontextlost', (ev) => { ev.preventDefault(); progs = {}; cur = null; }); }
+    try { gl = glc.getContext('webgl', { premultipliedAlpha: true, antialias: false, alpha: true }); } catch (e) { gl = null; }
+    if (!gl) return null;
+    const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    return gl;
   }
+  /** Start compiling a program without waiting for it (KHR_parallel_shader_compile lets the driver do it off the page's thread). */
+  function begin(name) {
+    if (progs[name]) return progs[name];
+    const sh = (type, src) => { const x = gl.createShader(type); gl.shaderSource(x, src); gl.compileShader(x); return x; };
+    const v = sh(gl.VERTEX_SHADER, VS), f = sh(gl.FRAGMENT_SHADER, SRC()[name]);
+    const p = gl.createProgram(); gl.attachShader(p, v); gl.attachShader(p, f); gl.bindAttribLocation(p, 0, 'a'); gl.linkProgram(p);
+    return (progs[name] = { p, v, f, ready: false });
+  }
+  const PAR = () => gl && gl.getExtension('KHR_parallel_shader_compile');
+  function done(name) { const x = progs[name], e = PAR(); return !!x && (x.ready || !e || gl.getProgramParameter(x.p, e.COMPLETION_STATUS_KHR)); }
+  /** The program, compiled (waits only if it is not done yet). */
+  function prog(name) {
+    const x = begin(name);
+    if (x.ready) return x.ok ? x : null;
+    x.ready = true;
+    if (!gl.getProgramParameter(x.p, gl.LINK_STATUS)) {
+      console.info('[RM] 3d shader:', gl.getShaderInfoLog(x.f) || gl.getProgramInfoLog(x.p)); x.ok = false; return null;
+    }
+    x.ok = true;
+    const U = {}; for (const k of ['uRes', 'uTime', 'uR', 'uRT', 'uKind', 'uWear', 'uAge', 'uMetal', 'uIcon', 'uIconOn', 'uBack', 'uBackOn']) U[k] = gl.getUniformLocation(x.p, k);
+    const L = {}; for (const k in LOOK3) L[k] = gl.getUniformLocation(x.p, LOOK3[k]);
+    x.U = U; x.L = L;
+    return x;
+  }
+  /** Warm up after the page has loaded: compile all three in the background so the first full view opens at once. */
+  function warm() {
+    if (!ctx()) return;
+    const names = ['medal', 'gem', 'bubble'], par = !!PAR();
+    if (par) names.forEach(begin);
+    const step = () => {
+      const n = names.find((k) => !(progs[k] && progs[k].ready));
+      if (!n) return;
+      if (!par) { prog(n); }                       // no parallel compile: one program per idle slot
+      else if (done(n)) prog(n);
+      idle(step);
+    };
+    idle(step);
+  }
+  const idle = (f) => (window.requestIdleCallback ? requestIdleCallback(f, { timeout: 600 }) : setTimeout(f, 120));
+  if (typeof document !== 'undefined') { const go = () => setTimeout(() => idle(warm), 400); if (document.readyState === 'complete') go(); else window.addEventListener('load', go); }
   function frame(now) {
     raf = 0;
     if (!gl || !cur) return;
     if (!document.hidden && (dirty || !still)) {
       const t = still ? 9 : (now - t0) / (kind === 'bubble' ? 1000 : 3000);   // stones move at a third of real time
+      if (glc.width !== cv.width || glc.height !== cv.height) { glc.width = cv.width; glc.height = cv.height; }
       gl.viewport(0, 0, cv.width, cv.height);
       gl.useProgram(cur.p);
       gl.uniform2f(cur.U.uRes, cv.width, cv.height); gl.uniform1f(cur.U.uTime, t); gl.uniform1f(cur.U.uKind, kind === 'ruby' ? 1 : 0);
@@ -2338,6 +2384,7 @@ void main(){
       }
       gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      ctx2.clearRect(0, 0, cv.width, cv.height); ctx2.drawImage(glc, 0, 0);   // onto the visible canvas
       dirty = false;
     }
     raf = requestAnimationFrame(frame);
@@ -2356,6 +2403,7 @@ void main(){
   /** The medal's engravings: the icon (front) and the name round the back. Drawn white on clear, edges softened like the flat medal's. */
   function medalTextures(o, g) {
     const mk = () => { const c = document.createElement('canvas'); c.width = c.height = 512; return c; };
+    const my = gen;   // a later start() (another medal) must not get this medal's icon
     const b = mk(), x = b.getContext('2d');
     x.fillStyle = '#fff'; x.textAlign = 'center'; x.textBaseline = 'middle';
     const font = '"Chakra Petch", "Segoe UI", system-ui, sans-serif';
@@ -2367,12 +2415,12 @@ void main(){
     let a = -Math.PI / 2 - (x.measureText(ring).width * step) / 2;
     for (const ch of ring + ring) { const w = x.measureText(ch).width; x.save(); x.translate(256 + Math.cos(a + w * step / 2) * R0, 256 + Math.sin(a + w * step / 2) * R0); x.rotate(a + w * step / 2 + Math.PI / 2); x.fillText(ch, 0, 0); x.restore(); a += w * step; }
     x.lineWidth = 4; x.strokeStyle = '#fff'; x.beginPath(); x.arc(256, 256, 168, 0, Math.PI * 2); x.stroke();
-    if (g === gl && gl) { texB = upload(b); dirty = true; }
+    if (g === gl && gl && my === gen) { texB = upload(b); dirty = true; }
     const src = root.YTPMIconSrc && o.icon ? root.YTPMIconSrc(o.icon) : '';
     if (!src) return;
     const img = new Image();
     img.onload = () => {
-      if (g !== gl || !gl) return;
+      if (g !== gl || !gl || my !== gen) return;
       const c = mk(), y = c.getContext('2d');
       if ('filter' in y) y.filter = 'blur(1.4px)';
       y.drawImage(img, 0, 0, 512, 512);
@@ -2382,16 +2430,14 @@ void main(){
   }
   function start(canvas, k, reduced, o) {
     stop();
-    try { gl = canvas.getContext('webgl', { premultipliedAlpha: true, antialias: false, alpha: true }); } catch (e) { gl = null; }
-    if (!gl) return false;
-    cv = canvas; kind = k; progs = {}; still = !!reduced; opt = o || {}; texI = texB = null; wear = opt.wear || [0, 0, 0];
-    const isB = k === 'bubble';
-    cur = prog(isB ? BUBBLE : k === 'medal' ? MEDAL : GEM);
-    if (cur && k === 'medal') medalTextures(opt, gl);
-    if (!cur) { gl = null; cv = null; return false; }
-    const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    if (!ctx()) return false;
+    try { ctx2 = canvas.getContext('2d'); } catch (e) { ctx2 = null; }
+    if (!ctx2) return false;
+    gen++; cv = canvas; kind = k; still = !!reduced; opt = o || {}; wear = opt.wear || [0, 0, 0];
+    if (texI) gl.deleteTexture(texI); if (texB) gl.deleteTexture(texB); texI = texB = null;
+    cur = prog(k === 'bubble' ? 'bubble' : k === 'medal' ? 'medal' : 'gem');
+    if (!cur) { cv = null; ctx2 = null; return false; }
+    if (k === 'medal') medalTextures(opt, gl);
     t0 = performance.now(); dirty = true;
     raf = requestAnimationFrame(frame);
     return true;
@@ -2406,7 +2452,7 @@ void main(){
     R = mul(mul(Ry, Rx), Rz);   // row-major, object -> world
     dirty = true;
   }
-  function stop() { if (raf) cancelAnimationFrame(raf); raf = 0; cur = null; if (gl) { const ext = gl.getExtension('WEBGL_lose_context'); if (ext) ext.loseContext(); } gl = null; cv = null; }
+  function stop() { if (raf) cancelAnimationFrame(raf); raf = 0; cur = null; cv = null; ctx2 = null; }   // the context and programs stay for next time
   root.YTPM3D = { start, rot, stop, redraw: () => { dirty = true; }, active: () => !!cur, canvas: () => cv, wear: (w) => { wear = [+w[0] || 0, +w[1] || 0, +w[2] || 0]; dirty = true; } };
 })(typeof window !== 'undefined' ? window : globalThis);
 </script>

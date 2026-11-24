@@ -440,6 +440,12 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         report::register(hinst);
         crate::settings_ui::register(hinst);
         crate::achievements::ui::register(hinst);
+        // Compile the medal shaders in the background a little after start-up (seconds on the first run after an
+        // update, then from the disk cache), so opening Achievements never freezes the window.
+        let _ = std::thread::Builder::new().name("ach-gpu-warm".into()).spawn(|| {
+            std::thread::sleep(std::time::Duration::from_secs(8));
+            crate::achievements::gpu::warm();
+        });
 
         // Hidden top-level window (not message-only: those miss broadcasts
         // such as TaskbarCreated, WM_SETTINGCHANGE and WM_DISPLAYCHANGE).

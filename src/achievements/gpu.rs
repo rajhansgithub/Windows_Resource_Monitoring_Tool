@@ -216,6 +216,45 @@ pub fn render_batch(items: &[Params], out: &mut Vec<Vec<u32>>) -> bool {
 // ---------------------------------------------------------------------------------------------------------------
 // run-time shader compiler
 
+/// Compiled shaders are kept in %LOCALAPPDATA%\ResourceMonitor\shader-cache, named by a hash of their source: the
+/// big medal shader takes seconds to compile, so only the first start after an update pays for it (and that happens
+/// on a background thread, see `warm`). A bad or old file is just compiled again.
+const CACHE_VER: u64 = 1;
+
+fn fnv64(parts: &[&[u8]]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for p in parts {
+        for &b in *p {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        h ^= 0xff;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    h
+}
+
+unsafe fn cached_compile(f: D3DCompileFn, src: &str, entry: &'static [u8], target: &'static [u8]) -> Result<Vec<u8>, String> {
+    let key = fnv64(&[src.as_bytes(), entry, target, &CACHE_VER.to_le_bytes()]);
+    let dir = crate::util::data_dir().join("shader-cache");
+    let path = dir.join(format!("{key:016x}.cso"));
+    if let Ok(b) = std::fs::read(&path) {
+        if b.len() > 32 && &b[..4] == b"DXBC" {
+            return Ok(b);
+        }
+    }
+    let code = compile(f, src, entry, target, 0)?;
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = crate::util::write_atomic(&path, &code);
+    Ok(code)
+}
+
+/// Make the device and compile the shaders now, on the calling thread. Called once from a background thread a few
+/// seconds after start-up, so opening the achievements window never waits for the compiler.
+pub fn warm() {
+    let _ = available();
+}
+
 type D3DCompileFn = unsafe extern "system" fn(
     *const c_void, // pSrcData
     usize,         // SrcDataSize
@@ -244,7 +283,7 @@ fn load_d3dcompile() -> Option<D3DCompileFn> {
     }
 }
 
-unsafe fn compile(f: D3DCompileFn, src: &str, entry: &'static [u8], target: &'static [u8]) -> Result<Vec<u8>, String> {
+unsafe fn compile(f: D3DCompileFn, src: &str, entry: &'static [u8], target: &'static [u8], flags: u32) -> Result<Vec<u8>, String> {
     let mut code: *mut c_void = std::ptr::null_mut();
     let mut err: *mut c_void = std::ptr::null_mut();
     let hr = f(
@@ -255,7 +294,7 @@ unsafe fn compile(f: D3DCompileFn, src: &str, entry: &'static [u8], target: &'st
         std::ptr::null(),
         entry.as_ptr(),
         target.as_ptr(),
-        0,
+        flags,
         0,
         &mut code,
         &mut err,
@@ -389,9 +428,9 @@ impl Gpu {
             let dev = dev.ok_or("no device")?;
             let ctx = ctx.ok_or("no context")?;
 
-            let vs_code = compile(compiler, shaders::VS, b"vsmain\0", b"vs_5_0\0").map_err(|e| format!("vs: {e}"))?;
-            let gem_code = compile(compiler, &shaders::gem_src(), b"main\0", b"ps_5_0\0").map_err(|e| format!("gem ps: {e}"))?;
-            let bub_code = compile(compiler, &shaders::bubble_src(), b"main\0", b"ps_5_0\0").map_err(|e| format!("bubble ps: {e}"))?;
+            let vs_code = cached_compile(compiler, shaders::VS, b"vsmain\0", b"vs_5_0\0").map_err(|e| format!("vs: {e}"))?;
+            let gem_code = cached_compile(compiler, &shaders::gem_src(), b"main\0", b"ps_5_0\0").map_err(|e| format!("gem ps: {e}"))?;
+            let bub_code = cached_compile(compiler, &shaders::bubble_src(), b"main\0", b"ps_5_0\0").map_err(|e| format!("bubble ps: {e}"))?;
 
             let mut vs: Option<ID3D11VertexShader> = None;
             dev.CreateVertexShader(&vs_code, None, Some(&mut vs)).map_err(|e| format!("CreateVertexShader: {e}"))?;
@@ -782,19 +821,21 @@ mod tests {
         use std::time::Instant;
         let f = load_d3dcompile().expect("d3dcompiler_47.dll");
         let src = shaders::gem_src();
+        // optimisation level 1 is the default (flags 0); level 0 = 1 << 14, level 3 = 1 << 15
+        for (name, flags) in [("O1", 0u32), ("O0", 1 << 14), ("O3", 1 << 15)] {
+            let t = Instant::now();
+            let a = unsafe { compile(f, &src, b"main\0", b"ps_5_0\0", flags) }.expect("gem");
+            println!("perf: gem ps compile {name} {:.0} ms, {} bytes", t.elapsed().as_secs_f64() * 1e3, a.len());
+        }
         let t = Instant::now();
-        let a = unsafe { compile(f, &src, b"main\0", b"ps_5_0\0") }.expect("gem");
-        println!("perf: gem ps compile {:.0} ms, {} bytes", t.elapsed().as_secs_f64() * 1e3, a.len());
-        let lsrc = src.replace("[unroll] for", "[loop] for");
-        let t = Instant::now();
-        let b = unsafe { compile(f, &lsrc, b"main\0", b"ps_5_0\0") }.expect("gem loop");
-        println!("perf: gem ps compile with [loop] {:.0} ms, {} bytes", t.elapsed().as_secs_f64() * 1e3, b.len());
-        let t = Instant::now();
-        let c = unsafe { compile(f, &shaders::bubble_src(), b"main\0", b"ps_5_0\0") }.expect("bubble");
+        let c = unsafe { compile(f, &shaders::bubble_src(), b"main\0", b"ps_5_0\0", 0) }.expect("bubble");
         println!("perf: bubble ps compile {:.0} ms, {} bytes", t.elapsed().as_secs_f64() * 1e3, c.len());
         let t = Instant::now();
         let mut gpu = Gpu::new().expect("gpu");
         println!("perf: Gpu::new {:.0} ms ({})", t.elapsed().as_secs_f64() * 1e3, if gpu.hardware { "hardware" } else { "WARP" });
+        let t = Instant::now();
+        drop(Gpu::new().expect("gpu"));
+        println!("perf: Gpu::new again (shader cache) {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
         let ic = icon();
         let mut tiles: Vec<Params> = Vec::new();
         for i in 0..42 {
@@ -807,7 +848,7 @@ mod tests {
         let t = Instant::now();
         render(&mut gpu, &tiles);
         println!("perf: 42 aged tiles at 76 px {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
-        for (name, wear) in [("clean", [0.0f32, 0.3, 0.0]), ("aged", [0.8, 0.3, 0.9])] {
+        for (name, wear) in [("clean", [0.0f32, 0.3, 0.0]), ("dust", [0.8, 0.3, 0.0]), ("web", [0.0, 0.3, 0.9]), ("aged", [0.8, 0.3, 0.9])] {
             let mut p = params(Material::Gold, 1.0, (0.1, 0.1), &ic);
             p.size_px = 560;
             p.wear = wear;

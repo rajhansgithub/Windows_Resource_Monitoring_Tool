@@ -498,7 +498,7 @@ float2 wSeg(float2 p, float2 a, float2 b){ float2 pa=p-a, ba=b-a; float h=clamp(
 float wHair(float2 p, float sc, float w, float aa, float dens){
   float2 q=(p+(float2(wN(p*11.+2.),wN(p*11.+8.))-.5)*.07)*sc, id=floor(q);
   float m=0.;
-  [unroll] for(int j=-1;j<=1;j++) [unroll] for(int i=-1;i<=1;i++){
+  [loop] for(int j=-1;j<=1;j++) [loop] for(int i=-1;i<=1;i++){
     float2 c=id+float2(float(i),float(j));
     if(hash(c+13.7)<dens){
       float2 o=c+float2(hash(c+3.1),hash(c+5.3));
@@ -544,7 +544,7 @@ float4 wWeb(float2 p, float amt, float dust, float aa){
   float G=min(amt,1.3), keep=.75*AGE1.w, W=AGE2.x;
   float rope=0., fine=0., gz=0., shd=0.;
   float thrH=.24+.18*smoothstep(.55,1.,G);                      // old gauze tears: the holes only grow
-  [unroll] for(int i=0;i<8;i++){
+  [loop] for(int i=0;i<8;i++){
     float fi=float(i), age=G-fi*.055;
     if(age>0. && (i<2 || hash(float2(fi+wS*53.,3.3))<keep)){
       float2 a,b; float sg; wRope(fi,G,a,b,sg);
@@ -575,7 +575,7 @@ float4 wWeb(float2 p, float amt, float dust, float aa){
       }
     }
   }
-  [unroll] for(int k=0;k<12;k++){                                       // fine threads from rope to rope
+  [loop] for(int k=0;k<12;k++){                                       // fine threads from rope to rope
     float fk=float(k);
     float ia=floor(hash(float2(fk+wS*53.,1.2))*7.99), ib=fmod(ia+1.+floor(hash(float2(fk+wS*53.,2.6))*2.99),8.);
     float age=G-max(.08+.065*fk,max(ia,ib)*.055+.03);
@@ -586,7 +586,7 @@ float4 wWeb(float2 p, float amt, float dust, float aa){
       fine=max(fine,m);
     }
   }
-  [unroll] for(int k=0;k<6;k++){                                        // drop lines hanging from the ropes, beaded with dust
+  [loop] for(int k=0;k<6;k++){                                        // drop lines hanging from the ropes, beaded with dust
     float fk=float(k), ia=floor(hash(float2(fk+wS*53.,11.2))*7.99);
     float age=G-max(.05+.08*fk,ia*.055+.02);
     if(age>0. && hash(float2(fk+wS*53.,14.4))<keep && (ia<1.5||hash(float2(ia+wS*53.,3.3))<keep)){

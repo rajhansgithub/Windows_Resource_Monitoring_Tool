@@ -2296,6 +2296,9 @@ impl Ui {
     }
 
     fn fv_flip(&mut self) {
+        if self.fv_tier() >= 7 {
+            return; // the bubble is a sphere: it has no back to turn to, and its mark always faces you
+        }
         if let Some(fv) = self.fv.as_mut() {
             fv.flip_t = 1.0 - fv.flip_t;
             if fv.reduced {
@@ -2378,8 +2381,10 @@ impl Ui {
         let (cx, cy) = (((g.stage.l + g.stage.r) / 2) as f32, ((g.stage.t + g.stage.b) / 2) as f32);
         let ang = fv.flip * std::f32::consts::PI;
         let c = ang.cos();
-        let sxm = (c.abs() * fv.ry.to_radians().cos()).max(0.02);
-        let sym = fv.rx.to_radians().cos();
+        // The bubble is a sphere: tilting it does not squash it, and its mark never turns (only the film's light moves).
+        let bub = self.fv_tier() >= 7;
+        let sxm = if bub { 1.0 } else { (c.abs() * fv.ry.to_radians().cos()).max(0.02) };
+        let sym = if bub { 1.0 } else { fv.rx.to_radians().cos() };
         let sh = Rect {
             l: (cx - s as f32 * 0.35 * (1.0 - 0.28 * ang.sin().abs())) as i32,
             t: (cy + s as f32 * 0.5 + s as f32 * 0.02) as i32,
