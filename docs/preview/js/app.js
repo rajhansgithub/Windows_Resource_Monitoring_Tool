@@ -148,7 +148,7 @@
     const set = SETS[id], here = () => { CN.set = id; CN.p = p; };
     $$('.cn-card', p).forEach((b) => b.addEventListener('click', () => { here(); coinPick(+b.dataset.coin); }));
     c.addEventListener('pointerdown', (ev) => { if (!CN.on || YTPM3D.canvas() !== c) { here(); coinStart(); } CN.drag = { x: ev.clientX, y: ev.clientY, lx: ev.clientX, t: performance.now() }; c.setPointerCapture(ev.pointerId); });
-    c.addEventListener('pointermove', (ev) => { if (!CN.drag) return; const dx = ev.clientX - CN.drag.lx; CN.yaw += dx * .5; CN.pitch = Math.max(-70, Math.min(70, CN.pitch + (ev.clientY - CN.drag.y) * -.4)); CN.drag.y = ev.clientY; CN.vy = dx * .5; CN.drag.lx = ev.clientX; });
+    c.addEventListener('pointermove', (ev) => { if (!CN.drag) return; const dx = ev.clientX - CN.drag.lx; CN.yaw += dx * .5; CN.pitch = Math.max(-70, Math.min(70, CN.pitch + (ev.clientY - CN.drag.y) * .4)); CN.drag.y = ev.clientY; CN.vy = dx * .5; CN.drag.lx = ev.clientX; });
     const up = () => { CN.drag = null; };
     c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);
     c.addEventListener('dblclick', () => { CN.yaw = 28; CN.pitch = -16; CN.vy = 0; });
