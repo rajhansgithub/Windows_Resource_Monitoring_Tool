@@ -436,18 +436,22 @@ void main(){
   const COIN = COMMON + `
 uniform vec3 uMetal, uMetal2;   // uDesign and uStone are #defines: one program per design
 uniform sampler2D uIcon, uRing, uBack; uniform float uIconOn, uRingOn, uBackOn;
+// the studio for metal. Its slow sway (ER) is set once per pixel in main; the light directions are constants (no per-call
+// normalize/cross), so the same function is cheap in the app's HLSL port too.
+mat2 ER;
+const vec3 EA=vec3(-0.420758,0.460830,0.781408), EUX=vec3(-0.738485,-0.674269,0.), EUY=vec3(0.526879,-0.577058,0.624021);
+const vec3 EB=vec3(0.821109,0.,0.570771), EBX=vec3(0.570771,0.,-0.821109), ESP=vec3(0.301086,0.622244,0.722606);
 float envS(vec3 d, float t){
-  d.xy=rot(.12*sin(t*.21))*d.xy;
+  d.xy=ER*d.xy;
   float s=.09+.12*smoothstep(-.2,.9,d.y);
-  vec3 a=normalize(vec3(-.42,.46,.78));
-  vec3 ux=normalize(cross(vec3(0.,0.,1.),a)), uy=cross(a,ux);
-  float ca=dot(d,a);
-  if(ca>0.){ vec2 q=vec2(dot(d,ux),dot(d,uy))/ca; s+=2.6*smoothstep(.08,-.08,max(abs(q.x)-.55,abs(q.y)-.40))*(.8+.2*smoothstep(-.3,.3,q.y)); }
-  vec3 b=normalize(vec3(.82,0.,.57)); float cb=dot(d,b);
-  if(cb>0.){ vec3 bx=normalize(cross(vec3(0.,1.,0.),b)); vec2 q=vec2(dot(d,bx),d.y)/cb; s+=1.8*smoothstep(.05,-.05,max(abs(q.x)-.08,abs(q.y)-1.)); }
+  float ca=dot(d,EA);
+  if(ca>0.){ vec2 q=vec2(dot(d,EUX),dot(d,EUY))/ca; s+=2.6*smoothstep(.08,-.08,max(abs(q.x)-.55,abs(q.y)-.40))*(.8+.2*smoothstep(-.3,.3,q.y)); }
+  float cb=dot(d,EB);
+  if(cb>0.){ vec2 q=vec2(dot(d,EBX),d.y)/cb; s+=1.8*smoothstep(.05,-.05,max(abs(q.x)-.08,abs(q.y)-1.)); }
   s+=.32*smoothstep(-.05,-.7,d.y)*smoothstep(-.4,.2,d.z);
-  s+=.25*exp(-pow((d.y+.1)/.03,2.))*smoothstep(-.5,.2,d.z);
-  s+=9.*pow(max(dot(d,normalize(vec3(.3,.62,.72))),0.),700.);
+  float gy=(d.y+.1)/.03; s+=.25*exp(-gy*gy)*smoothstep(-.5,.2,d.z);
+  float sp=max(dot(d,ESP),0.); sp*=sp; sp*=sp; sp*=sp; sp*=sp;   // ^16
+  s+=9.*pow(sp,43.75);                                             // ^700
   return s;
 }
 float envG(vec3 d){
@@ -472,6 +476,8 @@ const float SSD=uDesign>5.5?.55:SS;
 const float ZG6=.19;                                          // girdle height
 const float GZD=uDesign>5.5?(ZG6-.2795*SSD):(.15-TABC*SS);    // stone centre (z) / old Dial: table at .15
 const float FLOOR6=-.13;                                      // the culet stops just inside the back plate
+// Emulsion (stone 3): a soap-film dome in the same collet, over a dark well with the mark floating in it
+const float ZB=-.456, RB=.856;                                // the film's sphere: top at z=.40, meets the collet's lip at r=.55
 const float SCUT=-(FLOOR6-GZD)/SSD;
 #define P(N,C) { vec3 nn=N; float dn=dot(nn,d); float tt=(C-dot(nn,o))/dn; if(dn<0.){ if(tt>tIn){ tIn=tt; nIn=nn; } } else { if(tt<tOut){ tOut=tt; nOut=nn; } } }
 void trav(vec3 o, vec3 d, out float tIn, out vec3 nIn, out float tOut, out vec3 nOut){
@@ -544,11 +550,15 @@ vec2 mapF(vec3 p){
     vec2 sq=prep(rot(PI/4.)*p.xy,4.);
     d=U(d,vec2((length(vec3(sq.x-.82,sq.y,(p.z-.12)*1.7))-.05)/1.7,9.));
   } else {                                           // Dial family: the Dial frame; metals hold a CPU die, Diamond and Ruby a stone
+    // (cheap where it can be: the 72 beads are only looked up near the grip ring, the centre only inside the barrel;
+    //  elsewhere a bound that is never larger than the true distance stands in)
     d=U(d,vec2(ringS(p,.9,1.,-.01,.19,.025),1.));
-    vec2 bq=prep(p.xy,72.); d=U(d,vec2(length(vec3(bq.x-.948,bq.y,p.z-.186))-.016,1.));
+    if(r>.9){ vec2 bq=prep(p.xy,72.); d=U(d,vec2(length(vec3(bq.x-.948,bq.y,p.z-.186))-.016,1.)); }
+    else d.x=min(d.x,length(vec2(.932-r,max(abs(p.z-.186)-.016,0.))));
     d=U(d,vec2(max(ringS(p,.70,.905,-.01,.4,.0),(p.z-(.15+(r-.70)*.13))*.99),2.));
     d=U(d,vec2(ringS(p,.595,.705,-.01,.08,.012),3.));
-    if(uStone<.5){
+    if(r>.63) d.x=min(d.x,r-.6);
+    else if(uStone<.5){
       d=U(d,vec2(disc(p,.6,-.01,.05,.005),4.));
       d=U(d,vec2(box3(p-vec3(0.,0.,.06),vec3(.235,.235,.07),.022),7.));
       vec2 a2=abs(p.xy); if(a2.y>a2.x) a2=a2.yx;
@@ -556,14 +566,16 @@ vec2 mapF(vec3 p){
       d=U(d,vec2(box3(vec3(a2.x-.27,yy,p.z-.065),vec3(.035,.012,.011),.005),6.));
     } else {                                         // the collet: a polished cup rising out of the barrel, a thin lip at the girdle
       float body=box2(vec2(r-.3,p.z-(ZG6+.012-.12)*.5),vec2(.3,(ZG6+.012+.12)*.5),.01);
-      float k=.602, zc=GZD-.602*SSD-.004;
-      float pocket=max(r-(SSD+.003),(zc+k*r-p.z)/sqrt(1.+k*k));
+      float pocket;
+      if(uStone>2.5){ pocket=length(p-vec3(0.,0.,ZB))-(RB+.003); d=U(d,vec2(disc(p,.6,-.01,.02,.005),3.)); }
+      else { float k=.602, zc=GZD-.602*SSD-.004; pocket=max(r-(SSD+.003),(zc+k*r-p.z)/sqrt(1.+k*k)); }
       d=U(d,vec2(max(body,-pocket),6.));
     }
   }
   return d;
 }
 vec2 mapB(vec3 p){                                   // the reverse: a rim and a turned field with the name
+  if(p.z>.06) return vec2(p.z-.012,1.);              // everything here is below z=.01
   float r=length(p.xy), dep=(uDesign<.5||uDesign>5.5)?.19:.12;
   vec2 d=vec2(ringS(p,.9,1.,-dep,.01,.025),1.);
   d=U(d,vec2(disc(p,.905,-dep+.05,.01,.01),2.));
@@ -571,11 +583,12 @@ vec2 mapB(vec3 p){                                   // the reverse: a rim and a
   return d;
 }
 vec2 map(vec3 p){
+  if(p.z<-.06 && !(uStone>.5 && uDesign<.5)) return mapB(p);   // the front is all above z=-.01 (the Dial's cup is the exception)
   vec2 d=U(mapF(p),mapB(p));
   if(uStone>.5 && uDesign<.5){ float r=length(p.xy); float h=max(r-.60,(-Hb(r)+.03)-p.z)/1.7; if(-h>d.x) d=vec2(-h,6.); }
   return d;
 }
-vec3 nrm(vec3 p){ vec2 e=vec2(.0012,0.); return normalize(vec3(map(p+e.xyy).x-map(p-e.xyy).x,map(p+e.yxy).x-map(p-e.yxy).x,map(p+e.yyx).x-map(p-e.yyx).x)); }
+vec3 nrm(vec3 p){ const vec2 k=vec2(1.,-1.); const float e=.0012*.5773; return normalize(k.xyy*map(p+k.xyy*e).x+k.yyx*map(p+k.yyx*e).x+k.yxy*map(p+k.yxy*e).x+k.xxx*map(p+k.xxx*e).x); }
 
 // the set stone, shaded like the full-view gem; light that leaves through the pavilion meets the polished cup
 vec3 stone(vec3 o, vec3 d, float tIn, vec3 nIn, vec3 M, out float cover, float pxw, float tOut){
@@ -621,26 +634,74 @@ vec3 stone(vec3 o, vec3 d, float tIn, vec3 nIn, vec3 M, out float cover, float p
   return 1.-exp(-max(col,0.)*1.6);
 }
 
+// Emulsion: the film over the dome. Thin-film colour (per channel interference), Fresnel edge band, studio reflections;
+// the mark floats inside and always faces the viewer (only the glass turns). base = what is behind (premultiplied).
+vec4 bubble(vec3 ro, vec3 rd, vec3 ow, vec3 dw, float tHit, vec4 base, float pxw){
+  vec3 oc=ro-vec3(0.,0.,ZB); float bb=dot(oc,rd), cc=dot(oc,oc)-RB*RB, hh=bb*bb-cc;
+  if(hh<=0.) return base;
+  float sh=sqrt(hh), t1=-bb-sh;
+  if(t1<0. || t1>tHit) return base;
+  vec3 p1=ro+rd*t1, n1=(p1-vec3(0.,0.,ZB))/RB;
+  if(p1.z<.2) return base;                           // below the collet's lip: hidden in the cup
+  float c1=clamp(-dot(rd,n1),0.,1.);
+  float tt=uTime*.15;
+  float th=420.+170.*sin(5.*n1.x+2.*sin(4.*n1.y+tt))+110.*sin(6.*n1.y-3.*n1.z+tt*.7)-150.*n1.y;
+  float ct=sqrt(1.-(1.-c1*c1)/1.77);
+  vec3 fc=.5-.5*cos(TAU*2.*1.33*th*ct/vec3(640.,545.,455.));
+  fc=mix(vec3(dot(fc,vec3(.3,.59,.11))),fc,1.1);
+  float F=.04+.96*pow(1.-c1,4.);
+  vec3 nw=uR*n1;
+  float e=min(envS(reflect(dw,nw),uTime),2.2);
+  vec3 film=fc*(F*(.55+e)+.045)+vec3(.9,.95,1.)*F*max(e-1.,0.)*.35;   // dark, clear middle; colour in the edge band
+  // the mark: a ring and an orbiting dot, glowing, on a plane through the dome facing the viewer
+  vec3 cw=uR*vec3(0.,0.,.12);
+  float tp=(cw.z-ow.z)/dw.z;
+  vec3 mk=vec3(0.); float ma=0.;
+  if(tp>t1 && tp<tHit){
+    vec2 q=(ow.xy+dw.xy*tp)-cw.xy;
+    float aa=pxw*1.2, rr=length(q), a0=.75+uTime*.12;
+    vec2 dp=.2*vec2(cos(a0),sin(a0));
+    float ring=smoothstep(.016+aa,.016,abs(rr-.2)), dot2=smoothstep(.04+aa,.04,length(q-dp));
+    float ang=atan(q.y,q.x);
+    vec3 rc=mix(vec3(.62,.82,1.),vec3(1.,.62,.42),.5+.5*cos(ang-a0));
+    mk=rc*ring*1.1+vec3(1.,.5,.28)*dot2*1.3;
+    mk+=vec3(.35,.55,1.)*exp(-pow((rr-.2)/.05,2.))*.18+vec3(1.,.45,.2)*exp(-dot(q-dp,q-dp)/.006)*.35;
+    ma=max(ring,dot2);
+  }
+  vec3 behind=base.rgb*(1.-ma)+mk;
+  float ab=max(base.a,ma);
+  vec3 col=behind*(1.-F*.85)+film;
+  return vec4(col,clamp(max(ab,F*.9+.1),0.,1.));
+}
+
 void main(){
   vec3 ow, dw; float pxw; cam(ow,dw,pxw,1.24);
+  ER=rot(.12*sin(uTime*.21));
   vec3 ro=uRT*ow, rd=uRT*dw;
   float b=dot(ro,rd), c=dot(ro,ro)-1.44, h=b*b-c;
   if(h<0.){ gl_FragColor=vec4(0.); return; }
-  float t=max(-b-sqrt(h),0.), tmax=-b+sqrt(h), md=1e3; bool hit=false;
-  for(int i=0;i<140;i++){ float dd=map(ro+rd*t).x; md=min(md,dd); if(dd<.0005){ hit=true; break; } t+=dd*.8; if(t>tmax) break; }
+  float t=max(-b-sqrt(h),0.), tmax=-b+sqrt(h); bool hit=false;
+  if(uDesign>5.5){                                   // the metal fits in r<1, -.2<z<.215: clip the march to that cylinder
+    float a2=dot(rd.xy,rd.xy), b2=dot(ro.xy,rd.xy), c2=dot(ro.xy,ro.xy)-1.;
+    if(a2>1e-6){ float h2=b2*b2-a2*c2; if(h2<0.) tmax=-1.; else { h2=sqrt(h2); t=max(t,(-b2-h2)/a2); tmax=min(tmax,(-b2+h2)/a2); } }
+    if(abs(rd.z)>1e-6){ float z0=(-.2-ro.z)/rd.z, z1=(.215-ro.z)/rd.z; t=max(t,min(z0,z1)); tmax=min(tmax,max(z0,z1)); }
+  }
+  float eps=max(.0005,pxw*.3); for(int i=0;i<140;i++){ if(t>tmax) break; float dd=map(ro+rd*t).x; if(dd<eps){ hit=true; break; } t+=dd*.9; }
   vec3 M=uMetal;
   // the set stone in front of the metal?
   float scov=0.; vec3 sc=vec3(0.);
-  if(uStone>.5){
+  if(uStone>.5 && uStone<2.5){
     vec3 og=(ro-vec3(0.,0.,GZD))/SSD;
     float gIn,gOut; vec3 gnIn,gnOut;
-    trav(og,rd,gIn,gnIn,gOut,gnOut);
+    float sb=dot(og,rd), sc2=dot(og,og)-1.1025;
+    gIn=1.; gOut=0.;
+    if(sb*sb-sc2>0.) trav(og,rd,gIn,gnIn,gOut,gnOut);
     if(gIn<gOut && gOut>0. && (!hit || gIn*SSD<t)){
       sc=stone(og,rd,gIn,gnIn,M,scov,pxw/SSD,gOut);
       if(scov>.999 || !hit){ gl_FragColor=vec4(sc*scov,scov); return; }
     }
   }
-  if(!hit){ gl_FragColor=vec4(0.); return; }
+  if(!hit){ gl_FragColor=uStone>2.5?bubble(ro,rd,ow,dw,1e9,vec4(0.),pxw):vec4(0.); return; }
   vec3 p=ro+rd*t;
   vec2 mm=map(p); float id=mm.y;
   vec3 n=nrm(p);
@@ -704,6 +765,7 @@ void main(){
   vec3 nw=uR*nl;
   float cv=clamp(-dot(nw,dw),0.,1.);
   vec3 R=reflect(dw,nw);
+  if(uStone>2.5){ float ph=1.3*cv+atan(q.y,q.x)/TAU*2.+r*1.2+.15*sin(uTime*.2); M=mix(M,(.62+.38*cos(TAU*(ph+vec3(0.,.33,.67))))*M,.42); }
   vec3 F=M+(1.-M)*pow(1.-cv,5.);
   float fz=pow(1.-cv,5.);
   vec3 col;
@@ -730,6 +792,7 @@ void main(){
   if(paint<0.){ vec3 G=M+(1.-M)*fz; col=mix(col,G*envS(R,tt),-paint); }
   col=aces(col*1.1);
   gl_FragColor=vec4(mix(col,sc,scov),1.);
+  if(uStone>2.5) gl_FragColor=bubble(ro,rd,ow,dw,t,gl_FragColor,pxw);
 }`;
 
   const LOOK3 = { lqRefr: 'uLqRefr', lqRefl: 'uLqRefl', lqFilm: 'uLqFilm', lqTint: 'uLqTint', lqWobble: 'uLqWob', lqDrops: 'uLqDrops', lqDropSize: 'uLqDropS', lqMove: 'uLqMove', dotRefr: 'uDotRefr', dotRing: 'uDotRing', refrPeriod: 'uRefrT', edgeWidth: 'uEdgeW', edgeVary: 'uEdgeVary', edgeColour: 'uEdgeCol', rimLine: 'uRim', saturation: 'uSat', filmInside: 'uFilmIn', filmThick: 'uThick', flowSpeed: 'uFlow', reflection: 'uRefl', glow: 'uGlow', breath: 'uBreath', motionAmt: 'uMotAmt', motionTime: 'uMotT' };
