@@ -94,8 +94,13 @@
     { id: 'd-dia', name: 'Diamond', tag: '99.99% uptime', design: 6, stone: 1, metal: 'plat', metal2: 'plat', icon: 'cpu', title: 'Night Watch', sub: 'Diamond · 2026', ring: 'RESOURCE MONITOR  ·  99.99%  ·  DIAMOND MEDAL', text: 'The same Dial frame in platinum. The die makes way for the Diamond: it sits forward in a raised polished collet, girdle level with the grip ring, the whole crown proud of the coin. Turn it over: the back is flat, no bulge.' },
     { id: 'd-ruby', name: 'Ruby', tag: '99.999% uptime', design: 6, stone: 2, metal: 'rose', metal2: 'rose', icon: 'cpu', title: 'Night Watch', sub: 'Ruby · 2026', ring: 'RESOURCE MONITOR  ·  99.999%  ·  RUBY MEDAL', text: 'The same frame and collet in rose gold, holding the Ruby forward. Light through the stone bounces off the polished cup and comes back red. Flat back.' },
     { id: 'd-emul', name: 'Emulsion', tag: '99.9999% uptime', design: 6, stone: 3, metal: 'pearl', metal2: 'pearl', icon: 'cpu', title: 'Night Watch', sub: 'Emulsion · 2026', ring: 'RESOURCE MONITOR  ·  99.9999%  ·  EMULSION MEDAL', text: 'The same frame and collet in pearl metal with an oil sheen that shifts as it turns. The Emulsion bubble sits where the Ruby sits: a soap-film dome over a dark well, colour in its edge, the mark floating inside and always facing you.' },
-    { id: 'd-emul2', name: 'Emulsion · draft', tag: 'whole bubble, for your OK', design: 6, stone: 4, metal: 'pearl', metal2: 'pearl', icon: 'cpu', title: 'Night Watch', sub: 'Emulsion · 2026', ring: 'RESOURCE MONITOR  ·  99.9999%  ·  EMULSION MEDAL', text: 'Draft from your notes, not applied yet: no metal behind the bubble. The ring is open right through, and a whole, bigger bubble fills it, covering the dark barrel with only a thin gap to the bezel. Film colour in the edge, dark glass in the middle, the pulse floating inside and always facing you. Turn it: it is a real sphere, seen from the back too.' }
+    { id: 'd-emul2', name: 'Emulsion · draft', tag: 'whole bubble, for your OK', design: 6, stone: 4, metal: 'pearl', metal2: 'pearl', icon: 'cpu', title: 'Night Watch', sub: 'Emulsion · 2026', ring: 'RESOURCE MONITOR  ·  99.9999%  ·  EMULSION MEDAL', text: 'Draft from your notes, not applied yet: the Emulsion bubble itself (the same shader, look, noise and your saved tuning as the badge and the full view), whole and bigger, in the open ring. No metal behind it; it covers the dark barrel with only a thin gap to the bezel. The pearl metal is unchanged.' }
   ];
+  /* The Emulsion coin draws the real bubble: its look (YTPMLook, with the tuner's saved values) lives in js/bubble.js */
+  let lookP = null;
+  const lookReady = () => lookP || (lookP = loadScript('js/bubble.js').then(() => {
+    try { const ls = JSON.parse(store.get('rm-bubble-look') || 'null'); if (ls && window.YTPMLookDefaults) for (const k in YTPMLookDefaults) if (typeof ls[k] === 'number') YTPMLook[k] = ls[k]; } catch (e) { /* ignore */ }
+  }, () => {}));
   const coinOpt = (c) => ({ design: c.design, stone: c.stone || 0, metal: CMET[c.metal], metal2: CMET[c.metal2 || 'copper'], icon: c.icon, title: c.title, sub: c.sub,
     ring: c.ring ? [{ text: c.ring, r: c.ringR || .775, px: c.ringTop ? 34 : 30, bottom: !c.ringTop }] : null });
   const SETS = { v7: DIAL, v6: COINS };
@@ -133,7 +138,9 @@
     const r = c.getBoundingClientRect(), px = Math.round(Math.min(r.width || 396, 396) * Math.min(window.devicePixelRatio || 1, 2));
     if (px > 0 && c.width !== px) { c.width = px; c.height = px; }
     coinStop();
-    CN.c = c; CN.on = YTPM3D.start(c, 'coin', reduced(), coinOpt(SETS[CN.set][CN.sel[CN.set]]));
+    const pick = SETS[CN.set][CN.sel[CN.set]];
+    if (pick.stone === 4) lookReady().then(() => YTPM3D.redraw());
+    CN.c = c; CN.on = YTPM3D.start(c, 'coin', reduced(), coinOpt(pick));
     if (CN.on) { CN.t0 = performance.now(); CN.raf = requestAnimationFrame(coinTick); }
   }
   function coinStop() { if (!CN.on) return; CN.on = false; cancelAnimationFrame(CN.raf); CN.raf = 0; try { if (YTPM3D.canvas() === CN.c) YTPM3D.stop(); } catch (e) { /* ignore */ } }
@@ -157,7 +164,7 @@
       const c = queue.shift(), k = +c.closest('.cn-card').dataset.coin;
       const px = Math.max(64, Math.round((c.getBoundingClientRect().width || 160) * Math.min(window.devicePixelRatio || 1, 2)));
       if (c.width !== px) { c.width = px; c.height = px; }
-      YTPM3D.snap(c, coinOpt(set[k]), 28, -16).then(() => { busy = false; YTPMGL.idle(pump, 300); });
+      (set[k].stone === 4 ? lookReady() : Promise.resolve()).then(() => YTPM3D.snap(c, coinOpt(set[k]), 28, -16)).then(() => { busy = false; YTPMGL.idle(pump, 300); });
     };
     const io = 'IntersectionObserver' in window ? new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { io.unobserve(e.target); queue.push(e.target); YTPMGL.idle(pump, 300); } })) : null;
     list.forEach((c) => { if (io) io.observe(c); else queue.push(c); });
