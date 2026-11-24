@@ -101,6 +101,7 @@ const ID_FULLSCREEN: i32 = 110;
 const ID_CLICKTHRU: i32 = 111;
 const ID_AUTOUPDATE: i32 = 112;
 const ID_AUTOSTART: i32 = 113;
+const ID_ACHIEVE: i32 = 199;
 
 const ID_SWATCH: i32 = 300; // + metric index
 const ID_CRESET: i32 = 330; // + metric index
@@ -765,6 +766,7 @@ impl Ui {
             ID_FULLSCREEN => d.hide_fullscreen,
             ID_CLICKTHRU => d.click_through,
             ID_AUTOUPDATE => d.auto_update,
+            ID_ACHIEVE => d.achievements,
             ID_AUTOSTART => self.autostart,
             ID_ALERTS => d.alerts,
             ID_A_CAP => d.alert_cap,
@@ -784,6 +786,7 @@ impl Ui {
             ID_FULLSCREEN => &mut d.hide_fullscreen,
             ID_CLICKTHRU => &mut d.click_through,
             ID_AUTOUPDATE => &mut d.auto_update,
+            ID_ACHIEVE => &mut d.achievements,
             ID_AUTOSTART => &mut self.autostart,
             ID_ALERTS => &mut d.alerts,
             ID_A_CAP => &mut d.alert_cap,
@@ -1017,6 +1020,9 @@ impl Ui {
                 toggle_card("Click-through", "Mouse clicks pass through the widget to the taskbar", ID_CLICKTHRU),
                 toggle_card("Update automatically", "Install new versions when they are released", ID_AUTOUPDATE),
                 toggle_card("Start with Windows", "Launch Resource Monitor when you sign in", ID_AUTOSTART),
+                toggle_card("Achievements", "Earn medals for real use. Nothing leaves this PC", ID_ACHIEVE),
+                Def::Heading("About"),
+                Def::Note(concat!("Resource Monitor v", env!("CARGO_PKG_VERSION"), " by Emulsion Labs.")),
             ],
             1 => {
                 let mut v = vec![Def::Note("Choose which metrics appear on the widget, and move them to change their order.")];
@@ -1755,6 +1761,7 @@ fn merge(dst: &mut Settings, src: &Settings) {
     dst.interval_ms = src.interval_ms;
     dst.hide_fullscreen = src.hide_fullscreen;
     dst.click_through = src.click_through;
+    dst.achievements = src.achievements;
     dst.text_scale = src.text_scale;
     dst.theme = src.theme;
     dst.bg_opacity = src.bg_opacity;

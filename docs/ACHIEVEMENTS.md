@@ -1,0 +1,123 @@
+# Resource Monitor Achievements
+
+Built with the `achievements` skill (rajhansgithub/Coding-Harness-Plugins, v0.3.0).
+Live preview (the one living artifact): https://claude.ai/artifact/LwqFbEA6tyBFGF5jUNpCNX
+Source of that page: `docs/preview/` (index.html, styles.css, js/: gl.js shared WebGL context and shader compiles, age.js, 3d.js, app.js, and gem.js, bubble.js, versions.js loaded when an older version tab opens).
+
+## Mode and theme
+
+- **Mode: FREE.** Resource Monitor has no paid plan. No paid tags, no Welcome badge. Emulsion is earned (gate below).
+- **Theme: Uptime Medals** (picked 2026-11-21 over Case Badges and Hall of Fame Plaques; Case Badges was picked
+  first, then changed to this).
+  Why: Resource Monitor's users watch their machines the way sysadmins and data centres watch servers, and that world
+  celebrates uptime (99.9%, 99.99%, five nines). So every award is a struck medal, and a full set fills a server rack.
+  - Award = the round struck medal: polished raised rim, spun face with fine rings, the badge icon engraved
+    (frosted floor, bright cut walls). Metals 1-4 use the shared metal shader.
+  - Diamond / Ruby = the round brilliant cut (real gem shader).
+  - Emulsion = the shared soap bubble with only the **pulse line** of the Resource Monitor mark in the middle
+    (the monitor outline was removed at the owner's request).
+  - Set reward = a **1U rack plate**: a 19-inch rack faceplate holding the 4 medals. "Gold rack · Rack 01 · Watch".
+  - Theme contract: `{ id: 'uptime-medal', shape: 'round' (0), metalLabel: 'Uptime', back: 'card' (spec sheet) }`.
+
+## Shared scoring (identical in every tool)
+
+- XP to next level = round(60 + 40 × level^1.25).
+- Flat XP (max 40 a day): +2 per finished active hour watched, +1 per alert handled or task ended, +5 for a clean day
+  (a day of real use with no alert), once a day.
+- Ladder XP per tier: 25, 50, 100, 250, 500, 1000, 2000. Record XP per tier: 100, 200, 400, 800, 1500, 3000, 6000.
+- Titles at levels 1, 3, 6, 8, 12, 16, 20: Rookie, Tinkerer, Builder, Tuner, Overclocker, Engineer, Architect.
+- Rank: Bronze 1-4, Silver 5-9, Gold 10-14, Platinum 15-19, Diamond 20-29, Ruby 30-39, Emulsion 40+ (gate open).
+
+## What counts (quality only)
+
+Only real use counts. Opening windows, clicking, settings changes never count.
+- **Active minute**: a sample minute where the widget is shown on a taskbar AND the user gave input in the last 5 minutes.
+- **Day of real use**: ≥ 30 active minutes that day. Totals only, no streaks.
+- Counters are fed by the observer from the app's own events (samples, alerts, End task, updates). No timers of its own.
+
+## Catalog (32 badges)
+
+Thresholds are per tier: Bronze, Silver, Gold, Platinum, Diamond, Ruby, Emulsion.
+
+### Ladders (13)
+| id | Name | Counts | Tiers |
+|---|---|---|---|
+| watch | Watchkeeper | active hours watched | 5, 50, 250, 1000, 2500, 6000, 12000 |
+| heavy | Heavy Lifting | hours with CPU ≥ 80% (active) | 1, 10, 50, 200, 600, 1500, 3000 |
+| render | Render Farm | hours with GPU ≥ 50% (active) | 1, 10, 50, 200, 600, 1500, 3000 |
+| mover | Data Mover | GB read + written to disk | 50, 500, 2000, 10000, 40000, 100000, 250000 |
+| bandwidth | Bandwidth | GB of network traffic tracked | 10, 100, 500, 2000, 8000, 20000, 50000 |
+| down | Downloader | GB downloaded | 10, 100, 400, 1500, 6000, 15000, 40000 |
+| up | Uploader | GB uploaded | 1, 10, 50, 250, 1000, 3000, 8000 |
+| gameon | Game On | hours of full-screen apps | 5, 50, 200, 600, 1500, 3500, 7000 |
+| responder | First Responder | alerts handled (fired, then cleared within 30 min) | 1, 5, 25, 100, 300, 800, 2000 |
+| taskmaster | Task Master | tasks ended from the panel (succeeded) | 1, 5, 25, 100, 300, 800, 2000 |
+| regular | Regular | days of real use | 3, 15, 50, 150, 365, 730, 1460 |
+| ritual | Weekly Ritual | weeks (Mon-Sun) with 3+ days of real use | 2, 8, 26, 52, 104, 208, 416 |
+| stillhere | Still Here | months with a day of real use | 2, 6, 12, 24, 36, 60, 120 |
+
+### Sets → 1U rack plates (3 × 4)
+- **Rack 01 · Watch** (`rack_watch`): watch, heavy, render, mover
+- **Rack 02 · Flow** (`rack_flow`): bandwidth, down, up, gameon
+- **Rack 03 · Care** (`rack_care`): responder, taskmaster, regular, ritual
+(Still Here sits outside the sets.)
+
+### Getting started (25 XP each)
+- power_on · Power On: first active hour watched.
+- second_screen · Second Screen: widgets on 2+ taskbars for a full active hour.
+- up_to_date · Up to Date: an automatic update installed.
+- under_cap · Under the Cap: a whole billing cycle finished under your data cap.
+- first_gb · First Gigabyte: 1 GB of traffic tracked.
+
+### Mastery
+- marathon · Marathon (250): 24 hours of continuous active watching in one session.
+- cool_week · Cool Customer (250): 7 days of real use in a row (counting only days of real use) with no alert.
+- tb_month · Terabyte Club (300): 1 TB tracked in one calendar month.
+- completionist · Completionist (500): every badge you can earn in this build.
+
+### Happy accidents (10 XP each)
+- running_hot · Running Hot: GPU at 90 °C or more.
+- red_line · Red Line: memory at 98% or more.
+- full_house · Full House: system drive 98% full.
+- gone_dark · Gone Dark: no network traffic for 10 active minutes.
+- access_denied · Access Denied: End task refused by Windows.
+- fumes · Running on Fumes: battery at 5% or less, unplugged.
+
+### Secrets ("?" until earned)
+- night_owl · Night Owl: real use between 2 and 4 am.
+- one_year · One Year: 365 days since the first day of real use.
+- spring_clean · Spring Cleaning: system drive use drops 10 points within a day.
+- five_nines · Five Nines: Windows uptime of 30 days seen.
+
+## Emulsion gate (FREE MODE)
+
+All must hold:
+1. Level ≥ 30.
+2. ≥ 180 days of real use, in ≥ 6 different months.
+3. ≥ 3 ladders at Ruby.
+4. Tool factor: **2,000 active hours watched** and **5 TB of network traffic tracked**.
+
+Per badge: Emulsion when the gate is open and its count ≥ its Emulsion threshold. Rank Emulsion: gate open and level ≥ 40.
+Records: gate open and all 4 pieces at Emulsion. Checked by the observer after real events only.
+
+## Storage
+
+`%APPDATA%\ResourceMonitor\achievements.json` (roaming = follows the user) mirrored to
+`%LOCALAPPDATA%\ResourceMonitor\achievements.json`. Under 4 KB. Merge = union / max (earliest dates, max tiers/counters/XP).
+Pending moments in `achievements-new.json` (local). State version `v: 1`.
+
+## Aging (v4 rules, achievements plugin v0.6.0)
+
+- 1 real hour = 1 day on the shelf. The clock starts when that tier is earned. A new tier is a new, clean medal.
+- Dust and cobwebs only, no scratches. The Emulsion bubble never ages.
+- State: `ag` in achievements.json, `"badgeId:tier": [startMs, dustLeft, webClearedMs]`. Entries for passed tiers drop.
+  Merge: the newest start wins, then the least dust.
+- Dust shown = dustLeft x `min(1, 2(1 - e^(-days/527)))` (days from start; full at a year).
+- Cobweb = `((days - 20) / 330)^0.8`, capped at 1, days from the last rub (none before day 20, full at day 350).
+- Polish (several clicks): a rub clears the cobweb (it regrows from that day) and keeps 70% of the dust; the dust clock
+  keeps running. Spotless (dust left < 5%, or shown dust < 2%): the clocks start again. 1 shine point per rub, +10 at spotless.
+  Shine points are their own counter (`sh`), never XP.
+- Every medal has its own cobweb and dust pattern: seed = FNV-1a of the badge id + murmur3 finish (`web_seed`, same as the
+  preview's `webSeed`).
+- Look = the owner's saved tuning (preview "Save for Claude", 366 days): see the HLSL constants in `src/achievements/shaders.rs`.
+

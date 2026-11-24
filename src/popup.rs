@@ -1077,6 +1077,9 @@ fn end_task(owner: HWND, pid: u32, name: &str) {
             r != 0
         }
     };
+    if let Some(a) = crate::app::app() {
+        a.ach_task_ended(ok);
+    }
     if !ok {
         message(
             owner,

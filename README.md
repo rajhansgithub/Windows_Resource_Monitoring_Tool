@@ -1,5 +1,7 @@
 # Resource Monitor
 
+By **Emulsion Labs**.
+
 Tiny, native taskbar monitor for Windows 10 and 11. Written in Rust on raw Win32.
 No .NET, no driver, no admin rights, no background service.
 
@@ -65,8 +67,10 @@ The app updates itself: once at startup it asks GitHub for the latest release, d
 
 ## Install
 
-1. Download `ResourceMonitor.exe` (portable) or `Setup_ResourceMonitor.exe` (per-user install, no admin) from [Releases](../../releases).
+1. Download `ResourceMonitor.exe` (portable) or `Setup_ResourceMonitor.exe` (per-user install, no admin, into `%LOCALAPPDATA%\Programs\Emulsion Labs\Resource Monitor`, Start Menu folder *Emulsion Labs*) from [Releases](../../releases).
 2. Run it. Right-click the widget or tray icon → **Start with Windows**.
+
+Upgrading from a pre-2.13 install: Setup moves it from `...\Programs\Resource Monitor` into the Emulsion Labs folder, replaces the old shortcuts and removes the old folder. Settings and history stay where they are.
 
 Upgrading from the old .NET version: settings and data usage history are imported automatically on first run, and the old autostart entry is removed.
 

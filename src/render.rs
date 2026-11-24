@@ -161,6 +161,12 @@ impl Canvas {
         }
     }
 
+    /// The canvas pixels (premultiplied BGRA, row 0 = top), e.g. to read text coverage back.
+    pub fn pixels(&mut self) -> &[u32] {
+        unsafe { GdiFlush() };
+        self.buf()
+    }
+
     pub fn clear(&mut self, c: Rgba) {
         let p = premul(c);
         self.buf().fill(p);

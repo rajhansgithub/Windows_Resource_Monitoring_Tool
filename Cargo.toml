@@ -1,7 +1,8 @@
 [package]
 name = "resmon"
-version = "2.12.2"
+version = "2.13.0"
 edition = "2021"
+authors = ["Emulsion Labs"]
 description = "Ultra-light taskbar resource monitor for Windows 10/11"
 license = "MIT"
 build = "build.rs"
@@ -45,7 +46,11 @@ features = [
 # windows-targets with windows-sys, so it adds little to the binary.
 [dependencies.windows]
 version = "0.58"
-features = ["Win32_UI_Accessibility", "Win32_System_Com", "Win32_Foundation"]
+features = [
+  "Win32_UI_Accessibility", "Win32_System_Com", "Win32_Foundation",
+  # D3D11 badge shaders (src/achievements/gpu.rs)
+  "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common",
+]
 
 [build-dependencies]
 embed-resource = "3"

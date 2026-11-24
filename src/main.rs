@@ -1,6 +1,7 @@
 //! Resource Monitor — ultra-light taskbar resource monitor for Windows 10/11.
 #![windows_subsystem = "windows"]
 
+mod achievements;
 mod app;
 mod autostart;
 mod fmt;
@@ -37,6 +38,7 @@ fn main() {
 
         let report = std::env::args().any(|a| a.eq_ignore_ascii_case("--report"));
         let after_update = std::env::args().any(|a| a.eq_ignore_ascii_case("--after-update"));
+        let achievements = std::env::args().any(|a| a.eq_ignore_ascii_case("--achievements"));
         let name = wide("Local\\ResourceMonitor.SingleInstance");
         let mut mutex = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
         // Just updated: the previous version is still shutting down; wait for it.
@@ -52,7 +54,8 @@ fn main() {
             if !h.is_null() {
                 // Let the running instance bring its windows to the front.
                 AllowSetForegroundWindow(ASFW_ANY);
-                PostMessageW(h, app::WM_APP_ACTIVATE, report as usize, 0);
+                let w = if achievements { 2 } else { report as usize };
+                PostMessageW(h, app::WM_APP_ACTIVATE, w, 0);
             }
             return;
         }
@@ -80,6 +83,11 @@ fn main() {
         if report {
             if let Some(a) = app::app() {
                 report::open(a);
+            }
+        }
+        if achievements {
+            if let Some(a) = app::app() {
+                a.open_achievements();
             }
         }
 
