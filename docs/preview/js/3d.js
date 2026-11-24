@@ -729,7 +729,7 @@ void main(){
   function warm() {
     const G = root.YTPMGL;
     if (!G || !G.ctx()) return;
-    const list = [variant('medal', null, [1, 0, 0]), variant('dia', null, [1, 0, 0]), variant('bubble'), variant('medal', null, [0, 0, 0]), variant('dia', null, [0, 0, 0])];
+    const list = [variant('medal', null, [1, 0, 0]), variant('dia', null, [1, 0, 0]), variant('bubble')];   // clean variants compile when first needed
     if (G.parallel()) { list.forEach((v) => prog(v)); return; }
     let i = 0;
     const step = () => { if (i < list.length) G.when(prog(list[i++])).then(() => G.idle(step, 1500)); };   // no parallel compile: one at a time, when idle

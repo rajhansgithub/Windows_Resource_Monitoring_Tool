@@ -906,7 +906,7 @@ void main(){
     return list.length;
   }
   /** Compile the programs the badge grid will need (called a few seconds after load; parallel compile keeps the page free). */
-  function warm(list) { if (!setup()) return; (list || [[2, 0, 1], [2, 0, 0], [0, 0, 1], [1, 0, 1]]).forEach((v) => prog(v[0], v[1], v[2])); }
+  function warm(list) { if (!setup()) return; (list || [[2, 0, 1], [0, 0, 1], [1, 0, 1]]).forEach((v) => prog(v[0], v[1], v[2])); }
   /** Change a running stone: { icon, kind }. */
   function set(c, o) {
     const it = items.find((x) => x.c === c);
