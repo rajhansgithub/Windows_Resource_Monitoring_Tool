@@ -399,7 +399,7 @@ void main(){
   function only(c) { solo = c || null; items.forEach((it) => { it.fresh = true; }); if (still()) draw(performance.now()); else if (!raf && items.length) raf = requestAnimationFrame(loop); }
   /** Draw every bubble again now (after a look change, when motion is reduced and nothing animates). */
   function redraw() { items.forEach((it) => { it.fresh = true; }); if (gl && still()) draw(performance.now()); }
-  const api = { mount, reflect, setReflect, only, redraw, warm: () => { if (setup()) prog(); }, supported: () => setup() };
+  const api = { mount, reflect, setReflect, only, redraw, warm: () => (setup() ? root.YTPMGL.when(prog()) : Promise.resolve(false)), supported: () => setup() };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.YTPMBubble = api;
 })(typeof window !== 'undefined' ? window : globalThis);

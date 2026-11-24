@@ -8,7 +8,7 @@
   const VS = 'attribute vec2 a;void main(){gl_Position=vec4(a,0.,1.);}';
   const FS = `
 precision highp float;
-uniform vec2 uRes; uniform float uTime; uniform float uSeed; uniform sampler2D uIcon; uniform float uIconOn; uniform float uPx; uniform sampler2D uDet; uniform float uDetOn; uniform vec2 uTilt;
+uniform vec2 uRes; uniform float uTime; uniform float uSeed; uniform float uKind; uniform sampler2D uIcon; uniform float uIconOn; uniform float uPx; uniform sampler2D uDet; uniform float uDetOn; uniform vec2 uTilt;
 const float PI=3.14159265;
 mat2 rot(float a){ float c=cos(a), s=sin(a); return mat2(c,-s,s,c); }
 float hash(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }
@@ -750,12 +750,12 @@ void main(){
     }
     return true;
   }
-  /** One program per feature set: stone kind, shape, aged or clean (#defines; the unused parts are not compiled at all). */
-  const UN = ['uRes', 'uTime', 'uSeed', 'uIcon', 'uIconOn', 'uPx', 'uMetal', 'uDet', 'uDetOn', 'uTilt', 'uWear', 'uAge'];
+  /** One program per feature set: shape, aged or clean (#defines; the unused parts are not compiled at all). */
+  const UN = ['uRes', 'uTime', 'uSeed', 'uKind', 'uIcon', 'uIconOn', 'uPx', 'uMetal', 'uDet', 'uDetOn', 'uTilt', 'uWear', 'uAge'];
   const isAged = (it) => it.wear[0] > 0 || (it.wear[2] || 0) > 0;
-  const keyOf = (k, shape, aged) => 'gem2d:' + k + shape + (aged ? 'a' : '');
+  const keyOf = (k, shape, aged) => 'gem2d:' + shape + (aged ? 'a' : '');
   function prog(k, shape, aged) {
-    return root.YTPMGL.program(keyOf(k, shape, aged), FS, `#define uKind ${k}.\n#define uShape ${shape}.\n${aged ? '#define AGED\n' : ''}`, UN, (y) => {
+    return root.YTPMGL.program(keyOf(k, shape, aged), FS, `#define uShape ${shape}.\n${aged ? '#define AGED\n' : ''}`, UN, (y) => {
       if (!y.ok) return;
       root.YTPMGL.use(y); gl.uniform1i(y.U.uIcon, 0); gl.uniform1i(y.U.uDet, 1);
       items.forEach((i) => { if (keyOf(i.kind, i.shape, isAged(i)) === y.key) i.fresh = true; });
@@ -865,7 +865,7 @@ void main(){
       it.fresh = false;
       G.use(x); G.size(it.px, it.px);
       const U = x.U;
-      gl.uniform2f(U.uRes, it.px, it.px); gl.uniform1f(U.uTime, t); gl.uniform1f(U.uSeed, it.seed); gl.uniform1f(U.uPx, it.px); gl.uniform3fv(U.uMetal, METAL[it.metal] || METAL.gold); gl.uniform2f(U.uTilt, it.tilt[0], it.tilt[1]); gl.uniform3f(U.uWear, it.wear[0], it.wear[1], it.wear[2] || 0); if (U.uAge && ageV) gl.uniform4fv(U.uAge, ageV);
+      gl.uniform2f(U.uRes, it.px, it.px); gl.uniform1f(U.uTime, t); gl.uniform1f(U.uSeed, it.seed); gl.uniform1f(U.uKind, it.kind); gl.uniform1f(U.uPx, it.px); gl.uniform3fv(U.uMetal, METAL[it.metal] || METAL.gold); gl.uniform2f(U.uTilt, it.tilt[0], it.tilt[1]); gl.uniform3f(U.uWear, it.wear[0], it.wear[1], it.wear[2] || 0); if (U.uAge && ageV) gl.uniform4fv(U.uAge, ageV);
       const dt = it.shape === 2 ? detail(it) : null;
       gl.uniform1f(U.uDetOn, dt && dt.ok ? 1 : 0);
       if (dt && dt.ok) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, dt.tex); gl.activeTexture(gl.TEXTURE0); }
@@ -906,7 +906,7 @@ void main(){
     return list.length;
   }
   /** Compile the programs the badge grid will need (called a few seconds after load; parallel compile keeps the page free). */
-  function warm(list) { if (!setup()) return; (list || [[2, 0, 1], [0, 0, 1], [1, 0, 1]]).forEach((v) => prog(v[0], v[1], v[2])); }
+  function warm() { return setup() ? root.YTPMGL.when(prog(2, 0, 1)) : Promise.resolve(false); }
   /** Change a running stone: { icon, kind }. */
   function set(c, o) {
     const it = items.find((x) => x.c === c);

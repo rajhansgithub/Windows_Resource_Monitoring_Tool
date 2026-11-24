@@ -207,10 +207,7 @@
      programs, then the badge engines and their programs), so opening them later does not wait. */
   // Order: the badge grid's programs first (the next tab people open), then the full view's.
   const warmUp = () => setTimeout(() => YTPMGL.idle(() => {
-    engines().then(() => YTPMGL.idle(() => {
-      try { YTPMGem.warm(); YTPMBubble.warm(); } catch (e) { /* ignore */ }
-      try { YTPM3D.warm(); } catch (e) { /* ignore */ }
-    }, 2000), () => {});
+    engines().then(() => YTPMGem.warm()).then(() => YTPMBubble.warm()).then(() => YTPM3D.warm()).catch(() => {});
   }, 2000), 3000);
   if (document.readyState === 'complete') warmUp(); else window.addEventListener('load', warmUp);
   /* ------------------------------------------------------------------ start */
