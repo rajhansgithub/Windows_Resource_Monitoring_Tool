@@ -465,10 +465,19 @@ float envG(vec3 d){
 vec3 aces(vec3 x){ return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),0.,1.); }
 float tex(sampler2D s, vec2 p, float k){ vec2 iu=p/k*.5+.5; vec2 c=clamp(iu,.001,.999); float m=step(0.,iu.x)*step(iu.x,1.)*step(0.,iu.y)*step(iu.y,1.); return texture2D(s,vec2(c.x,1.-c.y)).a*m; }
 ${geo()}
+const float SS=.57;                                  // set stone: girdle radius
+// Dial family (design 6): the stone sits forward in a raised collet: girdle level with the grip ring, the whole crown proud;
+// the pavilion rests in a fitted polished cup, the back stays flat (no bulge)
+const float SSD=uDesign>5.5?.55:SS;
+const float ZG6=.19;                                          // girdle height
+const float GZD=uDesign>5.5?(ZG6-.2795*SSD):(.15-TABC*SS);    // stone centre (z) / old Dial: table at .15
+const float FLOOR6=-.13;                                      // the culet stops just inside the back plate
+const float SCUT=-(FLOOR6-GZD)/SSD;
 #define P(N,C) { vec3 nn=N; float dn=dot(nn,d); float tt=(C-dot(nn,o))/dn; if(dn<0.){ if(tt>tIn){ tIn=tt; nIn=nn; } } else { if(tt<tOut){ tOut=tt; nOut=nn; } } }
 void trav(vec3 o, vec3 d, out float tIn, out vec3 nIn, out float tOut, out vec3 nOut){
   tIn=-1e9; tOut=1e9; nIn=vec3(0.,0.,1.); nOut=vec3(0.,0.,1.);
   P(vec3(0.,0.,1.),TABC)
+  if(uDesign>5.5) P(vec3(0.,0.,-1.),SCUT)          // Dial family: the pavilion ends flat on the closed back plate (no bulge)
   vec2 cs=vec2(1.,0.);
   for(int k=0;k<16;k++){
     vec2 ch=vec2(cs.x*HALF.x-cs.y*HALF.y, cs.y*HALF.x+cs.x*HALF.y);
@@ -490,7 +499,6 @@ float disc(vec3 p, float R, float z0, float z1, float rr){ return box2(vec2(leng
 vec2 prep(vec2 q, float n){ float an=TAU/n; float a=mod(atan(q.y,q.x)+an*.5,an)-an*.5; return length(q)*vec2(cos(a),sin(a)); }
 vec2 U(vec2 a, vec2 b){ return b.x<a.x?b:a; }
 float Hb(float r){ return .12+.45*(1.-r*r/.41); }   // the closed cup behind a set stone (a lens's rear dome)
-const float SS=.57;                                  // set stone: girdle radius
 // ids: 1 polished, 2 spun (turned), 3 black anodised, 4 sandblasted, 6 second metal polished, 7 silicon die, 8 guilloche, 9 screw
 vec2 mapF(vec3 p){
   float r=length(p.xy);
@@ -528,26 +536,43 @@ vec2 mapF(vec3 p){
     float bl=max(max(abs(r*sin(a))-.02,max(r-.815,.2-r)),max(p.z-(.11-.045*(r-.2)),-.01-p.z));
     d=U(d,vec2(bl*.55,1.));
     d=U(d,vec2(disc(p,.23,-.01,.155,.045),2.));
-  } else {                                           // Rack: terraces like a 1U faceplate, four rack screws
+  } else if(uDesign<5.5){                            // Rack: terraces like a 1U faceplate, four rack screws
     d=U(d,vec2(ringS(p,.88,1.,-.01,.15,.02),1.));
     d=U(d,vec2(ringS(p,.755,.885,-.01,.12,.012),2.));
     d=U(d,vec2(ringS(p,.635,.76,-.01,.09,.012),1.));
     d=U(d,vec2(disc(p,.64,-.01,.065,.01),2.));
     vec2 sq=prep(rot(PI/4.)*p.xy,4.);
     d=U(d,vec2((length(vec3(sq.x-.82,sq.y,(p.z-.12)*1.7))-.05)/1.7,9.));
+  } else {                                           // Dial family: the Dial frame; metals hold a CPU die, Diamond and Ruby a stone
+    d=U(d,vec2(ringS(p,.9,1.,-.01,.19,.025),1.));
+    vec2 bq=prep(p.xy,72.); d=U(d,vec2(length(vec3(bq.x-.948,bq.y,p.z-.186))-.016,1.));
+    d=U(d,vec2(max(ringS(p,.70,.905,-.01,.4,.0),(p.z-(.15+(r-.70)*.13))*.99),2.));
+    d=U(d,vec2(ringS(p,.595,.705,-.01,.08,.012),3.));
+    if(uStone<.5){
+      d=U(d,vec2(disc(p,.6,-.01,.05,.005),4.));
+      d=U(d,vec2(box3(p-vec3(0.,0.,.06),vec3(.235,.235,.07),.022),7.));
+      vec2 a2=abs(p.xy); if(a2.y>a2.x) a2=a2.yx;
+      float yy=a2.y-.06*clamp(floor(a2.y/.06+.5),0.,3.);
+      d=U(d,vec2(box3(vec3(a2.x-.27,yy,p.z-.065),vec3(.035,.012,.011),.005),6.));
+    } else {                                         // the collet: a polished cup rising out of the barrel, a thin lip at the girdle
+      float body=box2(vec2(r-.3,p.z-(ZG6+.012-.12)*.5),vec2(.3,(ZG6+.012+.12)*.5),.01);
+      float k=.602, zc=GZD-.602*SSD-.004;
+      float pocket=max(r-(SSD+.003),(zc+k*r-p.z)/sqrt(1.+k*k));
+      d=U(d,vec2(max(body,-pocket),6.));
+    }
   }
   return d;
 }
 vec2 mapB(vec3 p){                                   // the reverse: a rim and a turned field with the name
-  float r=length(p.xy), dep=uDesign<.5?.19:.12;
+  float r=length(p.xy), dep=(uDesign<.5||uDesign>5.5)?.19:.12;
   vec2 d=vec2(ringS(p,.9,1.,-dep,.01,.025),1.);
   d=U(d,vec2(disc(p,.905,-dep+.05,.01,.01),2.));
-  if(uStone>.5) d=U(d,vec2(max(r-.64,max(-p.z-Hb(r),p.z-.01))/1.7,1.));
+  if(uStone>.5 && uDesign<.5) d=U(d,vec2(max(r-.64,max(-p.z-Hb(r),p.z-.01))/1.7,1.));
   return d;
 }
 vec2 map(vec3 p){
   vec2 d=U(mapF(p),mapB(p));
-  if(uStone>.5){ float r=length(p.xy); float h=max(r-.60,(-Hb(r)+.03)-p.z)/1.7; if(-h>d.x) d=vec2(-h,6.); }
+  if(uStone>.5 && uDesign<.5){ float r=length(p.xy); float h=max(r-.60,(-Hb(r)+.03)-p.z)/1.7; if(-h>d.x) d=vec2(-h,6.); }
   return d;
 }
 vec3 nrm(vec3 p){ vec2 e=vec2(.0012,0.); return normalize(vec3(map(p+e.xyy).x-map(p-e.xyy).x,map(p+e.yxy).x-map(p-e.yxy).x,map(p+e.yyx).x-map(p-e.yyx).x)); }
@@ -607,11 +632,11 @@ void main(){
   // the set stone in front of the metal?
   float scov=0.; vec3 sc=vec3(0.);
   if(uStone>.5){
-    vec3 og=(ro-vec3(0.,0.,.15-TABC*SS))/SS;
+    vec3 og=(ro-vec3(0.,0.,GZD))/SSD;
     float gIn,gOut; vec3 gnIn,gnOut;
     trav(og,rd,gIn,gnIn,gOut,gnOut);
-    if(gIn<gOut && gOut>0. && (!hit || gIn*SS<t)){
-      sc=stone(og,rd,gIn,gnIn,M,scov,pxw/SS,gOut);
+    if(gIn<gOut && gOut>0. && (!hit || gIn*SSD<t)){
+      sc=stone(og,rd,gIn,gnIn,M,scov,pxw/SSD,gOut);
       if(scov>.999 || !hit){ gl_FragColor=vec4(sc*scov,scov); return; }
     }
   }
@@ -638,9 +663,9 @@ void main(){
     nl=normalize(nl+vec3(fr?gr:vec2(-gr.x,gr.y),0.)*.0016*smoothstep(.4,.46,r));
   }
   // the icon, engraved (matte floor, polished walls) where each design keeps it
-  float kI=uDesign<.5?.42:uDesign<1.5?.27:uDesign<2.5?.27:uDesign<3.5?.2:uDesign<4.5?.15:.4;
+  float kI=uDesign>5.5?.17:uDesign<.5?.42:uDesign<1.5?.27:uDesign<2.5?.27:uDesign<3.5?.2:uDesign<4.5?.15:.4;
   bool onDie=id>6.5&&id<7.5&&n.z>.7;
-  if(fr && face && uIconOn>0. && r<kI*1.1 && !(uStone>.5 && uDesign<.5)){
+  if(fr && face && uIconOn>0. && r<kI*1.1 && uStone<.5){
     float dd=1.4*pxw;
     float m=tex(uIcon,q,kI);
     float gx=tex(uIcon,q+vec2(dd,0.),kI)-tex(uIcon,q-vec2(dd,0.),kI), gy=tex(uIcon,q+vec2(0.,dd),kI)-tex(uIcon,q-vec2(0.,dd),kI);
@@ -659,19 +684,21 @@ void main(){
   // paint-filled engraving on the front: the ring text, the dial's scale, the die's traces
   if(fr && n.z>.3){
     if(uRingOn>0.) paint=max(paint,smoothstep(.1,.7,tex(uRing,q,1.)));
-    if(uDesign<.5 && id>1.5&&id<2.5 && r>.71){
+    if((uDesign<.5||uDesign>5.5) && id>1.5&&id<2.5 && r>.71){
       float u=atan(q.y,q.x)/TAU*60., fi=floor(u+.5), du=abs(u-fi)*TAU/60.*r; bool maj=mod(fi+60.,5.)<.5;
       float w=maj?.0065:.0035, r0=maj?.80:.84;
       paint=max(paint,smoothstep(w+aa,w,du)*smoothstep(r0-aa,r0,r)*smoothstep(.888,.884,r)*step(-.35,q.y/max(r,1e-3)));
     }
   }
   float trace=0.;
-  if(uDesign>2.5&&uDesign<3.5&&fr&&id>3.5&&id<4.5){
+  if((uDesign>2.5&&uDesign<3.5 || uDesign>5.5)&&fr&&id>3.5&&id<4.5){
+    bool fam=uDesign>5.5;                            // Dial family: shorter traces, pads just inside the barrel
+    float r0=fam?.3:.36, r1=fam?.54:.84, j0=fam?.4:.56, j1=fam?.46:.66, tw=fam?.0045:.006, pr=fam?.016:.022;
     float an=TAU/24., a=atan(q.y,q.x), k=floor((a+an*.5)/an), la=a-k*an;
-    float jog=smoothstep(.56,.66,r)*an*.35*(mod(k,2.)<.5?1.:-1.);
-    float dl=abs(r*sin(la-jog))-.006;
-    float tr=smoothstep(aa,-aa,dl)*step(.36,r)*step(r,.84);
-    float pad=smoothstep(.022+aa,.022,length(q-.84*vec2(cos(k*an+jog),sin(k*an+jog))));
+    float jog=smoothstep(j0,j1,r)*an*.35*(mod(k,2.)<.5?1.:-1.);
+    float dl=abs(r*sin(la-jog))-tw;
+    float tr=smoothstep(aa,-aa,dl)*step(r0,r)*step(r,r1);
+    float pad=smoothstep(pr+aa,pr,length(q-r1*vec2(cos(k*an+jog),sin(k*an+jog))));
     trace=max(tr,pad);
   }
   vec3 nw=uR*nl;

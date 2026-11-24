@@ -61,6 +61,7 @@
   /* ------------------------------------------------------------------ versions: each stores only its settings; engines load once.
      To add a version: add an entry here (newest first) and a builder in BUILDERS. Earlier versions stay in the page, live. */
   const VERSIONS = [
+    { id: 'v7', label: 'v7 · Dial family', note: 'One coin for every tier, built from your notes: the Dial frame (grip ring with beads, a bezel with the scale, a black barrel). Bronze, Silver, Gold and Platinum hold a silicon CPU die in the barrel. Diamond and Ruby sit forward in a raised collet, the whole crown proud of the coin; the back is flat, with no bulge. One metal per tier, the same ring text on every coin. Emulsion stays the bubble.' },
     { id: 'v6', label: 'v6 · Coin designs', note: 'Eight coin designs with real depth, drawn live in 3D: Dial (gauge bezel), Heatsink, Guilloché, Silicon, Turbine and Rack. Diamond and Ruby are set into the Dial coin like a lens element, not loose. Ideas to pick from: nothing in the app changes until you pick.' },
     { id: 'v5', label: 'v5 · Aging per plugin v0.6.0', note: 'Aging follows the achievements plugin v0.6.0: each medal keeps [start, dust left, web cleared] per tier. The dust clock runs from the day the tier was earned; a rub clears the cobweb (it grows back from that day) and takes 30% of the dust. Spotless starts the clocks again, with a bonus. Your saved look (366 days) is the default; every medal has its own web. Tests cover the dust curve at 10 to 365 days, cobweb from day 20 to 350, rubs, new tiers, the bubble, and the same seed in the page and the app. Smooth: the bubble mark always faces you (only the glass turns); dust and cobweb are drawn once, not every frame; the badge grid keeps each frame under budget (badges take turns); the 3D view keeps one GL context.' },
     { id: 'v4', label: 'v4 · Shaders verified on Windows', note: 'The HLSL medal, stone and bubble shaders compiled and rendered on Windows (CI, 22 Nov 2026). No fallback to flat medals. In the full view every medal is a real 3D object: drag it. Medals age with real time (1 hour = 1 day): grainy dust that piles up in the hollows, and cobwebs that grow thread by thread after 20 days. Every medal gets its own web. Polish them in the full view.' },
@@ -83,9 +84,27 @@
     { id: 'turb', name: 'Turbine', tag: 'case fan', design: 4, metal: 'gold', icon: 'snow', title: 'Night Watch', sub: 'Gold · 2026', text: 'Nine curved blades turn slowly in a black well, round a turned hub with the icon. The only coin that moves on its own.' },
     { id: 'rack', name: 'Rack', tag: '1U faceplate', design: 5, metal: 'bronze', icon: 'server', title: 'Night Watch', sub: 'Bronze · 2026', ring: 'RACK 01  ·  WATCH', ringR: .82, ringTop: true, text: 'Terraces like a server faceplate, four rack screws, and the rack’s name on the middle step.' }
   ];
+  /* v7: the Dial family, one coin per tier (design 6): the same frame everywhere, one metal per tier */
+  const DFT = 'The Dial frame in one metal: knurled grip ring with beads, a bezel with the 60-step scale and the tier ring, a black barrel. ';
+  const DIAL = [
+    { id: 'd-bronze', name: 'Bronze', tag: '99% uptime', design: 6, metal: 'bronze', metal2: 'bronze', icon: 'cpu', title: 'Night Watch', sub: 'Bronze · 2026', ring: 'RESOURCE MONITOR  ·  99%  ·  BRONZE MEDAL', text: DFT + 'In the barrel, a silicon CPU die with the icon etched in bronze, pins on four sides and traces out to the barrel.' },
+    { id: 'd-silver', name: 'Silver', tag: '99.5% uptime', design: 6, metal: 'silver', metal2: 'silver', icon: 'cpu', title: 'Night Watch', sub: 'Silver · 2026', ring: 'RESOURCE MONITOR  ·  99.5%  ·  SILVER MEDAL', text: DFT + 'The same die, pins and traces, all in silver.' },
+    { id: 'd-gold', name: 'Gold', tag: '99.9% uptime', design: 6, metal: 'gold', metal2: 'gold', icon: 'cpu', title: 'Night Watch', sub: 'Gold · 2026', ring: 'RESOURCE MONITOR  ·  99.9%  ·  GOLD MEDAL', text: DFT + 'The same die, pins and traces, all in gold.' },
+    { id: 'd-plat', name: 'Platinum', tag: '99.95% uptime', design: 6, metal: 'plat', metal2: 'plat', icon: 'cpu', title: 'Night Watch', sub: 'Platinum · 2026', ring: 'RESOURCE MONITOR  ·  99.95%  ·  PLATINUM MEDAL', text: DFT + 'The same die, pins and traces, all in platinum. The last metal tier before the stones.' },
+    { id: 'd-dia', name: 'Diamond', tag: '99.99% uptime', design: 6, stone: 1, metal: 'plat', metal2: 'plat', icon: 'cpu', title: 'Night Watch', sub: 'Diamond · 2026', ring: 'RESOURCE MONITOR  ·  99.99%  ·  DIAMOND MEDAL', text: 'The same Dial frame in platinum. The die makes way for the Diamond: it sits forward in a raised polished collet, girdle level with the grip ring, the whole crown proud of the coin. Turn it over: the back is flat, no bulge.' },
+    { id: 'd-ruby', name: 'Ruby', tag: '99.999% uptime', design: 6, stone: 2, metal: 'rose', metal2: 'rose', icon: 'cpu', title: 'Night Watch', sub: 'Ruby · 2026', ring: 'RESOURCE MONITOR  ·  99.999%  ·  RUBY MEDAL', text: 'The same frame and collet in rose gold, holding the Ruby forward. Light through the stone bounces off the polished cup and comes back red. Flat back.' }
+  ];
   const coinOpt = (c) => ({ design: c.design, stone: c.stone || 0, metal: CMET[c.metal], metal2: CMET[c.metal2 || 'copper'], icon: c.icon, title: c.title, sub: c.sub,
     ring: c.ring ? [{ text: c.ring, r: c.ringR || .775, px: c.ringTop ? 34 : 30, bottom: !c.ringTop }] : null });
-  const CN = { sel: 0, on: false, raf: 0, yaw: 28, pitch: -16, drag: null, vy: 0, t0: 0, c: null };
+  const SETS = { v7: DIAL, v6: COINS };
+  const CN = { set: 'v7', p: null, sel: { v7: 0, v6: 0 }, on: false, raf: 0, yaw: 28, pitch: -16, drag: null, vy: 0, t0: 0, c: null };
+  function buildV7() {
+    const cards = DIAL.map((c, i) => `<button type="button" class="cn-card" data-coin="${i}" aria-pressed="${i === 0}"><canvas width="320" height="320" aria-hidden="true"></canvas><b>${esc(c.name)}</b><span>${esc(c.tag)}</span></button>`).join('');
+    return `<section class="card"><div class="sec-h"><div class="eyebrow">v7 · Dial family</div><h2>One coin, every tier</h2>
+      <p>Your notes, in one family. Every tier uses the same Dial frame. Bronze, Silver, Gold and Platinum hold a silicon CPU die; Diamond and Ruby sit forward in a raised collet, crown proud, flat back with no bulge. One metal per tier, so the whole set reads as one. Drag the big one to turn it over.</p></div>
+      <div class="cn"><div class="cn-stage"><canvas class="cn-c" width="792" height="792" aria-label="Selected coin, drag to turn"></canvas><div class="cap">drag to turn · double-click to reset</div></div>
+      <div class="cn-info"><h3 class="cn-name"></h3><p class="cn-text"></p><div class="cn-grid" role="group" aria-label="Dial family tiers">${cards}</div></div></div></section>`;
+  }
   function buildV6() {
     const cards = COINS.map((c, i) => `<button type="button" class="cn-card" data-coin="${i}" aria-pressed="${i === 0}"><canvas width="320" height="320" aria-hidden="true"></canvas><b>${esc(c.name)}</b><span>${esc(c.tag)}</span></button>`).join('');
     return `<section class="card"><div class="sec-h"><div class="eyebrow">v6 · Coin designs</div><h2>Coins with depth, stones set in metal</h2>
@@ -94,9 +113,9 @@
       <div class="cn-info"><h3 class="cn-name"></h3><p class="cn-text"></p><div class="cn-grid" role="group" aria-label="Coin designs">${cards}</div></div></div></section>`;
   }
   function coinPick(i) {
-    CN.sel = i; const c = COINS[i];
-    $$('.cn-card').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.coin === i)));
-    const n = $('.cn-name'), t = $('.cn-text'); if (n) n.textContent = c.name; if (t) t.textContent = c.text;
+    CN.sel[CN.set] = i; const c = SETS[CN.set][i], p = CN.p;
+    $$('.cn-card', p).forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.coin === i)));
+    const n = $('.cn-name', p), t = $('.cn-text', p); if (n) n.textContent = c.name; if (t) t.textContent = c.text;
     coinStart();
   }
   function coinTick(ts) {
@@ -108,23 +127,24 @@
     CN.raf = requestAnimationFrame(coinTick);
   }
   function coinStart() {
-    const c = $('.cn-c'); if (!c || !window.YTPM3D) return;
+    const c = CN.p && $('.cn-c', CN.p); if (!c || !window.YTPM3D) return;
     const r = c.getBoundingClientRect(), px = Math.round(Math.min(r.width || 396, 396) * Math.min(window.devicePixelRatio || 1, 2));
     if (px > 0 && c.width !== px) { c.width = px; c.height = px; }
     coinStop();
-    CN.c = c; CN.on = YTPM3D.start(c, 'coin', reduced(), coinOpt(COINS[CN.sel]));
+    CN.c = c; CN.on = YTPM3D.start(c, 'coin', reduced(), coinOpt(SETS[CN.set][CN.sel[CN.set]]));
     if (CN.on) { CN.t0 = performance.now(); CN.raf = requestAnimationFrame(coinTick); }
   }
   function coinStop() { if (!CN.on) return; CN.on = false; cancelAnimationFrame(CN.raf); CN.raf = 0; try { if (YTPM3D.canvas() === CN.c) YTPM3D.stop(); } catch (e) { /* ignore */ } }
-  function coinBind(p) {
+  function coinBind(p, id) {
     const c = $('.cn-c', p); if (!c || c.dataset.bound) return; c.dataset.bound = '1';
-    $$('.cn-card', p).forEach((b) => b.addEventListener('click', () => coinPick(+b.dataset.coin)));
-    c.addEventListener('pointerdown', (ev) => { if (!CN.on || YTPM3D.canvas() !== c) coinStart(); CN.drag = { x: ev.clientX, y: ev.clientY, lx: ev.clientX, t: performance.now() }; c.setPointerCapture(ev.pointerId); });
+    const set = SETS[id], here = () => { CN.set = id; CN.p = p; };
+    $$('.cn-card', p).forEach((b) => b.addEventListener('click', () => { here(); coinPick(+b.dataset.coin); }));
+    c.addEventListener('pointerdown', (ev) => { if (!CN.on || YTPM3D.canvas() !== c) { here(); coinStart(); } CN.drag = { x: ev.clientX, y: ev.clientY, lx: ev.clientX, t: performance.now() }; c.setPointerCapture(ev.pointerId); });
     c.addEventListener('pointermove', (ev) => { if (!CN.drag) return; const dx = ev.clientX - CN.drag.lx; CN.yaw += dx * .5; CN.pitch = Math.max(-70, Math.min(70, CN.pitch + (ev.clientY - CN.drag.y) * -.4)); CN.drag.y = ev.clientY; CN.vy = dx * .5; CN.drag.lx = ev.clientX; });
     const up = () => { CN.drag = null; };
     c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);
     c.addEventListener('dblclick', () => { CN.yaw = 28; CN.pitch = -16; CN.vy = 0; });
-    const n = $('.cn-name', p), t = $('.cn-text', p); n.textContent = COINS[CN.sel].name; t.textContent = COINS[CN.sel].text;
+    const n = $('.cn-name', p), t = $('.cn-text', p); n.textContent = set[CN.sel[id]].name; t.textContent = set[CN.sel[id]].text;
     // the cards: one still each, drawn one after another after the big one starts (no long block)
     // (each waits for its own program; one card per idle slot, only once it is on screen, sized to how it is shown)
     const list = $$('.cn-card canvas', p), queue = [];
@@ -135,7 +155,7 @@
       const c = queue.shift(), k = +c.closest('.cn-card').dataset.coin;
       const px = Math.max(64, Math.round((c.getBoundingClientRect().width || 160) * Math.min(window.devicePixelRatio || 1, 2)));
       if (c.width !== px) { c.width = px; c.height = px; }
-      YTPM3D.snap(c, coinOpt(COINS[k]), 28, -16).then(() => { busy = false; YTPMGL.idle(pump, 300); });
+      YTPM3D.snap(c, coinOpt(set[k]), 28, -16).then(() => { busy = false; YTPMGL.idle(pump, 300); });
     };
     const io = 'IntersectionObserver' in window ? new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { io.unobserve(e.target); queue.push(e.target); YTPMGL.idle(pump, 300); } })) : null;
     list.forEach((c) => { if (io) io.observe(c); else queue.push(c); });
@@ -144,7 +164,7 @@
 
   /* ------------------------------------------------------------------ versions bar + panels */
   const old = (id) => () => RMC.ver.build[id]();
-  const BUILDERS = { v6: buildV6, v5: old('v5'), v4: old('v4'), v3: old('v3'), v2: old('v2'), v1: old('v1') };
+  const BUILDERS = { v7: buildV7, v6: buildV6, v5: old('v5'), v4: old('v4'), v3: old('v3'), v2: old('v2'), v1: old('v1') };
   const panelsEl = $('#panels'), tabsEl = $('#vtabs');
   let cur = null;
   RMC.cur = () => cur;
@@ -169,18 +189,18 @@
       const sel = v.id === id, t = $('#vt-' + v.id), p = $('#p-' + v.id);
       t.setAttribute('aria-selected', sel ? 'true' : 'false'); t.tabIndex = sel ? 0 : -1; p.hidden = !sel;
     });
-    const p = $('#p-' + id);
+    const p = $('#p-' + id), coins = !!SETS[id];
     const open = () => {
       if (cur !== id) return;
       if (!p.dataset.built) {
         p.innerHTML = BUILDERS[id]() || ''; p.dataset.built = '1';
-        if (id !== 'v6') { RMC.ver.mountIn(p); RMC.ver.bindPanel(p); }
+        if (!coins) { RMC.ver.mountIn(p); RMC.ver.bindPanel(p); }
       }
       if (RMC.ver) RMC.ver.onShow(id);
-      if (id === 'v6') { coinBind(p); requestAnimationFrame(coinStart); }
+      if (coins) { coinStop(); CN.set = id; CN.p = p; coinBind(p, id); requestAnimationFrame(coinStart); }
     };
-    if (id !== 'v6') coinStop();
-    if (id === 'v6' || RMC.ver) open();
+    if (!coins) coinStop();
+    if (coins || RMC.ver) open();
     else {
       if (!p.dataset.built) p.innerHTML = '<p class="loading-tab">Loading this version…</p>';
       oldTabs().then(open, (e) => { if (!p.dataset.built) p.innerHTML = '<p class="loading-tab">' + esc(e.message) + '</p>'; });
