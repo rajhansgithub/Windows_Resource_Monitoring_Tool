@@ -776,6 +776,53 @@ mod tests {
         (cov, (s2 / n - mean * mean).max(0.0).sqrt(), [rgb[0] / n, rgb[1] / n, rgb[2] / n])
     }
 
+    /// Timings for the "lags and freezes" check (printed, not asserted; CI runs on WARP, so draw times are pessimistic).
+    #[test]
+    fn perf_numbers() {
+        use std::time::Instant;
+        let f = load_d3dcompile().expect("d3dcompiler_47.dll");
+        let src = shaders::gem_src();
+        let t = Instant::now();
+        let a = unsafe { compile(f, &src, b"main\0", b"ps_5_0\0") }.expect("gem");
+        println!("perf: gem ps compile {:.0} ms, {} bytes", t.elapsed().as_secs_f64() * 1e3, a.len());
+        let lsrc = src.replace("[unroll] for", "[loop] for");
+        let t = Instant::now();
+        let b = unsafe { compile(f, &lsrc, b"main\0", b"ps_5_0\0") }.expect("gem loop");
+        println!("perf: gem ps compile with [loop] {:.0} ms, {} bytes", t.elapsed().as_secs_f64() * 1e3, b.len());
+        let t = Instant::now();
+        let c = unsafe { compile(f, &shaders::bubble_src(), b"main\0", b"ps_5_0\0") }.expect("bubble");
+        println!("perf: bubble ps compile {:.0} ms, {} bytes", t.elapsed().as_secs_f64() * 1e3, c.len());
+        let t = Instant::now();
+        let mut gpu = Gpu::new().expect("gpu");
+        println!("perf: Gpu::new {:.0} ms ({})", t.elapsed().as_secs_f64() * 1e3, if gpu.hardware { "hardware" } else { "WARP" });
+        let ic = icon();
+        let mut tiles: Vec<Params> = Vec::new();
+        for i in 0..42 {
+            let m = ALL[i % 6];
+            let mut p = params(m, still_time(m), (0.0, 0.0), &ic);
+            p.size_px = 76;
+            p.wear = [0.6, (i as f32) / 42.0, 0.7];
+            tiles.push(p);
+        }
+        let t = Instant::now();
+        render(&mut gpu, &tiles);
+        println!("perf: 42 aged tiles at 76 px {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+        for (name, wear) in [("clean", [0.0f32, 0.3, 0.0]), ("aged", [0.8, 0.3, 0.9])] {
+            let mut p = params(Material::Gold, 1.0, (0.1, 0.1), &ic);
+            p.size_px = 560;
+            p.wear = wear;
+            render(&mut gpu, &[p]);
+            let t = Instant::now();
+            for k in 0..5 {
+                let mut q = params(Material::Gold, 1.0 + k as f32 * 0.016, (0.1, 0.1), &ic);
+                q.size_px = 560;
+                q.wear = wear;
+                render(&mut gpu, &[q]);
+            }
+            println!("perf: full view 560 px {name}: {:.1} ms a frame", t.elapsed().as_secs_f64() * 1e3 / 5.0);
+        }
+    }
+
     #[test]
     fn shaders_compile_and_every_material_renders() {
         let mut gpu = match Gpu::new() {
