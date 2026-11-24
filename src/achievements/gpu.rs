@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 
 use windows::core::Interface;
@@ -82,7 +82,84 @@ pub struct Params<'a> {
     pub detail_mask: Option<(&'a [u8], u32)>,
     /// 0 = the badge. Metals and stones only: 1 = its age layer L (premultiplied dust + fibres + cobweb, a = coverage),
     /// 2 = its age haze (r = amount, g = tint x 4, b = grey). `wear` as for the badge; see `shaders::ageLayers`.
+    /// Coins: 0 only (their age layers are made and kept here, see `Gpu::coin_ages`).
     pub layer: u8,
+    /// Draw the Dial family coin (3D, `shaders::COIN`) instead of the flat medal / brilliant / bubble.
+    pub coin: Option<Coin<'a>>,
+}
+
+/// The Dial family coin: one frame, one item. Bronze to Platinum hold a CPU die (the icon etched on it), Diamond and
+/// Ruby a stone in a raised collet, Emulsion the bubble in an open ring (it never ages).
+#[derive(Clone, Copy)]
+pub struct Coin<'a> {
+    /// Orientation in degrees (preview `mat`): yaw about the screen's vertical axis, then pitch about the horizontal.
+    pub yaw: f32,
+    pub pitch: f32,
+    /// Camera half-size in coin radii: 1.24 as the preview (the coin turned fully stays inside).
+    pub ext: f32,
+    /// RING_N x RING_N alpha, row 0 = top, spanning the face: the tier text round the front (paint-filled).
+    pub ring: Option<&'a [u8]>,
+    /// RING_N x RING_N alpha spanning 0.92 of the face: the name, tier and maker on the reverse (engraved).
+    pub back: Option<&'a [u8]>,
+}
+
+/// Side of the coin's ring and back text masks.
+pub const RING_N: u32 = 1024;
+/// The coin programs: (stone, age layer). Stone 0 die, 1 Diamond, 2 Ruby, 3 Emulsion; the layer programs only need the
+/// geometry, which Diamond and Ruby share.
+const COIN_VARIANTS: [(u8, bool); 6] = [(0, false), (1, false), (2, false), (3, false), (0, true), (1, true)];
+static COINS_OK: AtomicBool = AtomicBool::new(false);
+
+fn coin_stone(m: Material) -> u8 {
+    match m {
+        Material::Diamond => 1,
+        Material::Ruby => 2,
+        Material::Emulsion => 3,
+        _ => 0,
+    }
+}
+
+/// Index into `COIN_VARIANTS` for an item (layer items: 1 front, 2 back).
+fn coin_variant(m: Material, layer: u8) -> usize {
+    let st = coin_stone(m);
+    if layer > 0 {
+        if st == 0 { 4 } else { 5 }
+    } else {
+        st as usize
+    }
+}
+
+/// Coin metals (preview CMET): the four metal tiers, platinum round the Diamond, rose gold round the Ruby, pearl for Emulsion.
+fn coin_metal(m: Material) -> [f32; 3] {
+    match m {
+        Material::Diamond => [0.72, 0.93, 0.91],
+        Material::Ruby => [0.98, 0.62, 0.52],
+        Material::Emulsion => [0.92, 0.93, 0.95],
+        _ => metal_rgb(m),
+    }
+}
+
+/// Row-major coin-to-world rotation (preview `mat(yaw, pitch, 0)` = Ry * Rx).
+fn coin_rot(yaw: f32, pitch: f32) -> [[f32; 3]; 3] {
+    let (a, b) = (yaw.to_radians(), pitch.to_radians());
+    let (ca, sa, cb, sb) = (a.cos(), a.sin(), b.cos(), b.sin());
+    [[ca, sa * sb, sa * cb], [0.0, cb, -sb], [-sa, ca * sb, ca * cb]]
+}
+
+/// Does this coin item carry dust or cobweb? (Same threshold as `ageLayers`: dust + web * 1.3 < .002 = clean.)
+fn coin_aged(p: &Params) -> bool {
+    p.coin.is_some() && p.layer == 0 && p.material != Material::Emulsion && p.wear[0] + p.wear[2] * 1.3 >= 0.002
+}
+
+/// Side of a coin's age layer: one texel per screen pixel of the face, in steps of 16 so near sizes share it.
+fn age_n(size_px: u32, ext: f32) -> u32 {
+    let n = (size_px as f32 / ext.max(0.5)).round() as u32;
+    ((n + 15) / 16 * 16).clamp(32, 1024)
+}
+
+/// True once every coin program is compiled and ready (see `warm`). Until then, draw the medals.
+pub fn coins_ready() -> bool {
+    COINS_OK.load(Ordering::Relaxed)
 }
 
 const MAX_ATLAS: u32 = 4096;
@@ -96,6 +173,8 @@ struct CbData([f32; 20]);
 
 enum Fail {
     Lost,
+    /// A coin program is still being compiled (`warm`): not an error, the caller draws the medal this time.
+    NotReady,
     Other(String),
 }
 
@@ -119,7 +198,16 @@ struct Gpu {
     vs: ID3D11VertexShader,
     ps_gem: ID3D11PixelShader,
     ps_bubble: ID3D11PixelShader,
+    /// `COIN_VARIANTS`, filled from the disk cache at creation and by `warm` (compiled off the lock).
+    ps_coin: [Option<ID3D11PixelShader>; 6],
     cb: ID3D11Buffer,
+    /// The coin's second constant buffer (`cbuffer K`): rotation, camera, second metal, flags.
+    cbk: ID3D11Buffer,
+    /// Premultiplied "over" (ONE, INV_SRC_ALPHA): the Emulsion coin is drawn over its bubble. Every other item lands on
+    /// cleared pixels, where this is the same as no blending.
+    blend: ID3D11BlendState,
+    /// Coin age layers (front | back, BGRA), by `coin_ages` key.
+    age: HashMap<u64, CachedTex>,
     samp: ID3D11SamplerState,
     rast: ID3D11RasterizerState,
     atlas: Option<Atlas>,
@@ -192,6 +280,7 @@ pub fn render_batch(items: &[Params], out: &mut Vec<Vec<u32>>) -> bool {
                 RENDER_FAILS.store(0, Ordering::Relaxed);
                 return true;
             }
+            Err(Fail::NotReady) => return false,
             Err(Fail::Lost) if !retried && LOST_COUNT.fetch_add(1, Ordering::Relaxed) < 4 => {
                 retried = true;
                 crate::util::diag("achievements gpu: device lost, recreating");
@@ -201,6 +290,7 @@ pub fn render_batch(items: &[Params], out: &mut Vec<Vec<u32>>) -> bool {
             Err(e) => {
                 let msg = match e {
                     Fail::Lost => "device lost".to_string(),
+                    Fail::NotReady => "not ready".to_string(),
                     Fail::Other(s) => s,
                 };
                 let n = RENDER_FAILS.fetch_add(1, Ordering::Relaxed) + 1;
@@ -272,15 +362,23 @@ fn fnv64(parts: &[&[u8]]) -> u64 {
     h
 }
 
-unsafe fn cached_compile(f: D3DCompileFn, src: &str, entry: &'static [u8], target: &'static [u8]) -> Result<Vec<u8>, String> {
+fn cache_path(src: &str, entry: &[u8], target: &[u8]) -> std::path::PathBuf {
     let key = fnv64(&[src.as_bytes(), entry, target, &CACHE_VER.to_le_bytes()]);
-    let dir = crate::util::data_dir().join("shader-cache");
-    let path = dir.join(format!("{key:016x}.cso"));
-    if let Ok(b) = std::fs::read(&path) {
-        if b.len() > 32 && &b[..4] == b"DXBC" {
-            return Ok(b);
-        }
+    crate::util::data_dir().join("shader-cache").join(format!("{key:016x}.cso"))
+}
+
+/// The compiled shader from the disk cache only (no compiler): None if it is not there yet.
+fn cached_only(src: &str, entry: &[u8], target: &[u8]) -> Option<Vec<u8>> {
+    let b = std::fs::read(cache_path(src, entry, target)).ok()?;
+    (b.len() > 32 && &b[..4] == b"DXBC").then_some(b)
+}
+
+unsafe fn cached_compile(f: D3DCompileFn, src: &str, entry: &'static [u8], target: &'static [u8]) -> Result<Vec<u8>, String> {
+    if let Some(b) = cached_only(src, entry, target) {
+        return Ok(b);
     }
+    let path = cache_path(src, entry, target);
+    let dir = path.parent().map(|d| d.to_path_buf()).unwrap_or_default();
     let code = compile(f, src, entry, target, 0)?;
     let _ = std::fs::create_dir_all(&dir);
     let _ = crate::util::write_atomic(&path, &code);
@@ -289,8 +387,36 @@ unsafe fn cached_compile(f: D3DCompileFn, src: &str, entry: &'static [u8], targe
 
 /// Make the device and compile the shaders now, on the calling thread. Called once from a background thread a few
 /// seconds after start-up, so opening the achievements window never waits for the compiler.
+/// Then the coin programs: each is compiled WITHOUT holding the GPU lock (the window keeps drawing medals meanwhile) and
+/// put in place in a moment. The first start after an update pays for it here; later starts load them from the cache.
 pub fn warm() {
-    let _ = available();
+    if !available() || coins_ready() {
+        return;
+    }
+    let Some(f) = load_d3dcompile() else { return };
+    for (i, &(stone, layer)) in COIN_VARIANTS.iter().enumerate() {
+        let have = matches!(&lock().0, State::Ready(g) if g.ps_coin[i].is_some());
+        if have {
+            continue;
+        }
+        let t0 = std::time::Instant::now();
+        let code = unsafe { cached_compile(f, &shaders::coin_src(stone, layer), b"main\0", b"ps_5_0\0") };
+        match code {
+            Ok(code) => {
+                let mut g = lock();
+                if let State::Ready(gpu) = &mut g.0 {
+                    gpu.install_coin(i, &code);
+                }
+            }
+            Err(e) => {
+                crate::util::diag(&format!("achievements gpu: coin shader {stone}/{layer}: {e}"));
+                return;
+            }
+        }
+        if t0.elapsed().as_millis() > 200 {
+            crate::util::diag(&format!("achievements gpu: coin shader {stone}/{layer} compiled in {} ms", t0.elapsed().as_millis()));
+        }
+    }
 }
 
 type D3DCompileFn = unsafe extern "system" fn(
@@ -487,6 +613,23 @@ impl Gpu {
             };
             let mut cb: Option<ID3D11Buffer> = None;
             dev.CreateBuffer(&bd, None, Some(&mut cb)).map_err(|e| format!("CreateBuffer: {e}"))?;
+            let bk = D3D11_BUFFER_DESC { ByteWidth: 64, ..bd };
+            let mut cbk: Option<ID3D11Buffer> = None;
+            dev.CreateBuffer(&bk, None, Some(&mut cbk)).map_err(|e| format!("CreateBuffer K: {e}"))?;
+
+            let rt = D3D11_RENDER_TARGET_BLEND_DESC {
+                BlendEnable: true.into(),
+                SrcBlend: D3D11_BLEND_ONE,
+                DestBlend: D3D11_BLEND_INV_SRC_ALPHA,
+                BlendOp: D3D11_BLEND_OP_ADD,
+                SrcBlendAlpha: D3D11_BLEND_ONE,
+                DestBlendAlpha: D3D11_BLEND_INV_SRC_ALPHA,
+                BlendOpAlpha: D3D11_BLEND_OP_ADD,
+                RenderTargetWriteMask: D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8,
+            };
+            let bld = D3D11_BLEND_DESC { AlphaToCoverageEnable: false.into(), IndependentBlendEnable: false.into(), RenderTarget: [rt; 8] };
+            let mut blend: Option<ID3D11BlendState> = None;
+            dev.CreateBlendState(&bld, Some(&mut blend)).map_err(|e| format!("CreateBlendState: {e}"))?;
 
             let sd = D3D11_SAMPLER_DESC {
                 Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
@@ -518,21 +661,42 @@ impl Gpu {
             let mut rast: Option<ID3D11RasterizerState> = None;
             dev.CreateRasterizerState(&rd, Some(&mut rast)).map_err(|e| format!("CreateRasterizerState: {e}"))?;
 
-            Ok(Gpu {
+            let mut g = Gpu {
                 dev,
                 ctx,
                 hardware,
                 vs: vs.ok_or("vs")?,
                 ps_gem: ps_gem.ok_or("ps")?,
                 ps_bubble: ps_bubble.ok_or("ps")?,
+                ps_coin: Default::default(),
                 cb: cb.ok_or("cb")?,
+                cbk: cbk.ok_or("cb K")?,
+                blend: blend.ok_or("blend")?,
+                age: HashMap::new(),
                 samp: samp.ok_or("sampler")?,
                 rast: rast.ok_or("rasterizer")?,
                 atlas: None,
                 tex: HashMap::new(),
                 frame: 0,
-            })
+            };
+            // coin programs already compiled by an earlier start (or before a lost device): no compiler here
+            COINS_OK.store(false, Ordering::Relaxed);
+            for (i, &(stone, layer)) in COIN_VARIANTS.iter().enumerate() {
+                if let Some(code) = cached_only(&shaders::coin_src(stone, layer), b"main\0", b"ps_5_0\0") {
+                    g.install_coin(i, &code);
+                }
+            }
+            Ok(g)
         }
+    }
+
+    /// Put one compiled coin program in place; all six = coins ready.
+    fn install_coin(&mut self, i: usize, code: &[u8]) {
+        let mut ps: Option<ID3D11PixelShader> = None;
+        if unsafe { self.dev.CreatePixelShader(code, None, Some(&mut ps)) }.is_ok() {
+            self.ps_coin[i] = ps;
+        }
+        COINS_OK.store(self.ps_coin.iter().all(|p| p.is_some()), Ordering::Relaxed);
     }
 
     /// Turn a failed D3D call into `Fail`, telling a lost device from any other error.
@@ -628,7 +792,101 @@ impl Gpu {
         }
     }
 
+    /// A BGRA image (premultiplied `0xAARRGGBB`, row 0 = top) as an immutable shader resource, no mips.
+    fn bgra_srv(&self, px: &[u32], w: u32, h: u32) -> Result<ID3D11ShaderResourceView, Fail> {
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: w,
+            Height: h,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_IMMUTABLE,
+            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let sub = D3D11_SUBRESOURCE_DATA { pSysMem: px.as_ptr() as *const c_void, SysMemPitch: w * 4, SysMemSlicePitch: 0 };
+        unsafe {
+            let mut t: Option<ID3D11Texture2D> = None;
+            self.dev.CreateTexture2D(&desc, Some(&sub), Some(&mut t)).map_err(|e| self.fail("age texture", e))?;
+            let t = t.ok_or_else(|| Fail::Other("age texture".into()))?;
+            let mut srv: Option<ID3D11ShaderResourceView> = None;
+            self.dev.CreateShaderResourceView(&t, None, Some(&mut srv)).map_err(|e| self.fail("age srv", e))?;
+            srv.ok_or_else(|| Fail::Other("age srv".into()))
+        }
+    }
+
+    /// The age layer of every aged coin in `items` (None for the rest). Dust and cobweb stay put on the coin, so each
+    /// coin's layer (front | back, face on) is drawn once per size, wear step and seed and kept; a frame only samples it.
+    fn coin_ages(&mut self, items: &[Params]) -> Result<Vec<Option<ID3D11ShaderResourceView>>, Fail> {
+        let key_of = |p: &Params| -> (u64, u32) {
+            let ext = p.coin.as_ref().map_or(1.24, |c| c.ext);
+            let ring = p.coin.as_ref().and_then(|c| c.ring).map_or(0, |r| hash_mask(r, 7));
+            let n = age_n(p.size_px, ext);
+            let geo = [coin_variant(p.material, 1) as u8];
+            let w: Vec<u8> = p.wear.iter().flat_map(|v| v.to_bits().to_le_bytes()).collect();
+            (fnv64(&[&geo, &n.to_le_bytes(), &w, &ring.to_le_bytes()]), n)
+        };
+        let mut need: Vec<(u64, usize, u32)> = Vec::new();
+        for (i, p) in items.iter().enumerate() {
+            if !coin_aged(p) {
+                continue;
+            }
+            let (k, n) = key_of(p);
+            if let Some(t) = self.age.get_mut(&k) {
+                t.stamp = self.frame;
+            } else if !need.iter().any(|x| x.0 == k) {
+                need.push((k, i, n));
+            }
+        }
+        if !need.is_empty() {
+            let mut layers: Vec<Params> = Vec::with_capacity(need.len() * 2);
+            for &(_, i, n) in &need {
+                let p = &items[i];
+                for layer in [1u8, 2] {
+                    layers.push(Params {
+                        material: p.material,
+                        size_px: n,
+                        time_s: 0.0,
+                        seed: 0.0,
+                        tilt: (0.0, 0.0),
+                        wear: p.wear,
+                        icon_mask: None,
+                        detail_mask: None,
+                        layer,
+                        coin: Some(Coin { yaw: 0.0, pitch: 0.0, ext: 1.0, ring: p.coin.and_then(|c| c.ring), back: None }),
+                    });
+                }
+            }
+            let mut out = Vec::new();
+            self.render(&layers, &mut out)?;
+            if self.age.len() + need.len() > 48 {
+                let keep = self.frame.saturating_sub(120);
+                self.age.retain(|_, c| c.stamp >= keep);
+                if self.age.len() + need.len() > 48 {
+                    self.age.clear();
+                }
+            }
+            for (j, &(k, _, n)) in need.iter().enumerate() {
+                let (f, b, n) = (&out[2 * j], &out[2 * j + 1], n as usize);
+                let mut px = vec![0u32; 2 * n * n];
+                for y in 0..n {
+                    px[y * 2 * n..y * 2 * n + n].copy_from_slice(&f[y * n..(y + 1) * n]);
+                    px[y * 2 * n + n..(y + 1) * 2 * n].copy_from_slice(&b[y * n..(y + 1) * n]);
+                }
+                let srv = self.bgra_srv(&px, 2 * n as u32, n as u32)?;
+                self.age.insert(k, CachedTex { srv, stamp: self.frame });
+            }
+        }
+        Ok(items.iter().map(|p| if coin_aged(p) { self.age.get(&key_of(p).0).map(|t| t.srv.clone()) } else { None }).collect())
+    }
+
     fn render(&mut self, items: &[Params], out: &mut Vec<Vec<u32>>) -> Result<(), Fail> {
+        if items.iter().any(|p| p.coin.is_some() && self.ps_coin[coin_variant(p.material, p.layer)].is_none()) {
+            return Err(Fail::NotReady);
+        }
+        let ages = self.coin_ages(items)?;
         self.frame += 1;
         out.resize_with(items.len(), Vec::new);
         let mut start = 0usize;
@@ -657,13 +915,13 @@ impl Gpu {
                 return Err(Fail::Other("item does not fit the atlas".into()));
             }
             let ah = ry + rh;
-            self.draw_chunk(&items[start..end], &places, aw, ah, &mut out[start..end])?;
+            self.draw_chunk(&items[start..end], &ages[start..end], &places, aw, ah, &mut out[start..end])?;
             start = end;
         }
         Ok(())
     }
 
-    fn draw_chunk(&mut self, items: &[Params], places: &[(u32, u32)], aw: u32, ah: u32, out: &mut [Vec<u32>]) -> Result<(), Fail> {
+    fn draw_chunk(&mut self, items: &[Params], ages: &[Option<ID3D11ShaderResourceView>], places: &[(u32, u32)], aw: u32, ah: u32, out: &mut [Vec<u32>]) -> Result<(), Fail> {
         // (re)create the atlas when it is too small; grow in steps of 256 px so it settles
         let need_new = match &self.atlas {
             Some(a) => a.w < aw || a.h < ah,
@@ -678,12 +936,17 @@ impl Gpu {
         }
         // masks first (they borrow self mutably)
         let mut icons: Vec<Option<ID3D11ShaderResourceView>> = Vec::with_capacity(items.len());
+        let mut texts: Vec<[Option<ID3D11ShaderResourceView>; 2]> = Vec::with_capacity(items.len());
         for p in items {
             let metal = !matches!(p.material, Material::Diamond | Material::Ruby | Material::Emulsion);
             icons.push(match p.icon_mask {
-                Some(m) if metal => self.mask_srv(m, ICON_N, ICON_N),
+                Some(m) if metal && p.layer == 0 => self.mask_srv(m, ICON_N, ICON_N),
                 _ => None,
             });
+            let c = p.coin.as_ref();
+            let ring = c.and_then(|c| c.ring).and_then(|m| self.mask_srv(m, RING_N, RING_N));
+            let back = c.and_then(|c| c.back).filter(|_| p.layer == 0).and_then(|m| self.mask_srv(m, RING_N, RING_N));
+            texts.push([ring, back]);
         }
         let atlas = match &self.atlas {
             Some(a) => a,
@@ -696,19 +959,24 @@ impl Gpu {
             ctx.VSSetShader(&self.vs, None);
             ctx.OMSetRenderTargets(Some(&[Some(atlas.rtv.clone())]), None);
             ctx.PSSetSamplers(0, Some(&[Some(self.samp.clone())]));
-            ctx.PSSetConstantBuffers(0, Some(&[Some(self.cb.clone())]));
+            ctx.PSSetConstantBuffers(0, Some(&[Some(self.cb.clone()), Some(self.cbk.clone())]));
+            ctx.OMSetBlendState(&self.blend, None, 0xffff_ffff);
             ctx.ClearRenderTargetView(&atlas.rtv, &[0.0, 0.0, 0.0, 0.0]);
 
-            let mut cur_bubble: Option<bool> = None;
+            let put = |buf: &ID3D11Buffer, v: &[f32]| -> Result<(), Fail> {
+                let mut ms = D3D11_MAPPED_SUBRESOURCE::default();
+                ctx.Map(buf, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut ms)).map_err(|e| self.fail("map cb", e))?;
+                std::ptr::copy_nonoverlapping(v.as_ptr(), ms.pData as *mut f32, v.len());
+                ctx.Unmap(buf, 0);
+                Ok(())
+            };
+            let view = |x: f32, y: f32, s: f32| {
+                ctx.RSSetViewports(Some(&[D3D11_VIEWPORT { TopLeftX: x, TopLeftY: y, Width: s, Height: s, MinDepth: 0.0, MaxDepth: 1.0 }]));
+            };
             for (i, p) in items.iter().enumerate() {
                 let s = p.size_px as f32;
                 let (x, y) = places[i];
-                let bubble = p.material == Material::Emulsion;
-                if cur_bubble != Some(bubble) {
-                    ctx.PSSetShader(if bubble { &self.ps_bubble } else { &self.ps_gem }, None);
-                    cur_bubble = Some(bubble);
-                }
-                let m = metal_rgb(p.material);
+                let m = if p.coin.is_some() { coin_metal(p.material) } else { metal_rgb(p.material) };
                 let mut c = [0f32; 20];
                 c[0] = s;
                 c[1] = s;
@@ -729,22 +997,42 @@ impl Gpu {
                 c[17] = p.wear[1];
                 c[18] = p.wear[2];
                 c[19] = p.layer as f32;
-                let mut ms = D3D11_MAPPED_SUBRESOURCE::default();
-                ctx.Map(&self.cb, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut ms)).map_err(|e| self.fail("map cb", e))?;
-                std::ptr::copy_nonoverlapping(c.as_ptr(), ms.pData as *mut f32, 20);
-                ctx.Unmap(&self.cb, 0);
-                ctx.PSSetShaderResources(0, Some(&[icons[i].clone()]));
-                ctx.RSSetViewports(Some(&[D3D11_VIEWPORT {
-                    TopLeftX: x as f32,
-                    TopLeftY: y as f32,
-                    Width: s,
-                    Height: s,
-                    MinDepth: 0.0,
-                    MaxDepth: 1.0,
-                }]));
+                if let Some(cn) = &p.coin {
+                    if p.material == Material::Emulsion && p.layer == 0 {
+                        // the bubble first, sized so its outline is the ring sphere's (radius .685 under the same eye)
+                        let bs = s * 0.55605;
+                        let (bx, by) = (x as f32 + (s - bs) * 0.5, y as f32 + (s - bs) * 0.5);
+                        let mut cb = c;
+                        cb[0] = bs;
+                        cb[1] = bs;
+                        cb[2] = bx;
+                        cb[3] = by;
+                        cb[11] = bs;
+                        put(&self.cb, &cb)?;
+                        ctx.PSSetShader(&self.ps_bubble, None);
+                        view(bx, by, bs);
+                        ctx.Draw(3, 0);
+                    }
+                    let r = coin_rot(cn.yaw, cn.pitch);
+                    let on = |b: bool| if b { 1.0 } else { 0.0 };
+                    let k = [
+                        r[0][0], r[0][1], r[0][2], cn.ext,
+                        r[1][0], r[1][1], r[1][2], on(texts[i][0].is_some()),
+                        r[2][0], r[2][1], r[2][2], on(texts[i][1].is_some()),
+                        m[0], m[1], m[2], on(ages[i].is_some()),
+                    ];
+                    put(&self.cbk, &k)?;
+                    ctx.PSSetShader(self.ps_coin[coin_variant(p.material, p.layer)].as_ref(), None);
+                    ctx.PSSetShaderResources(0, Some(&[icons[i].clone(), texts[i][0].clone(), texts[i][1].clone(), ages[i].clone()]));
+                } else {
+                    ctx.PSSetShader(if p.material == Material::Emulsion { &self.ps_bubble } else { &self.ps_gem }, None);
+                    ctx.PSSetShaderResources(0, Some(&[icons[i].clone(), None, None, None]));
+                }
+                put(&self.cb, &c)?;
+                view(x as f32, y as f32, s);
                 ctx.Draw(3, 0);
             }
-            ctx.PSSetShaderResources(0, Some(&[None]));
+            ctx.PSSetShaderResources(0, Some(&[None, None, None, None]));
 
             // one copy to the staging texture, one map
             let bx = D3D11_BOX { left: 0, top: 0, front: 0, right: aw, bottom: ah, back: 1 };
@@ -817,7 +1105,7 @@ mod tests {
     }
 
     fn params<'a>(m: Material, t: f32, tilt: (f32, f32), ic: &'a [u8]) -> Params<'a> {
-        Params { material: m, size_px: PX, time_s: t, seed: 0.0, tilt, wear: [0.0; 3], icon_mask: Some(ic), detail_mask: None, layer: 0 }
+        Params { material: m, size_px: PX, time_s: t, seed: 0.0, tilt, wear: [0.0; 3], icon_mask: Some(ic), detail_mask: None, layer: 0, coin: None }
     }
 
     fn render(gpu: &mut Gpu, items: &[Params]) -> Vec<Vec<u32>> {
@@ -825,6 +1113,7 @@ mod tests {
         match gpu.render(items, &mut out) {
             Ok(()) => out,
             Err(Fail::Lost) => panic!("render: device lost"),
+            Err(Fail::NotReady) => panic!("render: coin shader not ready"),
             Err(Fail::Other(e)) => panic!("render: {e}"),
         }
     }
@@ -994,6 +1283,107 @@ mod tests {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("medal-shots");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("medals.png"), png_rgb(w, h, &img)).unwrap();
+    }
+
+    /// A test ring mask: a band along the bottom at the ring text's radius.
+    fn ring_mask() -> Vec<u8> {
+        let n = RING_N as i32;
+        let mut v = vec![0u8; (n * n) as usize];
+        for y in 0..n {
+            for x in 0..n {
+                let (dx, dy) = ((x - n / 2) as f32 / (n / 2) as f32, (y - n / 2) as f32 / (n / 2) as f32);
+                let r = (dx * dx + dy * dy).sqrt();
+                if (r - 0.775).abs() < 0.022 && dy > 0.3 && (dx * 40.0).sin() > 0.0 {
+                    v[(y * n + x) as usize] = 255;
+                }
+            }
+        }
+        v
+    }
+
+    /// The Dial family coins: every program compiles with the real D3DCompile, every tier renders (clean, turned, aged),
+    /// dust shows on metals and stones and never on Emulsion. Contact sheet: target/medal-shots/coins.png.
+    #[test]
+    fn coins_compile_and_every_tier_renders() {
+        let mut gpu = match Gpu::new() {
+            Ok(g) => g,
+            Err(e) => panic!("GPU path unavailable: {e}"),
+        };
+        let f = load_d3dcompile().expect("d3dcompiler_47.dll");
+        for (i, &(st, l)) in COIN_VARIANTS.iter().enumerate() {
+            let t0 = std::time::Instant::now();
+            let code = unsafe { compile(f, &shaders::coin_src(st, l), b"main\0", b"ps_5_0\0", 0) }.unwrap_or_else(|e| panic!("coin {st}/{l}: {e}"));
+            println!("coin program stone {st} layer {l}: {} ms, {} bytes", t0.elapsed().as_millis(), code.len());
+            gpu.install_coin(i, &code);
+        }
+        assert!(gpu.ps_coin.iter().all(|p| p.is_some()));
+        let (ic, ring) = (icon(), ring_mask());
+        let coin = |m: Material, t: f32, yaw: f32, pitch: f32, wear: [f32; 3], px: u32| Params {
+            material: m,
+            size_px: px,
+            time_s: t,
+            seed: 0.0,
+            tilt: (0.0, 0.0),
+            wear,
+            icon_mask: Some(&ic),
+            detail_mask: None,
+            layer: 0,
+            coin: Some(Coin { yaw, pitch, ext: 1.24, ring: Some(&ring), back: Some(&ring) }),
+        };
+        let old = [0.85, 0.4, 1.0];
+        let a = render(&mut gpu, &ALL.map(|m| coin(m, 9.0, 28.0, -16.0, [0.0; 3], PX)));
+        let b = render(&mut gpu, &ALL.map(|m| coin(m, 2.5, 160.0, 25.0, [0.0; 3], PX)));
+        let c = render(&mut gpu, &ALL.map(|m| coin(m, 9.0, 28.0, -16.0, old, PX)));
+        for (i, m) in ALL.iter().enumerate() {
+            let (cov, sd, mean) = stats(&a[i]);
+            let (cov2, sd2, mean2) = stats(&c[i]);
+            println!("coin {m:?}: covered {:.0}%, sd {sd:.1}, mean {:.0} {:.0} {:.0}; aged sd {sd2:.1}, mean {:.0} {:.0} {:.0}", cov * 100.0, mean[0], mean[1], mean[2], mean2[0], mean2[1], mean2[2]);
+            // the coin fills 1/1.24 of the tile's width, seen at an angle: about 40% of the square
+            assert!(cov > 0.25 && cov < 0.7, "{m:?}: {:.0}% of the tile covered", cov * 100.0);
+            assert!(sd > 6.0, "{m:?}: looks flat (sd {sd:.1})");
+            for set in [&a, &b, &c] {
+                assert!(set[i].iter().all(|&p| {
+                    let al = p >> 24;
+                    ((p >> 16) & 0xff) <= al && ((p >> 8) & 0xff) <= al && (p & 0xff) <= al
+                }), "{m:?}: not premultiplied");
+            }
+            assert_ne!(a[i], b[i], "{m:?}: turning changes nothing");
+            assert!((cov - cov2).abs() < 0.01, "{m:?}: age changed the outline");
+            if *m == Material::Emulsion {
+                assert_eq!(a[i], c[i], "the Emulsion coin must not age");
+            } else {
+                assert_ne!(a[i], c[i], "{m:?}: dust and cobweb change nothing");
+            }
+        }
+        // live cost of the full view (one coin, 512 px, a fresh frame each time)
+        for m in [Material::Gold, Material::Diamond, Material::Emulsion] {
+            let _ = render(&mut gpu, &[coin(m, 1.0, 20.0, -10.0, old, 512)]);
+            let t0 = std::time::Instant::now();
+            for k in 0..8 {
+                let _ = render(&mut gpu, &[coin(m, 1.0 + k as f32 * 0.016, 20.0 + k as f32, -10.0, old, 512)]);
+            }
+            println!("coin {m:?} 512 px live frame: {:.1} ms ({})", t0.elapsed().as_secs_f32() * 1000.0 / 8.0, if gpu.hardware { "hardware" } else { "WARP" });
+        }
+        let (w, h) = (PX * ALL.len() as u32, PX * 3);
+        let mut img = vec![0u8; (w * h * 3) as usize];
+        for (row, set) in [&a, &b, &c].iter().enumerate() {
+            for (i, tile) in set.iter().enumerate() {
+                for y in 0..PX {
+                    for x in 0..PX {
+                        let p = tile[(y * PX + x) as usize];
+                        let al = (p >> 24) as f32 / 255.0;
+                        let bg = 30.0 * (1.0 - al);
+                        let o = (((row as u32 * PX + y) * w + i as u32 * PX + x) * 3) as usize;
+                        img[o] = (((p >> 16) & 0xff) as f32 + bg).min(255.0) as u8;
+                        img[o + 1] = (((p >> 8) & 0xff) as f32 + bg).min(255.0) as u8;
+                        img[o + 2] = ((p & 0xff) as f32 + bg).min(255.0) as u8;
+                    }
+                }
+            }
+        }
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("medal-shots");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("coins.png"), png_rgb(w, h, &img)).unwrap();
     }
 
     /// Age (dust, scratches, cobweb) changes metals and stones: duller, greyer; the bubble never ages.

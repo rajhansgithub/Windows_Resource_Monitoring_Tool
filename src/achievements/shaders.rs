@@ -711,3 +711,429 @@ pub fn gem_src() -> String {
     s.push_str(GEM);
     s
 }
+
+/// The Dial family coin (preview v7, `docs/preview/js/3d.js` COIN with uDesign = 6), ray marched in 3D. One program per
+/// stone (`#define STONE`: 0 CPU die, 1 Diamond, 2 Ruby, 3 Emulsion's open ring) and two age-layer programs (`LAYER`).
+/// Port notes as above, plus: GLSL `uR * v` (coin to world) = `toW`, `uRT * v` = `toC`; the studio's slow sway `ER` is
+/// kept as (cos, sin) in `gER`. Not ported: the other coin designs (0-5).
+/// Age: dust and cobweb do not move with the coin, so the heavy part (`ageLayers`: grains, lint, the web) is worked out
+/// once per coin and wear step, face on, by the LAYER program into a texture (front | back), and the colour program
+/// only adds the haze (cheap) and lays that texture on: the same look as the preview's per-pixel `aged`, at a fraction of
+/// the cost of a frame. The Emulsion coin never ages.
+pub const COIN: &str = r#"
+cbuffer K : register(b1) {
+  float4 kR0; float4 kR1; float4 kR2;   // rows of the coin-to-world rotation; .w: camera half-size, ring text on, back text on
+  float4 kM2;                            // the second metal; .w: age texture on
+};
+Texture2D<float> uRing : register(t1);   // RING_N alpha: tier text round the front (paint-filled), spans the coin (k = 1)
+Texture2D<float> uBack : register(t2);   // RING_N alpha: the name on the reverse (engraved), k = .92
+Texture2D<float4> uAgeL : register(t3);  // age layer L (premultiplied), front in the left half, back in the right
+float3 toW(float3 v){ return float3(dot(kR0.xyz, v), dot(kR1.xyz, v), dot(kR2.xyz, v)); }
+float3 toC(float3 v){ return kR0.xyz*v.x + kR1.xyz*v.y + kR2.xyz*v.z; }
+
+// the studio for metal (constant light vectors; the slow sway is set once per pixel)
+static float2 gER = float2(1., 0.);
+static const float3 EA=float3(-0.420758,0.460830,0.781408), EUX=float3(-0.738485,-0.674269,0.), EUY=float3(0.526879,-0.577058,0.624021);
+static const float3 EB=float3(0.821109,0.,0.570771), EBX=float3(0.570771,0.,-0.821109), ESP=float3(0.301086,0.622244,0.722606);
+float envS(float3 d, float t){
+  d.xy=float2(gER.x*d.x + gER.y*d.y, -gER.y*d.x + gER.x*d.y);
+  float s=.09+.12*smoothstep(-.2,.9,d.y);
+  float ca=dot(d,EA);
+  if(ca>0.){ float2 q=float2(dot(d,EUX),dot(d,EUY))/ca; s+=2.6*smoothstep(.08,-.08,max(abs(q.x)-.55,abs(q.y)-.40))*(.8+.2*smoothstep(-.3,.3,q.y)); }
+  float cb=dot(d,EB);
+  if(cb>0.){ float2 q=float2(dot(d,EBX),d.y)/cb; s+=1.8*smoothstep(.05,-.05,max(abs(q.x)-.08,abs(q.y)-1.)); }
+  s+=.32*smoothstep(-.05,-.7,d.y)*smoothstep(-.4,.2,d.z);
+  float gy=(d.y+.1)/.03; s+=.25*exp(-gy*gy)*smoothstep(-.5,.2,d.z);
+  float sp=max(dot(d,ESP),0.); sp*=sp; sp*=sp; sp*=sp; sp*=sp;
+  s+=9.*pow(sp,43.75);
+  return s;
+}
+// the studio for the stone
+float envG(float3 d){
+  d.xy=rotv(uTime*.05, d.xy);
+  float az=atan2(d.y,d.x);
+  float s=.03+.45*smoothstep(-.1,.9,d.z);
+  s+=1.1*pow(max(cos(az*3.)*.5+.5,0.),5.)*smoothstep(-.2,.5,d.z)*smoothstep(.98,.75,d.z);
+  s+=pow(max(dot(d,float3(0.549478,0.549478,0.629402)),0.),140.)*8.;
+  s+=pow(max(dot(d,float3(-0.723442,0.251195,0.643060)),0.),100.)*5.;
+  s+=pow(max(dot(d,float3(0.050118,-0.781846,0.621469)),0.),180.)*7.;
+  s+=1.5*smoothstep(.72,.9,d.z)*smoothstep(.99,.95,d.z)*(.75+.25*cos(az*8.));
+  s*=1.-.9*smoothstep(.975,.995,d.z);
+  return s;
+}
+float3 aces(float3 x){ return saturate((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14)); }
+// a mask spanning [-k, k] of the face, row 0 at the top; lod from the size on screen
+float texM(Texture2D<float> t, float2 p, float k, float lod){
+  float2 iu=p/k*.5+.5;
+  if(iu.x<0. || iu.y<0. || iu.x>1. || iu.y>1.) return 0.;
+  return t.SampleLevel(smp, float2(iu.x, 1.-iu.y), lod);
+}
+
+// the round brilliant (girdle radius 1, centred in z)
+static const float TABC=0.602029;
+static const float2 BEZ=float2(0.566406,0.824126); static const float BEZC=0.813336;
+static const float2 STA=float2(0.358368,0.933580); static const float STAC=0.779264;
+static const float2 UGI=float2(0.669131,0.743145); static const float UGIC=0.891796;
+static const float2 PAV=float2(0.652760,-0.757565); static const float PAVC=0.456076;
+static const float2 LGI=float2(0.669131,-0.743145); static const float LGIC=0.476191;
+static const float2 ROT8=float2(0.923880,0.382683); static const float2 HALF8=float2(0.980785,0.195090);
+// the stone sits forward in a raised collet: girdle at ZG6, the pavilion cut flat just inside the back plate (no bulge)
+static const float SSD=.55;
+static const float ZG6=.25;
+static const float GZD=ZG6-.2795*SSD;
+static const float FLOOR6=-.13;
+static const float ZF=0., RF=.685;         // Emulsion: the bubble's sphere in the open ring
+static const float SCUT=-(FLOOR6-GZD)/SSD;
+#define P(N,C) { float3 nn=N; float dn=dot(nn,d); float tt=(C-dot(nn,o))/dn; if(dn<0.){ if(tt>tIn){ tIn=tt; nIn=nn; } } else { if(tt<tOut){ tOut=tt; nOut=nn; } } }
+void trav(float3 o, float3 d, out float tIn, out float3 nIn, out float tOut, out float3 nOut){
+  tIn=-1e9; tOut=1e9; nIn=float3(0.,0.,1.); nOut=float3(0.,0.,1.);
+  P(float3(0.,0.,1.),TABC)
+  P(float3(0.,0.,-1.),SCUT)
+  float2 cs=float2(1.,0.);
+  [unroll] for(int k=0;k<16;k++){
+    float2 ch=float2(cs.x*HALF8.x-cs.y*HALF8.y, cs.y*HALF8.x+cs.x*HALF8.y);
+    P(float3(cs,0.),1.)
+    P(float3(ch*UGI.x,UGI.y),UGIC)
+    P(float3(ch*LGI.x,LGI.y),LGIC)
+    if((k&1)==0){ P(float3(cs*BEZ.x,BEZ.y),BEZC) P(float3(cs*PAV.x,PAV.y),PAVC) }
+    else { P(float3(cs*STA.x,STA.y),STAC) }
+    cs=float2(cs.x*ROT8.x-cs.y*ROT8.y, cs.y*ROT8.x+cs.x*ROT8.y);
+  }
+}
+float fres(float c, float ior){ float F0=(ior-1.)/(ior+1.); F0*=F0; return F0+(1.-F0)*pow(1.-saturate(c),5.); }
+
+// ---- shapes
+float box2(float2 p, float2 h, float rr){ float2 d=abs(p)-h+rr; return length(max(d,0.))+min(max(d.x,d.y),0.)-rr; }
+float box3(float3 p, float3 h, float rr){ float3 q=abs(p)-h+rr; return length(max(q,0.))+min(max(q.x,max(q.y,q.z)),0.)-rr; }
+float ringS(float3 p, float R0, float R1, float z0, float z1, float rr){ return box2(float2(length(p.xy),p.z)-float2((R0+R1)*.5,(z0+z1)*.5), float2((R1-R0)*.5,(z1-z0)*.5), rr); }
+float disc(float3 p, float R, float z0, float z1, float rr){ return box2(float2(length(p.xy),p.z-(z0+z1)*.5), float2(R,(z1-z0)*.5), rr); }
+float2 prep(float2 q, float n){ float an=TAU/n; float a=modg(atan2(q.y,q.x)+an*.5,an)-an*.5; return length(q)*float2(cos(a),sin(a)); }
+float2 U(float2 a, float2 b){ return b.x<a.x?b:a; }
+// ids: 1 polished, 2 spun (turned), 3 black anodised, 4 sandblasted, 6 second metal polished, 7 silicon die
+float2 mapF(float3 p){
+  float r=length(p.xy);
+  float2 d=float2(ringS(p,.9,1.,-.01,.19,.025),1.);
+  if(r>.9){ float2 bq=prep(p.xy,72.); d=U(d,float2(length(float3(bq.x-.948,bq.y,p.z-.186))-.016,1.)); }
+  else d.x=min(d.x,length(float2(.932-r,max(abs(p.z-.186)-.016,0.))));
+  d=U(d,float2(max(ringS(p,.70,.905,-.01,.4,0.),(p.z-(.15+(r-.70)*.13))*.99),2.));
+#if STONE == 3
+  return d;                                          // Emulsion: open ring, nothing behind the bubble
+#else
+  d=U(d,float2(ringS(p,.595,.705,-.01,.08,.012),3.));
+  if(r>.63) d.x=min(d.x,r-.6);
+  else {
+#if STONE == 0
+    d=U(d,float2(disc(p,.6,-.01,.05,.005),4.));
+    d=U(d,float2(box3(p-float3(0.,0.,.06),float3(.235,.235,.07),.022),7.));
+    float2 a2=abs(p.xy); if(a2.y>a2.x) a2=a2.yx;
+    float yy=a2.y-.06*clamp(floor(a2.y/.06+.5),0.,3.);
+    d=U(d,float2(box3(float3(a2.x-.27,yy,p.z-.065),float3(.035,.012,.011),.005),6.));
+#else
+    // the bezel setting: a tapered cup out of the barrel, its lip over the girdle, six claws onto the crown
+    float top=ZG6+.02;
+    float body=max(box2(float2(r-.32,p.z-(top-.12)*.5),float2(.32,(top+.12)*.5),.008),(r-(.645-.38*(p.z-.08)))*.93);
+    float k=.602, zc=GZD-.602*SSD-.004;
+    float pocket=min(max(r-(SSD+.003),(zc+k*r-p.z)/sqrt(1.+k*k)), max(r-(SSD-.014),ZG6-.002-p.z));
+    d=U(d,float2(max(body,-pocket),6.));
+    float2 cq=prep(rotv(PI/6.,p.xy),6.);
+    float3 a0=float3(.6,0.,ZG6-.05), a1=float3(.49,0.,ZG6+.066), pa=float3(cq,p.z)-a0, ba=a1-a0;
+    float hc=saturate(dot(pa,ba)/dot(ba,ba));
+    d=U(d,float2(length(pa-ba*hc)-(.044-.016*hc),6.));
+#endif
+  }
+  return d;
+#endif
+}
+float2 mapB(float3 p){                               // the reverse: a rim and a turned field with the name
+  if(p.z>.06) return float2(p.z-.012,1.);
+  float r=length(p.xy), dep=.19;
+  float2 d=float2(ringS(p,.9,1.,-dep,.01,.025),1.);
+  d=U(d,float2(disc(p,.905,-dep+.05,.01,.01),2.));
+#if STONE == 3
+  d.x=max(d.x,.705-r);                               // Emulsion: the ring is open right through
+#endif
+  return d;
+}
+float2 map(float3 p){
+  if(p.z<-.06) return mapB(p);
+  return U(mapF(p),mapB(p));
+}
+float3 nrm(float3 p){
+  const float e=.0012*.5773; const float2 k=float2(1.,-1.);
+  return normalize(k.xyy*map(p+k.xyy*e).x+k.yyx*map(p+k.yyx*e).x+k.yxy*map(p+k.yxy*e).x+k.xxx*map(p+k.xxx*e).x);
+}
+// march o + t d (coin space) from t to tmax; false on a miss. mn/tm: the closest pass (for the anti-aliased outline)
+bool march(float3 o, float3 d, inout float t, float tmax, float eps, out float mn, out float tm){
+  mn=1e9; tm=t;
+  [loop] for(int i=0;i<140;i++){
+    if(t>tmax) return false;
+    float dd=map(o+d*t).x;
+    if(dd<eps) return true;
+    if(dd<mn){ mn=dd; tm=t; }
+    t+=dd*.9;
+  }
+  return false;
+}
+
+#if STONE == 1 || STONE == 2
+// the set stone, shaded like the full-view gem; light that leaves through the pavilion meets the polished cup
+float3 stoneC(float3 o, float3 d, float tIn, float3 nIn, float3 M, out float cover, float pxw, float tOut){
+  const bool ruby=STONE==2;
+  float ior=ruby?1.77:2.417;
+  float3 iorC=ruby?float3(1.762,1.77,1.778):float3(2.37,2.417,2.47);
+  float3 absorb=ruby?float3(.12,3.4,2.7):float3(.004,.006,.01);
+  cover=saturate((tOut-tIn)/(pxw*2.5));
+  float3 p=o+d*tIn;
+  float F=fres(-dot(d,nIn),ior);
+  float3 col=v3(F*envG(toW(reflect(d,nIn))))*.8;
+  float3 di=refr(d,nIn,1./ior);
+  float3 thr=v3(1.-F);
+  [loop] for(int b=0;b<6;b++){
+    float a1,a2; float3 n1,n2;
+    trav(p+di*1e-4,di,a1,n1,a2,n2);
+    float L=max(a2,0.);
+    thr*=exp(-absorb*L);
+    p=p+di*L;
+    float c=dot(di,n2);
+    float3 outM=refr(di,-n2,ior);
+    if(dot(outM,outM)<1e-4){ di=reflect(di,n2); continue; }
+    float Fo=fres(c,ior);
+    float3 e;
+    if(n2.z<-.2){                                    // into the cup: polished metal sends it back up; darker deep in the seat
+      float3 up=normalize(float3(outM.xy,abs(outM.z)));
+      e=M*(.18+.8*envS(toW(up),uTime))*.95*lerp(.5,1.,smoothstep(-.6,.2,p.z));
+    } else {
+      float3 oR=refr(di,-n2,iorC.r), oG=refr(di,-n2,iorC.g), oB=refr(di,-n2,iorC.b);
+      e.r=dot(oR,oR)>1e-4?envG(toW(oR)):0.; e.g=envG(toW(oG)); e.b=dot(oB,oB)>1e-4?envG(toW(oB)):0.;
+    }
+    col+=thr*(1.-Fo)*e;
+    thr*=Fo;
+    di=reflect(di,n2);
+  }
+  col+=thr*.04;
+  if(ruby){
+    col*=float3(1.,.55,.6);
+    float g=.5+.5*sin(uTime*.8+dot(nIn,float3(3.1,1.7,2.3))*4.);
+    col+=float3(.16,.005,.025)+float3(.5,.02,.06)*g*g*g*.35;
+    col=pow(max(col,0.),1.15);
+  } else { col=pow(max(col*.8,0.),1.7)*1.25+.01; }
+  return 1.-exp(-max(col,0.)*1.6);
+}
+// is the stone in front along o + t d (coin space) before t = tHit? entry t, facet and exit t
+bool stoneHit(float3 ro, float3 rd, float tHit, bool hit, out float3 og, out float gIn, out float3 gnIn, out float gOut){
+  og=(ro-float3(0.,0.,GZD))/SSD;
+  float3 gnOut; gIn=1.; gOut=0.; gnIn=float3(0.,0.,1.);
+  float sb=dot(og,rd), sc2=dot(og,og)-1.1025;
+  if(sb*sb-sc2>0.) trav(og,rd,gIn,gnIn,gOut,gnOut);
+  return gIn<gOut && gOut>0. && (!hit || gIn*SSD<tHit);
+}
+#endif
+
+// paint-filled engraving on the front: the ring text and the dial's scale
+float paintF(float2 q, float r, float id, float aa, float lodR){
+  float paint=0.;
+  if(kR1.w>0.) paint=smoothstep(.1,.7,texM(uRing,q,1.,lodR));
+  if(id>1.5&&id<2.5 && r>.71){
+    float u=atan2(q.y,q.x)/TAU*60., fi=floor(u+.5), du=abs(u-fi)*TAU/60.*r; bool maj=modg(fi+60.,5.)<.5;
+    float w=maj?.0065:.0035, r0=maj?.80:.84;
+    paint=max(paint,smoothstep(w+aa,w,du)*smoothstep(r0-aa,r0,r)*smoothstep(.888,.884,r)*step(-.35,q.y/max(r,1e-3)));
+  }
+  return paint;
+}
+// what the dust needs to know about a spot: how sheltered (rec: the barrel, the scale, the grooves) and how flat (flt)
+void spot(float id, float paint, float r, float3 p, float3 n, out float rec, out float flt){
+  rec=(id>2.5&&id<3.5)?.7:(id>6.5&&id<7.5)?.15:0.;
+  rec+=max(paint,0.)*.5+smoothstep(.03,0.,abs(r-.705))*.5+smoothstep(.03,0.,abs(r-.9))*.5;
+  flt=abs(n.z)>.6?abs(n.z):lerp(.3,.8,smoothstep(0.,.9,p.y/max(length(p.xy),1e-4)));
+}
+// the haze part of ageLayers (cheap; the grains and the web come from the layer texture)
+float3 ageHaze(float2 p, float recess, float flt){
+  float dust=min(uWear.x,1.);
+  float rc=min(recess,1.);
+  float low=1.-smoothstep(-1.,1.,p.y+(wF(p*2.5+3.)-.5)*.3);
+  float dl=pow(max(dust,1e-4),1.+2.*low*AGE0.z);
+  float wall=1.-smoothstep(.72,.97,flt);
+  float T=dl*lerp(1.,lerp(.05,.7,dl*dl),wall)*(1.+1.3*rc);
+  return float3(smoothstep(0.,.6,T)*AGE0.w,(.17+.07*smoothstep(-1.,1.,p.y))*(1.-.12*rc),1.-.12*rc);
+}
+float4 ageL(float2 q, bool fr){
+  float2 iu=saturate(q*.5+.5);
+  float w, h; uAgeL.GetDimensions(w, h);
+  float hx=.5/max(h,1.);                             // half a texel: never bleed across the front | back seam
+  return uAgeL.SampleLevel(smp, float2((fr?0.:.5)+clamp(iu.x,hx,1.-hx)*.5, 1.-iu.y), 0.);
+}
+float3 ageOn(float3 col, float2 q, bool fr, float rec, float flt){
+  if(kM2.w<=0.) return col;
+  return ageApply(col,1.,ageHaze(q,rec,flt),ageL(q,fr));
+}
+
+float4 main(float4 sv : SV_Position) : SV_Target {
+  gFrag = float2(sv.x - uOff.x, uRes.y - (sv.y - uOff.y));
+  float S=min(uRes.x,uRes.y);
+  { float a=.12*sin(uTime*.21); gER=float2(cos(a),sin(a)); }
+#ifdef LAYER
+  // the age layer L of one face, seen straight on (front: uLayer 1, back: 2), q in [-1, 1] across the item
+  {
+    float2 q=(gFrag-.5*uRes)/(.5*S);
+    float aa=2./S;
+    bool fr=uLayer<1.5;
+    float3 ro=fr?float3(q,1.):float3(-q.x,q.y,-1.), rd=float3(0.,0.,fr?-1.:1.);
+    float t=0., mn, tm;
+    bool hit=march(ro,rd,t,2.,.0005,mn,tm);
+    float rec=0., flt=1.;
+#if STONE == 1 || STONE == 2
+    float3 og, gnIn; float gIn, gOut;
+    bool st=fr && stoneHit(ro,rd,t,hit,og,gIn,gnIn,gOut);
+#else
+    bool st=false;
+#endif
+    if(!st){
+      if(!hit) return float4(0.,0.,0.,0.);
+      float3 p=ro+rd*t;
+      float id=map(p).y; float3 n=nrm(p);
+      float r=length(q);
+      float paint=(fr && n.z>.3)?paintF(q,r,id,aa,0.):0.;
+      spot(id,paint,r,p,n,rec,flt);
+    }
+    float3 h; float4 L;
+    if(!ageLayers(q,rec,flt,aa,h,L)) return float4(0.,0.,0.,0.);
+    return L;
+  }
+#else
+  float ext=kR0.w;
+  float2 pp=(gFrag-.5*uRes)/(.5*S)*ext;
+  float3 ow=float3(0.,0.,6.), dw=normalize(float3(pp,0.)-ow); float pxw=2.*ext/S;
+  float3 ro=toC(ow), rd=toC(dw);
+  float b=dot(ro,rd), c=dot(ro,ro)-1.44, h=b*b-c;
+  if(h<0.) return float4(0.,0.,0.,0.);
+  float t=max(-b-sqrt(h),0.), tmax=-b+sqrt(h);
+  {                                                  // the metal fits in r < 1, -.2 < z < .36: clip the march to that cylinder
+    float a2=dot(rd.xy,rd.xy), b2=dot(ro.xy,rd.xy), c2=dot(ro.xy,ro.xy)-1.;
+    if(a2>1e-6){ float h2=b2*b2-a2*c2; if(h2<0.) tmax=-1.; else { h2=sqrt(h2); t=max(t,(-b2-h2)/a2); tmax=min(tmax,(-b2+h2)/a2); } }
+    if(abs(rd.z)>1e-6){ float z0=(-.2-ro.z)/rd.z, z1=(.36-ro.z)/rd.z; t=max(t,min(z0,z1)); tmax=min(tmax,max(z0,z1)); }
+  }
+  float mn, tm;
+  bool hit=march(ro,rd,t,tmax,max(.0005,pxw*.3),mn,tm);
+  float cov=1.;
+  if(!hit){                                          // just past the outline: shade the closest pass, partly covered
+    cov=saturate(1.-mn/pxw);
+    if(cov<=0.) cov=0.; else { t=tm; }
+  }
+  float3 M=uMetal;
+  float scov=0.; float3 sc=float3(0.,0.,0.);
+#if STONE == 1 || STONE == 2
+  {
+    float3 og, gnIn; float gIn, gOut;
+    if(stoneHit(ro,rd,t,hit || cov>0.,og,gIn,gnIn,gOut)){
+      sc=stoneC(og,rd,gIn,gnIn,M,scov,pxw/SSD,gOut);
+      float3 ps=ro+rd*(gIn*SSD);
+      sc=ageOn(sc,ps.xy,true,0.,1.);                 // dust settles on the stone too
+      if(scov>.999 || cov<=0.) return float4(sc*scov,scov);
+    }
+  }
+#endif
+  if(cov<=0.) return float4(0.,0.,0.,0.);
+  float3 p=ro+rd*t;
+  float id=map(p).y;
+  float3 n=nrm(p);
+  float tt=uTime;
+  bool fr=p.z>0.;
+  float2 q=fr?p.xy:float2(-p.x,p.y);
+  float r=length(q); float2 rq=r>1e-4?q/r:float2(1.,0.);
+  float aa=pxw*1.2;
+  if(id>5.5&&id<6.5) M=kM2.xyz;
+  float3 nl=n;
+  float matte=0., paint=0.;
+  bool face=abs(n.z)>.6;
+  if(length(p.xy)>.975 && abs(n.z)<.6){ float ang=atan2(p.y,p.x); float3 tg=float3(-sin(ang),cos(ang),0.); nl=normalize(nl+tg*sin(ang*220.)*.22); }   // the outer wall: fine reeding
+#if STONE == 0
+  {                                                  // the icon, etched bright into the die (on the field: engraved)
+    const float kI=.17;
+    if(fr && face && uIconOn>0. && r<kI*1.1){
+      float lod=max(log2(512.*pxw/(2.*kI)),0.);
+      float dd=1.4*pxw;
+      float m=texM(uIcon,q,kI,lod);
+      float gx=texM(uIcon,q+float2(dd,0.),kI,lod)-texM(uIcon,q-float2(dd,0.),kI,lod), gy=texM(uIcon,q+float2(0.,dd),kI,lod)-texM(uIcon,q-float2(0.,dd),kI,lod);
+      float w=saturate(length(float2(gx,gy))*1.6);
+      if(id>6.5&&id<7.5&&n.z>.7) paint=-smoothstep(.2,.8,m);
+      else { nl=normalize(nl+float3(gx,gy,0.)*2.2*w); matte=smoothstep(.15,.85,m)*(1.-w); }
+    }
+  }
+#endif
+  float lodR=max(log2(1024.*pxw/2.),0.);
+  if(!fr && face && kR2.w>0. && r<.9){               // the name on the reverse
+    float lod=max(log2(1024.*pxw/(2.*.92)),0.);
+    float dd=1.4*pxw;
+    float m=texM(uBack,q,.92,lod);
+    float gx=texM(uBack,q+float2(dd,0.),.92,lod)-texM(uBack,q-float2(dd,0.),.92,lod), gy=texM(uBack,q+float2(0.,dd),.92,lod)-texM(uBack,q-float2(0.,dd),.92,lod);
+    float w=saturate(length(float2(gx,gy))*1.6);
+    nl=normalize(nl+float3(-gx,gy,0.)*2.2*w); matte=max(matte,smoothstep(.15,.85,m)*(1.-w));
+  }
+  if(fr && n.z>.3) paint=max(paint,paintF(q,r,id,aa,lodR));
+  float trace=0.;
+#if STONE == 0
+  if(fr&&id>3.5&&id<4.5){                            // traces from the die out to pads just inside the barrel
+    const float r0=.3, r1=.54, j0=.4, j1=.46, tw=.0045, pr=.016;
+    float an=TAU/24., a=atan2(q.y,q.x), k=floor((a+an*.5)/an), la=a-k*an;
+    float jog=smoothstep(j0,j1,r)*an*.35*(modg(k,2.)<.5?1.:-1.);
+    float dl=abs(r*sin(la-jog))-tw;
+    float tr=smoothstep(aa,-aa,dl)*step(r0,r)*step(r,r1);
+    float pad=smoothstep(pr+aa,pr,length(q-r1*float2(cos(k*an+jog),sin(k*an+jog))));
+    trace=max(tr,pad);
+  }
+#endif
+  float3 nw=toW(nl);
+  float cv=saturate(-dot(nw,dw));
+  float3 R=reflect(dw,nw);
+#if STONE == 3
+  { float ph=1.3*cv+atan2(q.y,q.x)/TAU*2.+r*1.2+.15*sin(uTime*.2); M=lerp(M,(.62+.38*cos(TAU*(ph+float3(0.,.33,.67))))*M,.42); }   // pearl: an oil sheen
+#endif
+  float fz=pow(1.-cv,5.);
+  float3 F=M+(1.-M)*fz;
+  float3 col;
+  if(id>1.5&&id<2.5){                                // turned: light smeared round the centre
+    float3 rw=toW(fr?float3(rq,0.):float3(-rq.x,rq.y,0.));
+    float en=0.; [unroll] for(int j=0;j<4;j++){ float o=(float(j)-1.5)/1.5; en+=envS(reflect(dw,normalize(nw+rw*o*.28)),tt); }
+    col=F*en*.25*.92;
+  } else if(id>2.5&&id<3.5){                         // black anodised
+    col=v3(.012)+(.04+.96*fz)*envS(R,tt)*.5;
+  } else if(id>3.5&&id<4.5){                         // sandblasted
+    col=M*(.07+.12*envS(nw,tt))*(.85+.3*hash(floor(gFrag)))+F*envS(R,tt)*.05;
+  } else if(id>6.5&&id<7.5&&n.z>.7){                 // the die: dark silicon, a glassy sheen
+    col=float3(.02,.024,.034)+(.05+.95*fz)*envS(R,tt)*.45;
+  } else col=F*envS(R,tt);                           // polished
+  if(trace>0.){ float3 G=kM2.xyz+(1.-kM2.xyz)*fz; col=lerp(col,G*envS(R,tt),trace); }
+  if(matte>0.){ float grain=.85+.3*hash(floor(gFrag)); col=lerp(col,M*(.10+.10*envS(float3(-.35,.4,.85),tt))*grain,matte); }
+  if(paint>0.) col=lerp(col,v3(.018),paint*.94);
+  if(paint<0.){ float3 G=M+(1.-M)*fz; col=lerp(col,G*envS(R,tt),-paint); }
+  col=aces(col*1.1);
+  { float rec, flt; spot(id,paint,r,p,n,rec,flt); col=ageOn(col,q,fr,rec,flt); }   // age: dust in the barrel, the scale and the grooves
+  float4 o4=float4(lerp(col,sc,scov),1.)*cov;
+#if STONE == 3
+  {                                                  // the bubble (drawn first, under this) shows wherever its sphere is in front
+    float3 oc=ro-float3(0.,0.,ZF); float bb=dot(oc,rd), hh=bb*bb-dot(oc,oc)+RF*RF;
+    if(hh>0. && -bb-sqrt(hh)<t) return float4(0.,0.,0.,0.);
+  }
+#endif
+  return o4;
+#endif
+}
+"#;
+
+/// Source of one coin pixel shader: `stone` 0 die, 1 Diamond, 2 Ruby, 3 Emulsion; `layer` = the age-layer program.
+pub fn coin_src(stone: u8, layer: bool) -> String {
+    let age = {
+        let a = GEM.find("// ---- age: dust and cobwebs").unwrap_or(0);
+        let b = GEM[a..].find("float4 main(").map_or(GEM.len(), |i| a + i);
+        &GEM[a..b]
+    };
+    let mut s = String::with_capacity(COMMON.len() + age.len() + COIN.len() + 64);
+    s.push_str(&format!("#define STONE {stone}\n"));
+    if layer {
+        s.push_str("#define LAYER 1\n");
+    }
+    s.push_str(COMMON);
+    s.push_str(age);
+    s.push_str(COIN);
+    s
+}

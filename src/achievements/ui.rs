@@ -902,6 +902,7 @@ impl Medals {
                     icon_mask: self.masks.get(icon_of(id)).map(|m| &m[..]),
                     detail_mask: None,
                     layer: 0,
+                    coin: None,
                 })
                 .collect();
             done = gpu::render_batch(&params, &mut out) && out.len() == need.len();
@@ -936,6 +937,7 @@ impl Medals {
                 icon_mask: mask,
                 detail_mask: None,
                 layer,
+                coin: None,
             };
             let aged = tier < 7 && wear[0] + wear[2] >= 0.002;
             let q = |x: f32| (x.clamp(0.0, 1.0) * 15.0).round() as u16;
