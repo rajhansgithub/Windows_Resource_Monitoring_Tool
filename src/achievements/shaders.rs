@@ -480,7 +480,7 @@ float4 medal(float2 p, float r, float aa, float t){
 }
 
 // ---- age: dust and cobwebs (uWear.x dust, .y this medal's seed, .z cobweb age). 1 real hour = 1 day on the shelf.
-// Same as the preview page (docs/achievements-preview.html), line for line. Look = the owner's saved tuning (366 days, 2026-11-22).
+// Same as the preview page (docs/preview/js/gem.js and js/age.js), line for line. Look = the owner's saved tuning (366 days, 2026-11-22).
 // Dust is grains, not a film: a few grains first, more as it builds, until they join into a grainy grey layer (a year).
 // It lies thick on flat surfaces and piles up in hollows; steep walls stay almost clean; the top gets it before the bottom.
 // Cobweb: it grows, it never scales. Every thread has a fixed place and a birth time (hash of this medal's seed); time only

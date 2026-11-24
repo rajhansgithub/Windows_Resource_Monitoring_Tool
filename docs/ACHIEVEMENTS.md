@@ -2,7 +2,7 @@
 
 Built with the `achievements` skill (rajhansgithub/Coding-Harness-Plugins, v0.3.0).
 Live preview (the one living artifact): https://claude.ai/artifact/LwqFbEA6tyBFGF5jUNpCNX
-Source of that page: `docs/achievements-preview.html`.
+Source of that page: `docs/preview/` (index.html, styles.css, js/: gl.js shared WebGL context and shader compiles, age.js, 3d.js, app.js, and gem.js, bubble.js, versions.js loaded when an older version tab opens).
 
 ## Mode and theme
 
