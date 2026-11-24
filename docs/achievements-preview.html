@@ -1232,12 +1232,21 @@ void main(){
     img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
     return rec;
   }
+  // Frame budget: badges draw round-robin from `cur`; a frame stops after BUDGET ms of CPU or `cap` badges, the rest draw
+  // next frame. `cap` follows the real frame gap (GPU cost included): drops when frames run late, grows when they are on time.
+  let cur = 0, cap = 64, gap = 16;
+  const BUDGET = 9;
   function draw(now) {
     const t = still() ? 9 : (now - t0) / 3000;   // a third of real time: calm (the owner 11-22)
     const ageV = root.YTPMAgeVec ? root.YTPMAgeVec() : null;
-    for (const it of items) {
+    const n = items.length, t1 = performance.now(), anim = !still();
+    let drawn = 0;
+    for (let k = 0; k < n; k++) {
+      const it = items[(cur + k) % n];
       if (solo && it.c !== solo) continue;            // full view open: only the big one draws, the rest hold still
       if (!it.vis && !it.fresh) continue;
+      if (anim && !solo && k && (drawn >= cap || performance.now() - t1 > BUDGET)) { cur = (cur + k) % n; return; }
+      drawn++;
       it.fresh = false;
       if (off && (gc.width !== it.px || gc.height !== it.px)) { gc.width = it.px; gc.height = it.px; }
       gl.viewport(0, 0, it.px, it.px);
@@ -1259,7 +1268,10 @@ void main(){
     raf = 0;
     items = items.filter((it) => it.c.isConnected);
     if (!items.length) return;
-    if (!document.hidden && now - last > 12) { draw(now); last = now; }   // 60 fps (the owner 11-21: 30 felt laggy)
+    if (!document.hidden && now - last > 12) {   // 60 fps (the owner 11-21: 30 felt laggy)
+      if (last && now - last < 200) { gap = gap * 0.8 + (now - last) * 0.2; cap = gap > 24 ? Math.max(2, Math.floor(cap * 0.8)) : gap < 19 ? Math.min(64, cap + 1) : cap; }
+      draw(now); last = now;
+    }
     if (!still()) raf = requestAnimationFrame(loop);
   }
   /** Start every canvas.ach-gemgl under `scope` that is not running yet. */
@@ -2603,7 +2615,7 @@ void main(){
   /* ------------------------------------------------------------------ versions: each stores only its settings; engines load once.
      To add a version: add an entry here (newest first) and a builder in BUILDERS. Earlier versions stay in the page, live. */
   const VERSIONS = [
-    { id: 'v5', label: 'v5 · Aging per plugin v0.6.0', note: 'Current. Aging follows the achievements plugin v0.6.0: each medal keeps [start, dust left, web cleared] per tier. The dust clock runs from the day the tier was earned; a rub clears the cobweb (it grows back from that day) and takes 30% of the dust. Spotless starts the clocks again, with a bonus. Your saved look (366 days) is the default; every medal has its own web. Tests cover the dust curve at 10 to 365 days, cobweb from day 20 to 350, rubs, new tiers, the bubble, and the same seed in the page and the app.' },
+    { id: 'v5', label: 'v5 · Aging per plugin v0.6.0', note: 'Current. Aging follows the achievements plugin v0.6.0: each medal keeps [start, dust left, web cleared] per tier. The dust clock runs from the day the tier was earned; a rub clears the cobweb (it grows back from that day) and takes 30% of the dust. Spotless starts the clocks again, with a bonus. Your saved look (366 days) is the default; every medal has its own web. Tests cover the dust curve at 10 to 365 days, cobweb from day 20 to 350, rubs, new tiers, the bubble, and the same seed in the page and the app. Smooth: the bubble mark always faces you (only the glass turns); dust and cobweb are drawn once, not every frame; the badge grid keeps each frame under budget (badges take turns); the 3D view keeps one GL context.' },
     { id: 'v4', label: 'v4 · Shaders verified on Windows', note: 'The HLSL medal, stone and bubble shaders compiled and rendered on Windows (CI, 22 Nov 2026). No fallback to flat medals. In the full view every medal is a real 3D object: drag it. Medals age with real time (1 hour = 1 day): grainy dust that piles up in the hollows, and cobwebs that grow thread by thread after 20 days. Every medal gets its own web. Polish them in the full view.' },
     { id: 'v3', label: 'v3 · Built into the app', note: 'Core, observer, window, pop-ups and full view are in the app (v2.13.0). Build status as it stood before the Windows run.' },
     { id: 'v2', label: 'v2 · Uptime Medals picked', note: 'The theme is picked; the build status as it stood then.' },
