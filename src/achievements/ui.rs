@@ -855,6 +855,147 @@ fn wear_rgba(c: u8) -> Rgba {
     }
 }
 
+// ------------------------------------------------------------------ coin text masks (preview `coinTex`)
+
+/// `s` in white with GDI (grey anti-aliasing): (width, height, coverage), 4 px margin all round.
+fn text_strip(s: &str, px: i32, weight: i32) -> (i32, i32, Vec<u8>) {
+    let font = create_font(px.max(6), weight, ui_face(), true);
+    let mut cv = Canvas::new();
+    cv.resize(8, 8);
+    let (tw, th) = cv.measure(font, s);
+    let (w, h) = (tw + 8, th + 8);
+    cv.resize(w, h);
+    cv.clear(Rgba(0, 0, 0, 0));
+    cv.text(font, s, 4, 4, Rgba(255, 255, 255, 255));
+    let a: Vec<u8> = cv.pixels().iter().map(|p| (p >> 24) as u8).collect();
+    unsafe { DeleteObject(font) };
+    if a.len() != (w * h) as usize {
+        return (0, 0, Vec::new());
+    }
+    (w, h, a)
+}
+
+fn strip_at(st: &(i32, i32, Vec<u8>), x: f32, y: f32) -> f32 {
+    let (w, h, a) = st;
+    let (x, y) = (x - 0.5, y - 0.5);
+    let (x0, y0) = (x.floor(), y.floor());
+    let (fx, fy) = (x - x0, y - y0);
+    let g = |xx: i32, yy: i32| if xx < 0 || yy < 0 || xx >= *w || yy >= *h { 0.0 } else { a[(yy * w + xx) as usize] as f32 };
+    let (xi, yi) = (x0 as i32, y0 as i32);
+    (g(xi, yi) * (1.0 - fx) * (1.0 - fy) + g(xi + 1, yi) * fx * (1.0 - fy) + g(xi, yi + 1) * (1.0 - fx) * fy + g(xi + 1, yi + 1) * fx * fy) / 255.0
+}
+
+/// Text drawn twice as big as it lands, then sampled: smooth edges on the curve.
+const TSS: f32 = 2.0;
+
+/// Text along a circle into a RING_N mask: `rad` in half-sizes (1 = the edge), `px` the font size in mask pixels.
+/// Upright towards the centre along the top, or along the bottom (`bottom`), left to right, centred.
+fn arc_text(m: &mut [u8], text: &str, rad: f32, px: f32, weight: i32, bottom: bool) {
+    let n = gpu::RING_N as i32;
+    let half = n as f32 / 2.0;
+    let st = text_strip(text, (px * TSS).round() as i32, weight);
+    if st.0 == 0 {
+        return;
+    }
+    let tw = (st.0 as f32 - 8.0) / TSS;
+    let r0 = rad * half;
+    let span = tw / r0;
+    let hh = st.1 as f32 / TSS / 2.0 + 1.0;
+    let a0 = if bottom { std::f32::consts::FRAC_PI_2 + span / 2.0 } else { -std::f32::consts::FRAC_PI_2 - span / 2.0 };
+    let mid = st.1 as f32 / 2.0;
+    let (ya, yb) = if bottom { ((half + r0 * (span / 2.0).min(1.5).cos() - hh) as i32 - 2, n) } else { (0, (half - r0 * (span / 2.0).min(1.5).cos() + hh) as i32 + 2) };
+    for y in ya.max(0)..yb.min(n) {
+        for x in 0..n {
+            let (dx, dy) = (x as f32 + 0.5 - half, y as f32 + 0.5 - half);
+            let rho = (dx * dx + dy * dy).sqrt();
+            if (rho - r0).abs() > hh {
+                continue;
+            }
+            let th = dy.atan2(dx);
+            let (sa, v) = if bottom { ((a0 - th) * r0, rho - r0) } else { ((th - a0) * r0, r0 - rho) };
+            if sa < -2.0 || sa > tw + 2.0 {
+                continue;
+            }
+            let c = strip_at(&st, 4.0 + sa * TSS, mid + v * TSS);
+            let i = (y * n + x) as usize;
+            m[i] = m[i].max((c * 255.0 + 0.5).min(255.0) as u8);
+        }
+    }
+}
+
+/// One line of text centred at (RING_N / 2, `cy`), shrunk to fit `max_w`.
+fn line_text(m: &mut [u8], text: &str, cy: f32, px: f32, weight: i32, max_w: f32) {
+    let n = gpu::RING_N as i32;
+    let mut st = text_strip(text, (px * TSS).round() as i32, weight);
+    let tw = (st.0 as f32 - 8.0) / TSS;
+    if tw > max_w && tw > 0.0 {
+        st = text_strip(text, (px * TSS * max_w / tw).floor() as i32, weight);
+    }
+    if st.0 == 0 {
+        return;
+    }
+    let (w, h) = (st.0 as f32 / TSS, st.1 as f32 / TSS);
+    let (l, t) = (n as f32 / 2.0 - w / 2.0, cy - h / 2.0);
+    for y in (t.floor() as i32).max(0)..((t + h).ceil() as i32).min(n) {
+        for x in (l.floor() as i32).max(0)..((l + w).ceil() as i32).min(n) {
+            let c = strip_at(&st, (x as f32 + 0.5 - l) * TSS, (y as f32 + 0.5 - t) * TSS);
+            let i = (y * n + x) as usize;
+            m[i] = m[i].max((c * 255.0 + 0.5).min(255.0) as u8);
+        }
+    }
+}
+
+/// The front's ring text for a tier, along the bottom at r = .775 (paint-filled in the coin).
+fn ring_mask(tier: u8) -> Vec<u8> {
+    let n = gpu::RING_N as usize;
+    let mut m = vec![0u8; n * n];
+    let name = TIER_NAMES[(tier.clamp(1, 7) - 1) as usize].to_uppercase();
+    arc_text(&mut m, &format!("RESOURCE MONITOR  \u{b7}  {name} MEDAL"), 0.775, 30.0, 600, true);
+    m
+}
+
+/// The reverse: the medal's name and tier with the date, the maker round the rim, a ring line (engraved in the coin).
+fn back_mask(title: &str, sub: &str) -> Vec<u8> {
+    let n = gpu::RING_N as usize;
+    let mut m = vec![0u8; n * n];
+    line_text(&mut m, title, 472.0, if title.chars().count() > 14 { 80.0 } else { 100.0 }, 700, 600.0);
+    line_text(&mut m, &sub.to_uppercase(), 592.0, 52.0, 600, 620.0);
+    arc_text(&mut m, "RESOURCE MONITOR  \u{b7}  ACHIEVEMENT MEDAL", 0.82, 46.0, 600, false);
+    arc_text(&mut m, "EMULSION LABS", 0.82, 40.0, 600, true);
+    let half = n as f32 / 2.0;
+    for y in 0..n {
+        for x in 0..n {
+            let (dx, dy) = (x as f32 + 0.5 - half, y as f32 + 0.5 - half);
+            let c = (3.5 - ((dx * dx + dy * dy).sqrt() - 330.0).abs()).clamp(0.0, 1.0);
+            if c > 0.0 {
+                m[y * n + x] = m[y * n + x].max((c * 255.0) as u8);
+            }
+        }
+    }
+    m
+}
+
+/// Halve a premultiplied BGRA square (2n -> n), a 2x2 box: the tiles are drawn at twice their size, then this.
+fn down2(src: &[u32], n: u32) -> Vec<u32> {
+    let (n, s) = (n as usize, 2 * n as usize);
+    let mut out = vec![0u32; n * n];
+    if src.len() < s * s {
+        return out;
+    }
+    for y in 0..n {
+        for x in 0..n {
+            let (a, b, c, d) = (src[2 * y * s + 2 * x], src[2 * y * s + 2 * x + 1], src[(2 * y + 1) * s + 2 * x], src[(2 * y + 1) * s + 2 * x + 1]);
+            let ch = |sh: u32| (((a >> sh) & 255) + ((b >> sh) & 255) + ((c >> sh) & 255) + ((d >> sh) & 255) + 2) / 4;
+            out[y * n + x] = ch(24) << 24 | ch(16) << 16 | ch(8) << 8 | ch(0);
+        }
+    }
+    out
+}
+
+/// The coin's pose in the list (preview cards): turned a little to the right and tipped back, so it reads as 3D.
+const COIN_YAW: f32 = 28.0;
+const COIN_PITCH: f32 = -16.0;
+
 /// Cache of medal tiles by (badge id, tier, pixel size) and of icon masks by name.
 #[derive(Default)]
 struct Medals {
@@ -862,6 +1003,11 @@ struct Medals {
     cache: HashMap<MedalKey, Vec<u32>>,
     /// The full view's age layers (L, haze) for one medal, size and wear step: worked out once, put on every frame.
     age: Option<(MedalKey, Vec<u32>, Vec<u32>)>,
+    /// The tiles in `cache` are coins (the coin programs were ready when they were drawn).
+    coins: bool,
+    /// Ring text per tier, and the reverse of the coin in the full view (id, tier, mask).
+    rings: HashMap<u8, Vec<u8>>,
+    back: Option<(&'static str, u8, Vec<u8>)>,
 }
 
 impl Medals {
@@ -873,8 +1019,57 @@ impl Medals {
         self.masks.entry(icon).or_insert_with(|| icon_mask(icon));
     }
 
+    fn ensure_ring(&mut self, tier: u8) {
+        self.rings.entry(tier).or_insert_with(|| ring_mask(tier));
+    }
+
+    fn ensure_back(&mut self, id: &'static str, tier: u8, title: &str, sub: &str) {
+        if !matches!(&self.back, Some((i, t, _)) if *i == id && *t == tier) {
+            self.back = Some((id, tier, back_mask(title, sub)));
+        }
+    }
+
+    /// One live coin frame (full view), `n` px square. `age_px`: the size its dust is drawn for (kept while `n` drops
+    /// to keep the frame rate). None when the coin programs are not ready: draw the medal.
+    #[allow(clippy::too_many_arguments)]
+    fn coin_frame(&mut self, id: &'static str, tier: u8, n: u32, age_px: u32, t: f32, yaw: f32, pitch: f32, tilt: (f32, f32), wear: [f32; 3]) -> Option<Vec<u32>> {
+        if !gpu::coins_ready() {
+            return None;
+        }
+        let icon = icon_of(id);
+        self.ensure_mask(icon);
+        self.ensure_ring(tier);
+        let p = gpu::Params {
+            material: material_of(tier),
+            size_px: n.clamp(8, 2048),
+            time_s: t,
+            seed: seed_of(id, tier),
+            tilt,
+            wear: if tier >= 7 { [0.0; 3] } else { [wear[0], web_seed(id), wear[2]] },
+            icon_mask: self.masks.get(icon).map(|m| &m[..]),
+            detail_mask: None,
+            layer: 0,
+            coin: Some(gpu::Coin {
+                yaw,
+                pitch,
+                ext: 1.24,
+                ring: self.rings.get(&tier).map(|m| &m[..]),
+                back: self.back.as_ref().filter(|b| b.0 == id && b.1 == tier).map(|b| &b.2[..]),
+                age_px,
+            }),
+        };
+        let mut out = Vec::new();
+        (gpu::render_batch(&[p], &mut out) && out.len() == 1).then(|| out.swap_remove(0))
+    }
+
     /// Render everything missing in ONE batch (flat fallback when the GPU path is unavailable or fails).
+    /// Coins (once their programs are ready) are drawn at twice the tile size and halved: clean edges on small tiles.
     fn ensure(&mut self, reqs: &[MedalKey]) {
+        let coins = gpu::coins_ready();
+        if coins != self.coins {
+            self.cache.clear();
+            self.coins = coins;
+        }
         let mut need: Vec<MedalKey> = Vec::new();
         for r in reqs {
             if r.1 > 0 && !self.cache.contains_key(r) && !need.contains(r) {
@@ -886,7 +1081,11 @@ impl Medals {
         }
         for k in &need {
             self.ensure_mask(icon_of(k.0));
+            if coins {
+                self.ensure_ring(k.1);
+            }
         }
+        let ss = |px: u32| if coins && px * 2 <= 2048 { px * 2 } else { px };
         let mut out: Vec<Vec<u32>> = Vec::new();
         let mut done = false;
         if gpu::available() {
@@ -894,7 +1093,7 @@ impl Medals {
                 .iter()
                 .map(|&(id, t, px, wc)| gpu::Params {
                     material: material_of(t),
-                    size_px: px,
+                    size_px: ss(px),
                     time_s: gpu::still_time(material_of(t)),
                     seed: seed_of(id, t),
                     tilt: (0.0, 0.0),
@@ -902,13 +1101,26 @@ impl Medals {
                     icon_mask: self.masks.get(icon_of(id)).map(|m| &m[..]),
                     detail_mask: None,
                     layer: 0,
-                    coin: None,
+                    coin: coins.then(|| gpu::Coin {
+                        yaw: COIN_YAW,
+                        pitch: COIN_PITCH,
+                        ext: 1.14,
+                        ring: self.rings.get(&t).map(|m| &m[..]),
+                        back: None,
+                        age_px: 0,
+                    }),
                 })
                 .collect();
             done = gpu::render_batch(&params, &mut out) && out.len() == need.len();
         }
         for (i, &k) in need.iter().enumerate() {
-            let tile = if done { std::mem::take(&mut out[i]) } else { flat_medal(k.1, k.2, self.masks.get(icon_of(k.0)).map(|m| &m[..])) };
+            let tile = if !done {
+                flat_medal(k.1, k.2, self.masks.get(icon_of(k.0)).map(|m| &m[..]))
+            } else if ss(k.2) != k.2 {
+                down2(&out[i], k.2)
+            } else {
+                std::mem::take(&mut out[i])
+            };
             self.cache.insert(k, tile);
         }
         // Keep the cache bounded (sizes change with DPI and the full view).
@@ -1085,6 +1297,8 @@ const WHEEL_STEP: i32 = 48;
 const FIRST_LADDERS: usize = 5;
 const T_SCROLL: usize = 1;
 const T_FV: usize = 2;
+/// Waits for the coin programs (compiled in the background on the first start after an update), then redraws.
+const T_COINS: usize = 3;
 const WM_MOUSELEAVE_: u32 = 0x02A3;
 const WM_DWMCOLORIZATIONCOLORCHANGED: u32 = 0x0320;
 
@@ -1213,6 +1427,20 @@ struct Fv {
     frame_key: Option<MedalKey>,
     /// Polish feedback ("+1 shine") and when it was shown (now_s).
     pop: Option<(String, f64)>,
+    /// The live 3D coin (Dial family) instead of the flat medal: drag turns it (yaw, pitch in degrees, vy = spin
+    /// left after a throw), a click turns it over.
+    coin: bool,
+    yaw: f32,
+    pitch: f32,
+    vy: f32,
+    /// Dragging: last pointer position and how far it has moved in all (a short one is a click).
+    grab: Option<(i32, i32, i32)>,
+    /// Side of `frame` in px; `scale` = frame / stage, lowered when a frame costs too much (`cost`, ms, smoothed).
+    frame_n: i32,
+    scale: f32,
+    cost: f32,
+    /// A slow device (software rendering): no new frame before this (now_s), so input stays quick.
+    next_at: f64,
 }
 
 struct FvGeom {
@@ -1264,6 +1492,8 @@ struct Ui {
     ov: Option<Surface>,
     snap: Vec<u32>,
     snap_ok: bool,
+    /// T_COINS is running.
+    coin_poll: bool,
     medals: Medals,
     fv: Option<Fv>,
     /// The full view's Polish button, as last drawn (empty when there is none).
@@ -1328,6 +1558,7 @@ impl Ui {
             ov: None,
             snap: Vec::new(),
             snap_ok: false,
+            coin_poll: false,
             medals: Medals::default(),
             fv: None,
             polish_r: std::cell::Cell::new(Rect::default()),
@@ -2072,6 +2303,10 @@ impl Ui {
     // -------------------------------------------------------------- painting
 
     fn paint(&mut self, dc: HDC) {
+        if !self.coin_poll && !gpu::coins_ready() && gpu::available() {
+            self.coin_poll = true;
+            unsafe { SetTimer(self.hwnd, T_COINS, 400, None) };
+        }
         let (w, h) = (self.cw.max(1), self.ch.max(1));
         let mut surf = match self.surf.take() {
             Some(s) if s.w == w && s.h == h => s,
@@ -2151,7 +2386,7 @@ impl Ui {
     fn fv_geom(&self, tier: u8) -> FvGeom {
         let sc = |v: i32| self.sc(v);
         let mut s = ((self.cw as f32 * 0.44).min(self.ch as f32 * 0.64) as i32).min(sc(520));
-        if tier == 7 {
+        if tier == 7 && !self.fv.as_ref().is_some_and(|f| f.coin) {
             s = s.min(sc(360));
         }
         s = s.max(sc(200));
@@ -2240,6 +2475,15 @@ impl Ui {
             frame: Vec::new(),
             frame_key: None,
             pop: None,
+            coin: gpu::coins_ready(),
+            yaw: COIN_YAW,
+            pitch: COIN_PITCH,
+            vy: 0.0,
+            grab: None,
+            frame_n: 0,
+            scale: if gpu::is_hardware() { 1.0 } else { 0.5 },
+            cost: 5.0,
+            next_at: 0.0,
         });
         self.hover = None;
         self.snap_ok = false;
@@ -2260,9 +2504,70 @@ impl Ui {
         }
     }
 
+    /// Render the live coin for its pose and time. One coin, the one on screen: nothing while the window is minimised.
+    /// Frame rate first: when a frame costs more than ~12 ms it is drawn with fewer pixels (down to half, scaled up on
+    /// screen), and back up when there is room; the dust keeps the full size (drawn once, see gpu::Coin::age_px).
+    fn fv_render_coin(&mut self) {
+        let Some(fv) = self.fv.as_ref() else { return };
+        if unsafe { IsIconic(self.hwnd) } != 0 {
+            return;
+        }
+        let (id, reduced, t0, scale, grab, last_n) = (fv.ids[fv.i], fv.reduced, fv.t0, fv.scale, fv.grab.is_some(), fv.frame_n);
+        let (yaw0, pitch0, flip) = (fv.yaw, fv.pitch, fv.flip);
+        let tier = self.fv_tier();
+        let s = self.fv_geom(tier).stage.w() as u32;
+        let st = (now_s() - t0) as f32;
+        let sw = if reduced || grab { 0.0 } else { 5.0 };   // a slow idle sway, as the preview
+        let ease = flip * flip * (3.0 - 2.0 * flip);
+        let yaw = yaw0 + sw * (st * 0.4).sin() + 180.0 * ease;
+        let pitch = pitch0 + sw * 0.4 * (st * 0.29).sin();
+        let t = if reduced { gpu::still_time(material_of(tier)) } else { st };
+        let w = self.wear_now(id, tier);
+        let key = (id, tier, s, wear_code(&w));
+        let wear = if tier >= 7 { [0.0; 3] } else { [w.dust, w.scratch, w.web] };
+        if !matches!(&self.medals.back, Some((i, tr, _)) if *i == id && *tr == tier) {
+            if let Some(e) = self.entry(id) {
+                let sub = format!("{} \u{b7} {}", TIER_NAMES[(tier.clamp(1, 7) - 1) as usize], fmt_date(e.earned_ms, self.tz));
+                self.medals.ensure_back(id, tier, &e.title, &sub);
+            }
+        }
+        let n = ((s as f32 * scale).round() as u32).max(64);
+        let c0 = std::time::Instant::now();
+        let frame = self.medals.coin_frame(id, tier, n, s, t, yaw, pitch, (0.0, 0.0), wear);
+        let ms = c0.elapsed().as_secs_f32() * 1000.0;
+        let Some(fv) = self.fv.as_mut() else { return };
+        match frame {
+            Some(f) => {
+                fv.frame = f;
+                fv.frame_n = n as i32;
+                fv.frame_key = Some(key);
+            }
+            None => {
+                fv.coin = false; // the coin path failed: the flat medal from the next frame on
+                fv.frame_key = None;
+                return;
+            }
+        }
+        if last_n == n as i32 && !reduced {
+            fv.cost = fv.cost * 0.8 + ms * 0.2;
+            if fv.cost > 12.0 && fv.scale > 0.5 {
+                fv.scale = (fv.scale - 0.1).max(0.5);
+                fv.cost = 8.0;
+            } else if fv.cost < 5.0 && fv.scale < 1.0 {
+                fv.scale = (fv.scale + 0.05).min(1.0);
+                fv.cost = 5.0;
+            }
+            // already at half the pixels and still slow: leave the UI thread as much time again before the next one
+            fv.next_at = if fv.scale <= 0.5 && fv.cost > 14.0 { now_s() + fv.cost as f64 / 1000.0 } else { 0.0 };
+        }
+    }
+
     /// Render the live medal for the current tilt and time.
     fn fv_render(&mut self) {
         let Some(fv) = self.fv.as_ref() else { return };
+        if fv.coin {
+            return self.fv_render_coin();
+        }
         let (id, reduced, rx, ry, t0, key_old) = (fv.ids[fv.i], fv.reduced, fv.rx, fv.ry, fv.t0, fv.frame_key);
         let tier = self.fv_tier();
         let px = self.fv_geom(tier).stage.w() as u32;
@@ -2316,9 +2621,20 @@ impl Ui {
             let k = 1.0 - (-dt * 16.0).exp();
             fv.rx += (tx - fv.rx) * k;
             fv.ry += (ty - fv.ry) * k;
+            if fv.coin && fv.grab.is_none() && !fv.reduced && fv.vy != 0.0 {
+                let f = dt * 60.0; // the spin after a throw runs down (preview: .94 a frame)
+                fv.yaw = (fv.yaw + fv.vy * f).rem_euclid(360.0);
+                fv.vy *= 0.94f32.powf(f);
+                if fv.vy.abs() < 0.01 {
+                    fv.vy = 0.0;
+                }
+            }
             fv.flip += (fv.flip_t - fv.flip) * (1.0 - (-dt * 6.5).exp());
             if (fv.flip_t - fv.flip).abs() < 0.004 {
                 fv.flip = fv.flip_t;
+            }
+            if fv.coin && now < fv.next_at {
+                return;
             }
         }
         self.fv_render();
@@ -2326,7 +2642,7 @@ impl Ui {
     }
 
     fn fv_flip(&mut self) {
-        if self.fv_tier() >= 7 {
+        if self.fv_tier() >= 7 && !self.fv.as_ref().is_some_and(|f| f.coin) {
             return; // the bubble is a sphere: it has no back to turn to, and its mark always faces you
         }
         if let Some(fv) = self.fv.as_mut() {
@@ -2348,6 +2664,8 @@ impl Ui {
             fv.flip = 0.0;
             fv.flip_t = 0.0;
             fv.frame_key = None;
+            fv.coin = gpu::coins_ready();
+            fv.frame_n = 0;
         }
         self.fv_render();
         invalidate(self.hwnd);
@@ -2422,7 +2740,7 @@ impl Ui {
             b: (cy + s as f32 * 0.5 + s as f32 * 0.02) as i32 + (s as f32 * 0.05) as i32,
         };
         cv.fill_round(sh, sh.h() as f32 / 2.0, Rgba(0, 0, 0, 100));
-        if c < 0.0 {
+        if c < 0.0 && !fv.coin {
             self.draw_back(cv, &e, cx, cy, s, sxm, sym);
         }
         if fv.focus == 0 && self.focus_visible {
@@ -2462,7 +2780,11 @@ impl Ui {
         } else {
             self.polish_r.set(Rect::default());
         }
-        let hint = "Tilt with the pointer. Click, Enter or Space turns the medal to its spec sheet. \u{2190} \u{2192} go through the list, Esc closes.";
+        let hint = if fv.coin {
+            "Drag the coin to turn it. Click, Enter or Space turns it over. \u{2190} \u{2192} go through the list, Esc closes."
+        } else {
+            "Tilt with the pointer. Click, Enter or Space turns the medal to its spec sheet. \u{2190} \u{2192} go through the list, Esc closes."
+        };
         for (i, l) in wrap_dc(mdc, f.small, hint, inner, 4).into_iter().enumerate() {
             items.push(Cl::T(l, f.small, soft, if i == 0 { sc(8) } else { 0 }));
         }
@@ -2543,7 +2865,12 @@ impl Ui {
 
         ov.load(cv);
         surf.over_surface(ov);
-        if c >= 0.0 && !fv.frame.is_empty() {
+        if fv.coin && fv.frame_n > 0 && !fv.frame.is_empty() {
+            // the coin turns itself (3D): drawn square, scaled up when it was drawn with fewer pixels
+            let (w, h) = (surf.w, surf.h);
+            let k = s as f32 / fv.frame_n as f32;
+            draw_tile(surf.px(), w, h, &fv.frame, fv.frame_n, cx, cy, k, k, 1.0, (0, h));
+        } else if c >= 0.0 && !fv.frame.is_empty() && !fv.coin {
             let (w, h) = (surf.w, surf.h);
             let px = fv.frame_key.map_or(s, |k| k.2 as i32);
             draw_tile(surf.px(), w, h, &fv.frame, px, cx, cy, sxm, sym, 1.0, (0, h));
@@ -2732,6 +3059,22 @@ fn on_mouse_move(hwnd: HWND, x: i32, y: i32) {
         let mut t = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
         u.tracking = unsafe { TrackMouseEvent(&mut t) } != 0;
     }
+    if let Some(fv) = u.fv.as_mut() {
+        if let Some((lx, ly, moved)) = fv.grab {
+            // drag turns the coin (preview: .5 degree a pixel across, .4 up and down; down tips the top away)
+            let k = 96.0 / u.dpi.max(96) as f32;
+            let (dx, dy) = (x - lx, y - ly);
+            fv.yaw = (fv.yaw + dx as f32 * 0.5 * k).rem_euclid(360.0);
+            fv.pitch = (fv.pitch + dy as f32 * 0.4 * k).clamp(-70.0, 70.0);
+            fv.vy = dx as f32 * 0.5 * k;
+            fv.grab = Some((x, y, moved + dx.abs() + dy.abs()));
+            if fv.reduced {
+                u.fv_render();
+                invalidate(hwnd);
+            }
+            return;
+        }
+    }
     if u.fv.is_some() {
         let region = u.fv_region(x, y);
         let hover = if region == 5 || region == 0 { 0 } else { region };
@@ -2790,6 +3133,13 @@ fn on_button_down(hwnd: HWND, x: i32, y: i32) {
             1 => {
                 if let Some(fv) = u.fv.as_mut() {
                     fv.focus = 0;
+                    if fv.coin {
+                        fv.grab = Some((x, y, 0));
+                        fv.vy = 0.0;
+                        unsafe { SetCapture(hwnd) };
+                        invalidate(hwnd);
+                        return;
+                    }
                 }
                 u.fv_flip();
             }
@@ -2831,6 +3181,18 @@ fn on_button_down(hwnd: HWND, x: i32, y: i32) {
 
 fn on_button_up(hwnd: HWND, x: i32, y: i32) {
     let Some(u) = ui() else { return };
+    let click = u.sc(4);
+    if let Some(g) = u.fv.as_mut().and_then(|f| f.grab.take()) {
+        unsafe { ReleaseCapture() };
+        if g.2 < click {
+            if let Some(fv) = u.fv.as_mut() {
+                fv.vy = 0.0;
+            }
+            u.fv_flip(); // a click, not a drag: turn it over
+        }
+        invalidate(hwnd);
+        return;
+    }
     if u.drag != Drag::None {
         u.drag = Drag::None;
         unsafe { ReleaseCapture() };
@@ -2958,6 +3320,9 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         WM_CAPTURECHANGED => {
             if let Some(u) = ui() {
                 u.drag = Drag::None;
+                if let Some(f) = u.fv.as_mut() {
+                    f.grab = None;
+                }
             }
             0
         }
@@ -2979,6 +3344,21 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
                 T_FV => {
                     if let Some(u) = ui() {
                         u.fv_tick();
+                    }
+                }
+                T_COINS => {
+                    if gpu::coins_ready() {
+                        KillTimer(hwnd, T_COINS);
+                        if let Some(u) = ui() {
+                            u.coin_poll = false;
+                            if let Some(f) = u.fv.as_mut() {
+                                f.coin = true;
+                                f.frame_key = None;
+                                f.frame_n = 0;
+                            }
+                            u.fv_render();
+                        }
+                        invalidate(hwnd);
                     }
                 }
                 _ => {}

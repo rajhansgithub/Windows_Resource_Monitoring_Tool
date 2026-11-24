@@ -101,6 +101,9 @@ pub struct Coin<'a> {
     pub ring: Option<&'a [u8]>,
     /// RING_N x RING_N alpha spanning 0.92 of the face: the name, tier and maker on the reverse (engraved).
     pub back: Option<&'a [u8]>,
+    /// The size (px) the dust and cobweb are drawn for; 0 = `size_px`. The full view keeps it while it drops pixels to
+    /// hold the frame rate, so the age layer is not drawn again.
+    pub age_px: u32,
 }
 
 /// Side of the coin's ring and back text masks.
@@ -823,7 +826,8 @@ impl Gpu {
         let key_of = |p: &Params| -> (u64, u32) {
             let ext = p.coin.as_ref().map_or(1.24, |c| c.ext);
             let ring = p.coin.as_ref().and_then(|c| c.ring).map_or(0, |r| hash_mask(r, 7));
-            let n = age_n(p.size_px, ext);
+            let ap = p.coin.as_ref().map_or(0, |c| c.age_px);
+            let n = age_n(if ap > 0 { ap } else { p.size_px }, ext);
             let geo = [coin_variant(p.material, 1) as u8];
             let w: Vec<u8> = p.wear.iter().flat_map(|v| v.to_bits().to_le_bytes()).collect();
             (fnv64(&[&geo, &n.to_le_bytes(), &w, &ring.to_le_bytes()]), n)
@@ -855,7 +859,7 @@ impl Gpu {
                         icon_mask: None,
                         detail_mask: None,
                         layer,
-                        coin: Some(Coin { yaw: 0.0, pitch: 0.0, ext: 1.0, ring: p.coin.and_then(|c| c.ring), back: None }),
+                        coin: Some(Coin { yaw: 0.0, pitch: 0.0, ext: 1.0, ring: p.coin.and_then(|c| c.ring), back: None, age_px: 0 }),
                     });
                 }
             }
@@ -940,7 +944,7 @@ impl Gpu {
         for p in items {
             let metal = !matches!(p.material, Material::Diamond | Material::Ruby | Material::Emulsion);
             icons.push(match p.icon_mask {
-                Some(m) if metal && p.layer == 0 => self.mask_srv(m, ICON_N, ICON_N),
+                Some(m) if metal && !(p.coin.is_some() && p.layer > 0) => self.mask_srv(m, ICON_N, ICON_N),
                 _ => None,
             });
             let c = p.coin.as_ref();
@@ -1328,7 +1332,7 @@ mod tests {
             icon_mask: Some(&ic),
             detail_mask: None,
             layer: 0,
-            coin: Some(Coin { yaw, pitch, ext: 1.24, ring: Some(&ring), back: Some(&ring) }),
+            coin: Some(Coin { yaw, pitch, ext: 1.24, ring: Some(&ring), back: Some(&ring), age_px: 0 }),
         };
         let old = [0.85, 0.4, 1.0];
         let a = render(&mut gpu, &ALL.map(|m| coin(m, 9.0, 28.0, -16.0, [0.0; 3], PX)));

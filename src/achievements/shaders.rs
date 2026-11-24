@@ -1012,6 +1012,12 @@ float4 main(float4 sv : SV_Position) : SV_Target {
     if(a2>1e-6){ float h2=b2*b2-a2*c2; if(h2<0.) tmax=-1.; else { h2=sqrt(h2); t=max(t,(-b2-h2)/a2); tmax=min(tmax,(-b2+h2)/a2); } }
     if(abs(rd.z)>1e-6){ float z0=(-.2-ro.z)/rd.z, z1=(.36-ro.z)/rd.z; t=max(t,min(z0,z1)); tmax=min(tmax,max(z0,z1)); }
   }
+#if STONE == 3
+  {                                                  // metal behind the bubble never shows: stop the march at its sphere
+    float3 oc=ro-float3(0.,0.,ZF); float bb=dot(oc,rd), hh=bb*bb-dot(oc,oc)+RF*RF;
+    if(hh>0.) tmax=min(tmax,-bb-sqrt(hh));
+  }
+#endif
   float mn, tm;
   bool hit=march(ro,rd,t,tmax,max(.0005,pxw*.3),mn,tm);
   float cov=1.;
