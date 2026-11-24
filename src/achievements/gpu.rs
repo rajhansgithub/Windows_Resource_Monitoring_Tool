@@ -1388,6 +1388,31 @@ mod tests {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("medal-shots");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("coins.png"), png_rgb(w, h, &img)).unwrap();
+        // half size into the log too (base64 between markers): the sheet can be looked at without the artifact
+        let (hw, hh) = (w / 2, h / 2);
+        let mut half = vec![0u8; (hw * hh * 3) as usize];
+        for y in 0..hh {
+            for x in 0..hw {
+                for ch in 0..3 {
+                    let at = |xx: u32, yy: u32| img[((yy * w + xx) * 3 + ch) as usize] as u32;
+                    half[((y * hw + x) * 3 + ch) as usize] = ((at(2 * x, 2 * y) + at(2 * x + 1, 2 * y) + at(2 * x, 2 * y + 1) + at(2 * x + 1, 2 * y + 1) + 2) / 4) as u8;
+                }
+            }
+        }
+        let png = png_rgb(hw, hh, &half);
+        const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut b64 = String::with_capacity(png.len() * 4 / 3 + 4);
+        for c in png.chunks(3) {
+            let v = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+            for k in 0..4 {
+                b64.push(if k <= c.len() { B64[((v >> (18 - 6 * k)) & 63) as usize] as char } else { '=' });
+            }
+        }
+        println!("COINS_PNG_B64_BEGIN");
+        for line in b64.as_bytes().chunks(4000) {
+            println!("{}", std::str::from_utf8(line).unwrap());
+        }
+        println!("COINS_PNG_B64_END");
     }
 
     /// Age (dust, scratches, cobweb) changes metals and stones: duller, greyer; the bubble never ages.
