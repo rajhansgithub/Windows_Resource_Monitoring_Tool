@@ -100,15 +100,30 @@
   const lookReady = () => lookP || (lookP = loadScript('js/bubble.js').then(() => {
     try { const ls = JSON.parse(store.get('rm-bubble-look') || 'null'); if (ls && window.YTPMLookDefaults) for (const k in YTPMLookDefaults) if (typeof ls[k] === 'number') YTPMLook[k] = ls[k]; } catch (e) { /* ignore */ }
   }, () => {}));
-  const coinOpt = (c) => ({ design: c.design, stone: c.stone || 0, metal: CMET[c.metal], metal2: CMET[c.metal2 || 'copper'], icon: c.icon, title: c.title, sub: c.sub,
+  /* Age on the Dial family: the same dust and cobweb as the medals (js/age.js), on the same clock (full dust at a year, webs from
+     day 20). Each coin gets its own web (seed from its id, as in the app). The bubble never ages. */
+  const coinSeed = (id) => {
+    let h = 2166136261; for (let i = 0; i < id.length; i++) { h ^= id.charCodeAt(i); h = Math.imul(h, 16777619); }
+    h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16;
+    return (h >>> 0) / 4294967296;
+  };
+  function coinWear(c) {
+    if (!c.id.startsWith('d-') || c.stone === 3) return undefined;
+    const A = window.YTPMAge || { dustAmt: 2, dustDays: 527, webStart: 20, webSpan: 330 }, d = CN.days;
+    const dust = Math.min(1, A.dustAmt * (1 - Math.exp(-Math.max(0, d) / A.dustDays)));
+    const web = d < A.webStart ? 0 : Math.min(1, Math.pow((d - A.webStart) / A.webSpan, .8));
+    return [dust, coinSeed(c.id), web];
+  }
+  const coinOpt = (c) => ({ wear: coinWear(c), design: c.design, stone: c.stone || 0, metal: CMET[c.metal], metal2: CMET[c.metal2 || 'copper'], icon: c.icon, title: c.title, sub: c.sub,
     ring: c.ring ? [{ text: c.ring, r: c.ringR || .775, px: c.ringTop ? 34 : 30, bottom: !c.ringTop }] : null });
   const SETS = { v7: DIAL, v6: COINS };
-  const CN = { set: 'v7', p: null, sel: { v7: 0, v6: 0 }, on: false, raf: 0, yaw: 28, pitch: -16, drag: null, vy: 0, t0: 0, c: null };
+  const CN = { days: 90, set: 'v7', p: null, sel: { v7: 0, v6: 0 }, on: false, raf: 0, yaw: 28, pitch: -16, drag: null, vy: 0, t0: 0, c: null };
   function buildV7() {
     const cards = DIAL.map((c, i) => `<button type="button" class="cn-card" data-coin="${i}" aria-pressed="${i === 0}"><canvas width="320" height="320" aria-hidden="true"></canvas><b>${esc(c.name)}</b><span>${esc(c.tag)}</span></button>`).join('');
     return `<section class="card"><div class="sec-h"><div class="eyebrow">v7 · Dial family</div><h2>One coin, every tier</h2>
       <p>Your notes, in one family. Every tier uses the same Dial frame. Bronze, Silver, Gold and Platinum hold a silicon CPU die; Diamond and Ruby sit forward in a raised collet, crown proud, flat back with no bulge; Emulsion holds the bubble itself, whole, in an open ring of pearl metal. One metal per tier, so the whole set reads as one. Drag the big one to turn it over.</p></div>
-      <div class="cn"><div class="cn-stage"><canvas class="cn-c" width="792" height="792" aria-label="Selected coin, drag to turn"></canvas><div class="cap">drag to turn · double-click to reset</div></div>
+      <div class="cn"><div class="cn-stage"><canvas class="cn-c" width="792" height="792" aria-label="Selected coin, drag to turn"></canvas><div class="cap">drag to turn · double-click to reset</div>
+      <label class="cn-age">Days on the shelf <input type="range" min="0" max="400" step="1" value="${CN.days}"><output>${CN.days} days</output></label></div>
       <div class="cn-info"><h3 class="cn-name"></h3><p class="cn-text"></p><div class="cn-grid" role="group" aria-label="Dial family tiers">${cards}</div></div></div></section>`;
   }
   function buildV6() {
@@ -168,6 +183,15 @@
     const io = 'IntersectionObserver' in window ? new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { io.unobserve(e.target); queue.push(e.target); YTPMGL.idle(pump, 300); } })) : null;
     list.forEach((c) => { if (io) io.observe(c); else queue.push(c); });
     if (!io) YTPMGL.idle(pump, 300);
+    // days on the shelf (v7): the big coin follows while dragging; the cards are drawn again on release
+    const age = $('.cn-age input', p), ao = $('.cn-age output', p);
+    if (age) {
+      age.addEventListener('input', () => {
+        CN.days = +age.value; ao.textContent = CN.days + ' days';
+        if (CN.on && CN.set === id) { const w = coinWear(set[CN.sel[id]]); YTPM3D.wear(w || [0, 0, 0]); }
+      });
+      age.addEventListener('change', () => { list.forEach((c) => { if (!queue.includes(c)) queue.push(c); }); YTPMGL.idle(pump, 300); });
+    }
   }
 
   /* ------------------------------------------------------------------ versions bar + panels */

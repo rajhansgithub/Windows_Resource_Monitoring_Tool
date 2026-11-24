@@ -377,3 +377,6 @@ canvas { display: block; }
   .tn-prev .cap { grid-column: 1 / -1; }
 }
 .loading-tab { color: var(--dim); padding: 40px 4px; font-family: var(--mono); font-size: 13px; }
+.cn-age { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; width: 100%; max-width: 396px; font-family: var(--mono); font-size: 11.5px; color: var(--dim); }
+.cn-age input { width: 100%; accent-color: var(--accent); }
+.cn-age output { color: var(--fg); min-width: 7ch; text-align: right; }

@@ -436,7 +436,7 @@ void main(){
   // ---- coin designs (v6): real relief, not a flat disc. One SDF per design (front), a shared reverse, and Diamond / Ruby
   // set into the Dial design like a lens element in its barrel (closed-back cup behind the stone).
   // uDesign: 0 Dial, 1 Heatsink, 2 Guilloche, 3 Silicon, 4 Turbine, 5 Rack. uStone: 0 none, 1 diamond, 2 ruby.
-  const COIN = COMMON + `
+  const COIN = COMMON + (root.YTPMWearGLSL || 'uniform vec3 uWear; uniform vec4 uAge[4]; vec3 aged(vec3 c,float a,vec2 p,float r,float f,float m,float aa){return c;}') + `
 uniform vec3 uMetal, uMetal2;   // uDesign and uStone are #defines: one program per design
 uniform sampler2D uIcon, uRing, uBack; uniform float uIconOn, uRingOn, uBackOn;
 // the studio for metal. Its slow sway (ER) is set once per pixel in main; the light directions are constants (no per-call
@@ -670,7 +670,7 @@ void main(){
   float eps=max(.0005,pxw*.3); for(int i=0;i<140;i++){ if(t>tmax) break; float dd=map(ro+rd*t).x; if(dd<eps){ hit=true; break; } t+=dd*.9; }
   vec3 M=uMetal;
   // the set stone in front of the metal?
-  float scov=0.; vec3 sc=vec3(0.);
+  float scov=0.; vec3 sc=vec3(0.); float tS=0.;
   if(uStone>.5 && uStone<2.5){
     vec3 og=(ro-vec3(0.,0.,GZD))/SSD;
     float gIn,gOut; vec3 gnIn,gnOut;
@@ -678,7 +678,10 @@ void main(){
     gIn=1.; gOut=0.;
     if(sb*sb-sc2>0.) trav(og,rd,gIn,gnIn,gOut,gnOut);
     if(gIn<gOut && gOut>0. && (!hit || gIn*SSD<t)){
-      sc=stone(og,rd,gIn,gnIn,M,scov,pxw/SSD,gOut);
+      sc=stone(og,rd,gIn,gnIn,M,scov,pxw/SSD,gOut); tS=gIn*SSD;
+#ifdef AGED
+      { vec3 ps=ro+rd*tS; sc=aged(sc,1.,ps.xy,0.,1.,0.,pxw); }       // dust settles on the stone too
+#endif
       if(scov>.999 || !hit){ gl_FragColor=vec4(sc*scov,scov); return; }
     }
   }
@@ -772,6 +775,14 @@ void main(){
   if(paint>0.) col=mix(col,vec3(.018),paint*.94);
   if(paint<0.){ vec3 G=M+(1.-M)*fz; col=mix(col,G*envS(R,tt),-paint); }
   col=aces(col*1.1);
+#ifdef AGED
+  {                                                  // age: dust in the barrel, the scale and the grooves; walls stay clean
+    float rec=(id>2.5&&id<3.5)?.7:(id>6.5&&id<7.5)?.15:0.;
+    rec+=max(paint,0.)*.5+smoothstep(.03,0.,abs(r-.705))*.5+smoothstep(.03,0.,abs(r-.9))*.5;
+    float flt=face?abs(n.z):mix(.3,.8,smoothstep(0.,.9,p.y/max(length(p.xy),1e-4)));
+    col=aged(col,1.,q,rec,flt,1.,pxw);
+  }
+#endif
   gl_FragColor=vec4(mix(col,sc,scov),1.);
   if(uStone>2.5) gl_FragColor=bubble(ro,rd,t,gl_FragColor);
 }`;
@@ -784,7 +795,7 @@ void main(){
   function variant(k, o, w) {
     const name = k === 'bubble' ? 'bubble' : k === 'medal' ? 'medal' : k === 'coin' ? 'coin' : 'gem';
     let defs = '';
-    if (name === 'coin') defs = `#define uDesign ${(o && o.design) || 0}.\n#define uStone ${(o && o.stone) || 0}.\n`;
+    if (name === 'coin') { const ww = w || (o && o.wear); defs = `#define uDesign ${(o && o.design) || 0}.\n#define uStone ${(o && o.stone) || 0}.\n` + (ww && (ww[0] > 0 || (ww[2] || 0) > 0) ? '#define AGED\n' : ''); }
     else if ((name === 'medal' || name === 'gem') && w && (w[0] > 0 || (w[2] || 0) > 0)) defs = '#define AGED\n';
     return { key: '3d:' + name + (defs ? ':' + defs.replace(/#define |\n/g, ' ').trim() : ''), name, defs };
   }
@@ -842,7 +853,7 @@ void main(){
       for (const k in LOOK3) if (U[LOOK3[k]]) gl.uniform1f(U[LOOK3[k]], +(look[k] != null ? look[k] : 0));
       if (U.uWear) gl.uniform3f(U.uWear, wear[0], wear[1], wear[2] || 0);
       if (U.uAge && root.YTPMAgeVec) gl.uniform4fv(U.uAge, root.YTPMAgeVec());
-      if (kind === 'coin') coinUniforms(cur, opt, { I: texI, B: texB, R: texR });
+      if (kind === 'coin') coinUniforms(cur, opt, { I: texI, B: texB, R: texR }, wear);
       if (kind === 'medal') {
         gl.uniform3fv(U.uMetal, opt.metal || [1, .77, .33]);
         gl.uniform1i(U.uIcon, 0); gl.uniform1i(U.uBack, 1);
@@ -934,7 +945,10 @@ void main(){
       img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="512" height="512" fill="none" stroke="#fff" color="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${src}</svg>`);
     });
   }
-  function coinUniforms(x, o, tx) {
+  function coinUniforms(x, o, tx, w) {
+    const ww = w || o.wear || [0, 0, 0];
+    if (x.U.uWear) gl.uniform3f(x.U.uWear, ww[0] || 0, ww[1] || 0, ww[2] || 0);
+    if (x.U.uAge && root.YTPMAgeVec) gl.uniform4fv(x.U.uAge, root.YTPMAgeVec());
     gl.uniform3fv(x.U.uMetal, o.metal || [1, .77, .33]); gl.uniform3fv(x.U.uMetal2, o.metal2 || [.95, .64, .54]);
     gl.uniform1i(x.U.uIcon, 0); gl.uniform1i(x.U.uRing, 1); gl.uniform1i(x.U.uBack, 2);
     gl.uniform1f(x.U.uIconOn, tx.I ? 1 : 0); gl.uniform1f(x.U.uRingOn, tx.R ? 1 : 0); gl.uniform1f(x.U.uBackOn, tx.B ? 1 : 0);
@@ -994,5 +1008,5 @@ void main(){
     return mul(mul(Ry, Rx), Rz);   // row-major, object -> world
   }
   function stop() { if (raf) cancelAnimationFrame(raf); raf = 0; if (io && cv) io.unobserve(cv); cur = null; pending = null; cv = null; }   // the context and programs stay for next time
-  root.YTPM3D = { start, rot, stop, snap, warm, redraw: () => { dirty = true; }, active: () => !!cv, canvas: () => cv, wear: (w) => { wear = [+w[0] || 0, +w[1] || 0, +w[2] || 0]; dirty = true; if (cv && (kind === 'medal' || kind === 'dia' || kind === 'ruby')) want(variant(kind, opt, wear)); } };
+  root.YTPM3D = { start, rot, stop, snap, warm, redraw: () => { dirty = true; }, active: () => !!cv, canvas: () => cv, wear: (w) => { wear = [+w[0] || 0, +w[1] || 0, +w[2] || 0]; dirty = true; if (cv && (kind === 'medal' || kind === 'dia' || kind === 'ruby' || kind === 'coin')) want(variant(kind, opt, wear)); } };
 })(typeof window !== 'undefined' ? window : globalThis);
