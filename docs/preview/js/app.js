@@ -61,7 +61,7 @@
   /* ------------------------------------------------------------------ versions: each stores only its settings; engines load once.
      To add a version: add an entry here (newest first) and a builder in BUILDERS. Earlier versions stay in the page, live. */
   const VERSIONS = [
-    { id: 'v7', label: 'v7 · Dial family', note: 'One coin for every tier, built from your notes: the Dial frame (grip ring with beads, a bezel with the scale, a black barrel). Bronze, Silver, Gold and Platinum hold a silicon CPU die in the barrel. Diamond and Ruby sit forward in a raised collet, the whole crown proud of the coin; the back is flat, with no bulge. Emulsion puts the bubble in the same collet, in pearl metal. One metal per tier, the same ring text on every coin.' },
+    { id: 'v7', label: 'v7 · Dial family', note: 'One coin for every tier, built from your notes: the Dial frame (grip ring with beads, a bezel with the scale, a black barrel). Bronze, Silver, Gold and Platinum hold a silicon CPU die in the barrel. Diamond and Ruby sit forward in a raised collet, the whole crown proud of the coin; the back is flat, with no bulge. Emulsion holds the bubble itself, whole, in the open ring, in pearl metal. One metal per tier, the same ring text on every coin.' },
     { id: 'v6', label: 'v6 · Coin designs', note: 'Eight coin designs with real depth, drawn live in 3D: Dial (gauge bezel), Heatsink, Guilloché, Silicon, Turbine and Rack. Diamond and Ruby are set into the Dial coin like a lens element, not loose. Ideas to pick from: nothing in the app changes until you pick.' },
     { id: 'v5', label: 'v5 · Aging per plugin v0.6.0', note: 'Aging follows the achievements plugin v0.6.0: each medal keeps [start, dust left, web cleared] per tier. The dust clock runs from the day the tier was earned; a rub clears the cobweb (it grows back from that day) and takes 30% of the dust. Spotless starts the clocks again, with a bonus. Your saved look (366 days) is the default; every medal has its own web. Tests cover the dust curve at 10 to 365 days, cobweb from day 20 to 350, rubs, new tiers, the bubble, and the same seed in the page and the app. Smooth: the bubble mark always faces you (only the glass turns); dust and cobweb are drawn once, not every frame; the badge grid keeps each frame under budget (badges take turns); the 3D view keeps one GL context.' },
     { id: 'v4', label: 'v4 · Shaders verified on Windows', note: 'The HLSL medal, stone and bubble shaders compiled and rendered on Windows (CI, 22 Nov 2026). No fallback to flat medals. In the full view every medal is a real 3D object: drag it. Medals age with real time (1 hour = 1 day): grainy dust that piles up in the hollows, and cobwebs that grow thread by thread after 20 days. Every medal gets its own web. Polish them in the full view.' },
@@ -93,8 +93,7 @@
     { id: 'd-plat', name: 'Platinum', tag: '99.95% uptime', design: 6, metal: 'plat', metal2: 'plat', icon: 'cpu', title: 'Night Watch', sub: 'Platinum · 2026', ring: 'RESOURCE MONITOR  ·  99.95%  ·  PLATINUM MEDAL', text: DFT + 'The same die, pins and traces, all in platinum. The last metal tier before the stones.' },
     { id: 'd-dia', name: 'Diamond', tag: '99.99% uptime', design: 6, stone: 1, metal: 'plat', metal2: 'plat', icon: 'cpu', title: 'Night Watch', sub: 'Diamond · 2026', ring: 'RESOURCE MONITOR  ·  99.99%  ·  DIAMOND MEDAL', text: 'The same Dial frame in platinum. The die makes way for the Diamond: it sits forward in a raised polished collet, girdle level with the grip ring, the whole crown proud of the coin. Turn it over: the back is flat, no bulge.' },
     { id: 'd-ruby', name: 'Ruby', tag: '99.999% uptime', design: 6, stone: 2, metal: 'rose', metal2: 'rose', icon: 'cpu', title: 'Night Watch', sub: 'Ruby · 2026', ring: 'RESOURCE MONITOR  ·  99.999%  ·  RUBY MEDAL', text: 'The same frame and collet in rose gold, holding the Ruby forward. Light through the stone bounces off the polished cup and comes back red. Flat back.' },
-    { id: 'd-emul', name: 'Emulsion', tag: '99.9999% uptime', design: 6, stone: 3, metal: 'pearl', metal2: 'pearl', icon: 'cpu', title: 'Night Watch', sub: 'Emulsion · 2026', ring: 'RESOURCE MONITOR  ·  99.9999%  ·  EMULSION MEDAL', text: 'The same frame and collet in pearl metal with an oil sheen that shifts as it turns. The Emulsion bubble sits where the Ruby sits: a soap-film dome over a dark well, colour in its edge, the mark floating inside and always facing you.' },
-    { id: 'd-emul2', name: 'Emulsion · draft', tag: 'whole bubble, for your OK', design: 6, stone: 4, metal: 'pearl', metal2: 'pearl', icon: 'cpu', title: 'Night Watch', sub: 'Emulsion · 2026', ring: 'RESOURCE MONITOR  ·  99.9999%  ·  EMULSION MEDAL', text: 'Draft from your notes, not applied yet: the Emulsion bubble itself (the same shader, look, noise and your saved tuning as the badge and the full view), whole and bigger, in the open ring. No metal behind it; it covers the dark barrel with only a thin gap to the bezel. The pearl metal is unchanged.' }
+    { id: 'd-emul', name: 'Emulsion', tag: '99.9999% uptime', design: 6, stone: 3, metal: 'pearl', metal2: 'pearl', icon: 'cpu', title: 'Night Watch', sub: 'Emulsion · 2026', ring: 'RESOURCE MONITOR  ·  99.9999%  ·  EMULSION MEDAL', text: 'The same Dial frame in pearl metal with an oil sheen that shifts as it turns. The ring is open right through: the Emulsion bubble itself (the same shader, look, noise and saved tuning as the badge and the full view), whole and bigger, fills it with only a thin gap to the bezel. Nothing behind it.' }
   ];
   /* The Emulsion coin draws the real bubble: its look (YTPMLook, with the tuner's saved values) lives in js/bubble.js */
   let lookP = null;
@@ -108,7 +107,7 @@
   function buildV7() {
     const cards = DIAL.map((c, i) => `<button type="button" class="cn-card" data-coin="${i}" aria-pressed="${i === 0}"><canvas width="320" height="320" aria-hidden="true"></canvas><b>${esc(c.name)}</b><span>${esc(c.tag)}</span></button>`).join('');
     return `<section class="card"><div class="sec-h"><div class="eyebrow">v7 · Dial family</div><h2>One coin, every tier</h2>
-      <p>Your notes, in one family. Every tier uses the same Dial frame. Bronze, Silver, Gold and Platinum hold a silicon CPU die; Diamond and Ruby sit forward in a raised collet, crown proud, flat back with no bulge; Emulsion holds the bubble there, in pearl metal. One metal per tier, so the whole set reads as one. Drag the big one to turn it over.</p></div>
+      <p>Your notes, in one family. Every tier uses the same Dial frame. Bronze, Silver, Gold and Platinum hold a silicon CPU die; Diamond and Ruby sit forward in a raised collet, crown proud, flat back with no bulge; Emulsion holds the bubble itself, whole, in an open ring of pearl metal. One metal per tier, so the whole set reads as one. Drag the big one to turn it over.</p></div>
       <div class="cn"><div class="cn-stage"><canvas class="cn-c" width="792" height="792" aria-label="Selected coin, drag to turn"></canvas><div class="cap">drag to turn · double-click to reset</div></div>
       <div class="cn-info"><h3 class="cn-name"></h3><p class="cn-text"></p><div class="cn-grid" role="group" aria-label="Dial family tiers">${cards}</div></div></div></section>`;
   }
@@ -139,7 +138,7 @@
     if (px > 0 && c.width !== px) { c.width = px; c.height = px; }
     coinStop();
     const pick = SETS[CN.set][CN.sel[CN.set]];
-    if (pick.stone === 4) lookReady().then(() => YTPM3D.redraw());
+    if (pick.stone === 3) lookReady().then(() => YTPM3D.redraw());
     CN.c = c; CN.on = YTPM3D.start(c, 'coin', reduced(), coinOpt(pick));
     if (CN.on) { CN.t0 = performance.now(); CN.raf = requestAnimationFrame(coinTick); }
   }
@@ -164,7 +163,7 @@
       const c = queue.shift(), k = +c.closest('.cn-card').dataset.coin;
       const px = Math.max(64, Math.round((c.getBoundingClientRect().width || 160) * Math.min(window.devicePixelRatio || 1, 2)));
       if (c.width !== px) { c.width = px; c.height = px; }
-      (set[k].stone === 4 ? lookReady() : Promise.resolve()).then(() => YTPM3D.snap(c, coinOpt(set[k]), 28, -16)).then(() => { busy = false; YTPMGL.idle(pump, 300); });
+      (set[k].stone === 3 ? lookReady() : Promise.resolve()).then(() => YTPM3D.snap(c, coinOpt(set[k]), 28, -16)).then(() => { busy = false; YTPMGL.idle(pump, 300); });
     };
     const io = 'IntersectionObserver' in window ? new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { io.unobserve(e.target); queue.push(e.target); YTPMGL.idle(pump, 300); } })) : null;
     list.forEach((c) => { if (io) io.observe(c); else queue.push(c); });

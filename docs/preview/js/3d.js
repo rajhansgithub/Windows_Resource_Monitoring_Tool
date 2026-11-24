@@ -480,8 +480,7 @@ const float ZG6=.19;                                          // girdle height
 const float GZD=uDesign>5.5?(ZG6-.2795*SSD):(.15-TABC*SS);    // stone centre (z) / old Dial: table at .15
 const float FLOOR6=-.13;                                      // the culet stops just inside the back plate
 // Emulsion (stone 3): a soap-film dome in the same collet, over a dark well with the mark floating in it
-const float ZF=0., RF=.685;                                   // stone 4: the Emulsion bubble (its own shader) in an open ring, just inside the bezel
-const float ZB=-.456, RB=.856;                                // the film's sphere: top at z=.40, meets the collet's lip at r=.55
+const float ZF=0., RF=.685;                                   // Emulsion (stone 3): the bubble (its own shader) in an open ring, just inside the bezel
 const float SCUT=-(FLOOR6-GZD)/SSD;
 #define P(N,C) { vec3 nn=N; float dn=dot(nn,d); float tt=(C-dot(nn,o))/dn; if(dn<0.){ if(tt>tIn){ tIn=tt; nIn=nn; } } else { if(tt<tOut){ tOut=tt; nOut=nn; } } }
 void trav(vec3 o, vec3 d, out float tIn, out vec3 nIn, out float tOut, out vec3 nOut){
@@ -560,7 +559,7 @@ vec2 mapF(vec3 p){
     if(r>.9){ vec2 bq=prep(p.xy,72.); d=U(d,vec2(length(vec3(bq.x-.948,bq.y,p.z-.186))-.016,1.)); }
     else d.x=min(d.x,length(vec2(.932-r,max(abs(p.z-.186)-.016,0.))));
     d=U(d,vec2(max(ringS(p,.70,.905,-.01,.4,.0),(p.z-(.15+(r-.70)*.13))*.99),2.));
-    if(uStone>3.5) return d;                         // draft: open ring, nothing behind the bubble
+    if(uStone>2.5) return d;                         // Emulsion: open ring, nothing behind the bubble
     d=U(d,vec2(ringS(p,.595,.705,-.01,.08,.012),3.));
     if(r>.63) d.x=min(d.x,r-.6);
     else if(uStone<.5){
@@ -571,9 +570,7 @@ vec2 mapF(vec3 p){
       d=U(d,vec2(box3(vec3(a2.x-.27,yy,p.z-.065),vec3(.035,.012,.011),.005),6.));
     } else {                                         // the collet: a polished cup rising out of the barrel, a thin lip at the girdle
       float body=box2(vec2(r-.3,p.z-(ZG6+.012-.12)*.5),vec2(.3,(ZG6+.012+.12)*.5),.01);
-      float pocket;
-      if(uStone>2.5){ pocket=length(p-vec3(0.,0.,ZB))-(RB+.003); d=U(d,vec2(disc(p,.6,-.01,.02,.005),3.)); }
-      else { float k=.602, zc=GZD-.602*SSD-.004; pocket=max(r-(SSD+.003),(zc+k*r-p.z)/sqrt(1.+k*k)); }
+      float k=.602, zc=GZD-.602*SSD-.004, pocket=max(r-(SSD+.003),(zc+k*r-p.z)/sqrt(1.+k*k));
       d=U(d,vec2(max(body,-pocket),6.));
     }
   }
@@ -584,7 +581,7 @@ vec2 mapB(vec3 p){                                   // the reverse: a rim and a
   float r=length(p.xy), dep=(uDesign<.5||uDesign>5.5)?.19:.12;
   vec2 d=vec2(ringS(p,.9,1.,-dep,.01,.025),1.);
   d=U(d,vec2(disc(p,.905,-dep+.05,.01,.01),2.));
-  if(uStone>3.5) d.x=max(d.x,.705-r);                // draft: the ring is open right through
+  if(uStone>2.5) d.x=max(d.x,.705-r);                // Emulsion: the ring is open right through
   if(uStone>.5 && uDesign<.5) d=U(d,vec2(max(r-.64,max(-p.z-Hb(r),p.z-.01))/1.7,1.));
   return d;
 }
@@ -640,49 +637,11 @@ vec3 stone(vec3 o, vec3 d, float tIn, vec3 nIn, vec3 M, out float cover, float p
   return 1.-exp(-max(col,0.)*1.6);
 }
 
-// Emulsion: the film over the dome. Thin-film colour (per channel interference), Fresnel edge band, studio reflections;
-// the mark floats inside and always faces the viewer (only the glass turns). base = what is behind (premultiplied).
-vec4 bubble(vec3 ro, vec3 rd, vec3 ow, vec3 dw, float tHit, vec4 base, float pxw){
-  if(uStone>3.5){                                     // the real Emulsion bubble is drawn first: stay clear wherever it is in front
-    vec3 oc=ro-vec3(0.,0.,ZF); float bb=dot(oc,rd), hh=bb*bb-dot(oc,oc)+RF*RF;
-    if(hh>0. && -bb-sqrt(hh)<tHit) return vec4(0.);
-    return base;
-  }
-  vec3 oc=ro-vec3(0.,0.,ZB); float bb=dot(oc,rd), cc=dot(oc,oc)-RB*RB, hh=bb*bb-cc;
-  if(hh<=0.) return base;
-  float sh=sqrt(hh), t1=-bb-sh;
-  if(t1<0. || t1>tHit) return base;
-  vec3 p1=ro+rd*t1, n1=(p1-vec3(0.,0.,ZB))/RB;
-  if(p1.z<.2) return base;                           // below the collet's lip: hidden in the cup
-  float c1=clamp(-dot(rd,n1),0.,1.);
-  float tt=uTime*.15;
-  float th=420.+170.*sin(5.*n1.x+2.*sin(4.*n1.y+tt))+110.*sin(6.*n1.y-3.*n1.z+tt*.7)-150.*n1.y;
-  float ct=sqrt(1.-(1.-c1*c1)/1.77);
-  vec3 fc=.5-.5*cos(TAU*2.*1.33*th*ct/vec3(640.,545.,455.));
-  fc=mix(vec3(dot(fc,vec3(.3,.59,.11))),fc,1.1);
-  float F=.04+.96*pow(1.-c1,4.);
-  vec3 nw=uR*n1;
-  float e=min(envS(reflect(dw,nw),uTime),2.2);
-  vec3 film=fc*(F*(.55+e)+.045)+vec3(.9,.95,1.)*F*max(e-1.,0.)*.35;   // dark, clear middle; colour in the edge band
-  // the mark: a ring and an orbiting dot, glowing, on a plane through the dome facing the viewer
-  vec3 cw=uR*vec3(0.,0.,.12);
-  float tp=(cw.z-ow.z)/dw.z;
-  vec3 mk=vec3(0.); float ma=0.;
-  if(tp>t1 && tp<tHit){
-    vec2 q=(ow.xy+dw.xy*tp)-cw.xy;
-    float aa=pxw*1.2, rr=length(q), a0=.75+uTime*.12;
-    vec2 dp=.2*vec2(cos(a0),sin(a0));
-    float ring=smoothstep(.016+aa,.016,abs(rr-.2)), dot2=smoothstep(.04+aa,.04,length(q-dp));
-    float ang=atan(q.y,q.x);
-    vec3 rc=mix(vec3(.62,.82,1.),vec3(1.,.62,.42),.5+.5*cos(ang-a0));
-    mk=rc*ring*1.1+vec3(1.,.5,.28)*dot2*1.3;
-    mk+=vec3(.35,.55,1.)*exp(-pow((rr-.2)/.05,2.))*.18+vec3(1.,.45,.2)*exp(-dot(q-dp,q-dp)/.006)*.35;
-    ma=max(ring,dot2);
-  }
-  vec3 behind=base.rgb*(1.-ma)+mk;
-  float ab=max(base.a,ma);
-  vec3 col=behind*(1.-F*.85)+film;
-  return vec4(col,clamp(max(ab,F*.9+.1),0.,1.));
+// Emulsion: the real bubble is drawn first (js: bubblePass); the coin stays clear wherever the bubble is in front of the metal
+vec4 bubble(vec3 ro, vec3 rd, float tHit, vec4 base){
+  vec3 oc=ro-vec3(0.,0.,ZF); float bb=dot(oc,rd), hh=bb*bb-dot(oc,oc)+RF*RF;
+  if(hh>0. && -bb-sqrt(hh)<tHit) return vec4(0.);
+  return base;
 }
 
 void main(){
@@ -712,7 +671,7 @@ void main(){
       if(scov>.999 || !hit){ gl_FragColor=vec4(sc*scov,scov); return; }
     }
   }
-  if(!hit){ gl_FragColor=uStone>2.5?bubble(ro,rd,ow,dw,1e9,vec4(0.),pxw):vec4(0.); return; }
+  if(!hit){ gl_FragColor=vec4(0.); return; }
   vec3 p=ro+rd*t;
   vec2 mm=map(p); float id=mm.y;
   vec3 n=nrm(p);
@@ -803,7 +762,7 @@ void main(){
   if(paint<0.){ vec3 G=M+(1.-M)*fz; col=mix(col,G*envS(R,tt),-paint); }
   col=aces(col*1.1);
   gl_FragColor=vec4(mix(col,sc,scov),1.);
-  if(uStone>2.5) gl_FragColor=bubble(ro,rd,ow,dw,t,gl_FragColor,pxw);
+  if(uStone>2.5) gl_FragColor=bubble(ro,rd,t,gl_FragColor);
 }`;
 
   const LOOK3 = { lqRefr: 'uLqRefr', lqRefl: 'uLqRefl', lqFilm: 'uLqFilm', lqTint: 'uLqTint', lqWobble: 'uLqWob', lqDrops: 'uLqDrops', lqDropSize: 'uLqDropS', lqMove: 'uLqMove', dotRefr: 'uDotRefr', dotRing: 'uDotRing', refrPeriod: 'uRefrT', edgeWidth: 'uEdgeW', edgeVary: 'uEdgeVary', edgeColour: 'uEdgeCol', rimLine: 'uRim', saturation: 'uSat', filmInside: 'uFilmIn', filmThick: 'uThick', flowSpeed: 'uFlow', reflection: 'uRefl', glow: 'uGlow', breath: 'uBreath', motionAmt: 'uMotAmt', motionTime: 'uMotT' };
@@ -818,11 +777,11 @@ void main(){
     else if ((name === 'medal' || name === 'gem') && w && (w[0] > 0 || (w[2] || 0) > 0)) defs = '#define AGED\n';
     return { key: '3d:' + name + (defs ? ':' + defs.replace(/#define |\n/g, ' ').trim() : ''), name, defs };
   }
-  /* The Emulsion coin (stone 4): the real bubble shader (same look, noise and tuning as the badge and the full view), scaled so its
+  /* The Emulsion coin (stone 3): the real bubble shader (same look, noise and tuning as the badge and the full view), scaled so its
      sphere is the coin's ring sphere (radius .685; 1.0142*1.24/.6895 matches the outlines under the same eye), drawn first; the
      coin is drawn over it and stays clear wherever the bubble is in front. */
   const IN_RING = { key: '3d:bubble:in-ring', name: 'bubble', defs: '#define BEXT 1.8239\n' };
-  const inRing = (o) => !!o && o.stone === 4;
+  const inRing = (o) => !!o && o.stone === 3;
   function bubblePass(M, w, h, t) {
     if (!root.YTPMLook) return false;                 // its look (js/bubble.js) is not loaded yet
     const b = prog(IN_RING, () => { dirty = true; });
