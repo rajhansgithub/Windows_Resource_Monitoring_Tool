@@ -857,9 +857,33 @@ fn wear_rgba(c: u8) -> Rgba {
 
 // ------------------------------------------------------------------ coin text masks (preview `coinTex`)
 
+/// The face for text cut into the coins: Bahnschrift (Windows 10 and later), a DIN style face made for signs and
+/// plates. Open, even strokes that stay readable when cut in and seen at an angle; Segoe UI where it is missing.
+fn engrave_face() -> &'static str {
+    use std::sync::OnceLock;
+    static FACE: OnceLock<&'static str> = OnceLock::new();
+    FACE.get_or_init(|| unsafe {
+        let want = "Bahnschrift";
+        let dc = CreateCompatibleDC(std::ptr::null_mut());
+        let f = create_font(12, 600, want, true);
+        let old = SelectObject(dc, f);
+        let mut buf = [0u16; 64];
+        let n = GetTextFaceW(dc, buf.len() as i32, buf.as_mut_ptr());
+        SelectObject(dc, old);
+        DeleteObject(f);
+        DeleteDC(dc);
+        let got = String::from_utf16_lossy(&buf[..(n.max(1) - 1) as usize]);
+        if got.eq_ignore_ascii_case(want) {
+            want
+        } else {
+            ui_face()
+        }
+    })
+}
+
 /// `s` in white with GDI (grey anti-aliasing): (width, height, coverage), 4 px margin all round.
 fn text_strip(s: &str, px: i32, weight: i32) -> (i32, i32, Vec<u8>) {
-    let font = create_font(px.max(6), weight, ui_face(), true);
+    let font = create_font(px.max(6), weight, engrave_face(), true);
     let mut cv = Canvas::new();
     cv.resize(8, 8);
     let (tw, th) = cv.measure(font, s);
@@ -885,8 +909,8 @@ fn strip_at(st: &(i32, i32, Vec<u8>), x: f32, y: f32) -> f32 {
     (g(xi, yi) * (1.0 - fx) * (1.0 - fy) + g(xi + 1, yi) * fx * (1.0 - fy) + g(xi, yi + 1) * (1.0 - fx) * fy + g(xi + 1, yi + 1) * fx * fy) / 255.0
 }
 
-/// Text drawn twice as big as it lands, then sampled: smooth edges on the curve.
-const TSS: f32 = 2.0;
+/// Text drawn three times as big as it lands, then sampled: smooth edges on the curve.
+const TSS: f32 = 3.0;
 
 /// Text along a circle into a RING_N mask: `rad` in half-sizes (1 = the edge), `px` the font size in mask pixels.
 /// Upright towards the centre along the top, or along the bottom (`bottom`), left to right, centred.
@@ -950,7 +974,7 @@ fn ring_mask(tier: u8) -> Vec<u8> {
     let n = gpu::RING_N as usize;
     let mut m = vec![0u8; n * n];
     let name = TIER_NAMES[(tier.clamp(1, 7) - 1) as usize].to_uppercase();
-    arc_text(&mut m, &format!("RESOURCE MONITOR  \u{b7}  {name} MEDAL"), 0.775, 30.0, 600, true);
+    arc_text(&mut m, &format!("RESOURCE MONITOR  \u{b7}  {name} MEDAL"), 0.775, 32.0, 700, true);
     m
 }
 
@@ -958,10 +982,11 @@ fn ring_mask(tier: u8) -> Vec<u8> {
 fn back_mask(title: &str, sub: &str) -> Vec<u8> {
     let n = gpu::RING_N as usize;
     let mut m = vec![0u8; n * n];
-    line_text(&mut m, title, 472.0, if title.chars().count() > 14 { 80.0 } else { 100.0 }, 700, 600.0);
-    line_text(&mut m, &sub.to_uppercase(), 592.0, 52.0, 600, 620.0);
-    arc_text(&mut m, "RESOURCE MONITOR  \u{b7}  ACHIEVEMENT MEDAL", 0.82, 46.0, 600, false);
-    arc_text(&mut m, "EMULSION LABS", 0.82, 40.0, 600, true);
+    // big, bold and filled (see shaders::COIN): the name must read at a glance at any size the full view uses
+    line_text(&mut m, title, 470.0, if title.chars().count() > 14 { 96.0 } else { 116.0 }, 700, 600.0);
+    line_text(&mut m, &sub.to_uppercase(), 596.0, 60.0, 700, 560.0);
+    arc_text(&mut m, "RESOURCE MONITOR  \u{b7}  ACHIEVEMENT MEDAL", 0.82, 50.0, 700, false);
+    arc_text(&mut m, "EMULSION LABS", 0.82, 48.0, 700, true);
     let half = n as f32 / 2.0;
     for y in 0..n {
         for x in 0..n {
@@ -1032,7 +1057,7 @@ impl Medals {
     /// One live coin frame (full view), `n` px square. `age_px`: the size its dust is drawn for (kept while `n` drops
     /// to keep the frame rate). None when the coin programs are not ready: draw the medal.
     #[allow(clippy::too_many_arguments)]
-    fn coin_frame(&mut self, id: &'static str, tier: u8, n: u32, age_px: u32, t: f32, yaw: f32, pitch: f32, tilt: (f32, f32), wear: [f32; 3]) -> Option<Vec<u32>> {
+    fn coin_frame(&mut self, id: &'static str, tier: u8, n: u32, age_px: u32, ss: u8, t: f32, yaw: f32, pitch: f32, tilt: (f32, f32), wear: [f32; 3]) -> Option<Vec<u32>> {
         if !gpu::coins_ready() {
             return None;
         }
@@ -1056,6 +1081,7 @@ impl Medals {
                 ring: self.rings.get(&tier).map(|m| &m[..]),
                 back: self.back.as_ref().filter(|b| b.0 == id && b.1 == tier).map(|b| &b.2[..]),
                 age_px,
+                ss,
             }),
         };
         let mut out = Vec::new();
@@ -1063,7 +1089,8 @@ impl Medals {
     }
 
     /// Render everything missing in ONE batch (flat fallback when the GPU path is unavailable or fails).
-    /// Coins (once their programs are ready) are drawn at twice the tile size and halved: clean edges on small tiles.
+    /// Coins (once their programs are ready) are drawn at twice the tile size with 2 samples a pixel and halved
+    /// (8 samples in all): clean edges and smooth ring text on small tiles.
     fn ensure(&mut self, reqs: &[MedalKey]) {
         let coins = gpu::coins_ready();
         if coins != self.coins {
@@ -1108,6 +1135,7 @@ impl Medals {
                         ring: self.rings.get(&t).map(|m| &m[..]),
                         back: None,
                         age_px: 0,
+                        ss: if gpu::is_hardware() { 2 } else { 1 },
                     }),
                 })
                 .collect();
@@ -1439,6 +1467,8 @@ struct Fv {
     frame_n: i32,
     scale: f32,
     cost: f32,
+    /// Anti-aliasing samples per pixel (4, 2 or 1). A slow frame gives these up first, pixels only after.
+    ss: u8,
     /// A slow device (software rendering): no new frame before this (now_s), so input stays quick.
     next_at: f64,
 }
@@ -2483,6 +2513,7 @@ impl Ui {
             frame_n: 0,
             scale: if gpu::is_hardware() { 1.0 } else { 0.5 },
             cost: 5.0,
+            ss: if gpu::is_hardware() { 4 } else { 1 },
             next_at: 0.0,
         });
         self.hover = None;
@@ -2505,14 +2536,17 @@ impl Ui {
     }
 
     /// Render the live coin for its pose and time. One coin, the one on screen: nothing while the window is minimised.
-    /// Frame rate first: when a frame costs more than ~12 ms it is drawn with fewer pixels (down to half, scaled up on
-    /// screen), and back up when there is room; the dust keeps the full size (drawn once, see gpu::Coin::age_px).
+    /// Every frame is anti-aliased in the shader (4 samples a pixel). Frame rate first: when a frame costs more than
+    /// ~12 ms it drops to 2 samples, then 1, and only then is drawn with fewer pixels (down to half, scaled up on screen);
+    /// back up the same way when there is room. The dust keeps the full size (drawn once, see gpu::Coin::age_px).
+    /// Reduced motion draws one still, always at 4 samples.
     fn fv_render_coin(&mut self) {
         let Some(fv) = self.fv.as_ref() else { return };
         if unsafe { IsIconic(self.hwnd) } != 0 {
             return;
         }
         let (id, reduced, t0, scale, grab, last_n) = (fv.ids[fv.i], fv.reduced, fv.t0, fv.scale, fv.grab.is_some(), fv.frame_n);
+        let ss = if reduced && gpu::is_hardware() { 4 } else { fv.ss };
         let (yaw0, pitch0, flip) = (fv.yaw, fv.pitch, fv.flip);
         let tier = self.fv_tier();
         let s = self.fv_geom(tier).stage.w() as u32;
@@ -2533,7 +2567,7 @@ impl Ui {
         }
         let n = ((s as f32 * scale).round() as u32).max(64);
         let c0 = std::time::Instant::now();
-        let frame = self.medals.coin_frame(id, tier, n, s, t, yaw, pitch, (0.0, 0.0), wear);
+        let frame = self.medals.coin_frame(id, tier, n, s, ss, t, yaw, pitch, (0.0, 0.0), wear);
         let ms = c0.elapsed().as_secs_f32() * 1000.0;
         let Some(fv) = self.fv.as_mut() else { return };
         match frame {
@@ -2550,12 +2584,18 @@ impl Ui {
         }
         if last_n == n as i32 && !reduced {
             fv.cost = fv.cost * 0.8 + ms * 0.2;
-            if fv.cost > 12.0 && fv.scale > 0.5 {
+            if fv.cost > 12.0 && fv.ss > 1 {
+                fv.ss /= 2; // samples go first: half the cost, the pixels stay
+                fv.cost = 8.0;
+            } else if fv.cost > 12.0 && fv.scale > 0.5 {
                 fv.scale = (fv.scale - 0.1).max(0.5);
                 fv.cost = 8.0;
             } else if fv.cost < 5.0 && fv.scale < 1.0 {
                 fv.scale = (fv.scale + 0.05).min(1.0);
                 fv.cost = 5.0;
+            } else if fv.cost < 4.5 && fv.ss < 4 {
+                fv.ss *= 2; // twice the samples: about twice the cost, still under the limit
+                fv.cost = 8.0;
             }
             // already at half the pixels and still slow: leave the UI thread as much time again before the next one
             fv.next_at = if fv.scale <= 0.5 && fv.cost > 14.0 { now_s() + fv.cost as f64 / 1000.0 } else { 0.0 };
