@@ -366,6 +366,9 @@ pub struct App {
     alerts: AlertState,
     /// Achievements observer (fed from the sample tick and existing events).
     pub ach: crate::achievements::observer::Observer,
+    /// Insights (incident cards, sleep verdict, held back, before/after, ghost memory),
+    /// fed from the same sample tick and power/event-log messages.
+    pub ins: crate::insights::Insights,
     /// Set by events: re-read taskbar geometry on the next refresh.
     need_locate: bool,
     /// Set by events: re-evaluate full-screen state and z-order.
@@ -438,6 +441,7 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         report::register(hinst);
         crate::settings_ui::register(hinst);
         crate::achievements::ui::register(hinst);
+        crate::insights::ui::register(hinst);
         // Compile the medal shaders in the background a little after start-up (seconds on the first run after an
         // update, then from the disk cache), so opening Achievements never freezes the window.
         let _ = std::thread::Builder::new().name("ach-gpu-warm".into()).spawn(|| {
@@ -506,6 +510,7 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
             icons: None,
             alerts: AlertState::default(),
             ach: crate::achievements::observer::Observer::new(),
+            ins: crate::insights::Insights::new(),
             upd: std::ptr::null_mut(),
             upd_text: String::new(),
             upd_pct: None,
@@ -569,8 +574,11 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         // Slow down when the display is off (usage stays exact: counters are cumulative).
         RegisterPowerSettingNotification(hwnd as HANDLE, &GUID_CONSOLE_DISPLAY_STATE, DEVICE_NOTIFY_WINDOW_HANDLE);
 
+        crate::insights::register_power(hwnd as isize);
+
         let a = app()?;
         a.hook = hook;
+        a.ins.set_enabled(a.m.s.insights, hwnd as isize);
         a.sample();
         a.update_timer();
         a.refresh(true);
@@ -737,7 +745,8 @@ impl App {
             // and counters aren't attached/detached on every hover.
             gpu: sh(Metric::Gpu) || sh(Metric::Vram) || sh(Metric::GpuTemp) || self.detail_warm(),
             disk: sh(Metric::DiskRead) || sh(Metric::DiskWrite) || sh(Metric::DiskActive) || self.detail_warm(),
-            procs: sh(Metric::TopProc) || self.detail_warm(),
+            // Insights asks for process lists only while an incident or awake burst needs a culprit.
+            procs: sh(Metric::TopProc) || self.detail_warm() || self.ins.wants_procs(),
         }
     }
 
@@ -798,11 +807,45 @@ impl App {
             self.update_tip();
         }
         self.check_alerts();
+        self.insights_sample(opts.procs);
         if self.m.s.achievements {
             self.ach_sample(opts.gpu);
         } else {
             self.ach.pause();
         }
+    }
+
+    /// Feed Insights from the sample just taken (no extra timers).
+    fn insights_sample(&mut self, procs_sampled: bool) {
+        if !self.ins.enabled() {
+            return;
+        }
+        let interval_ms = if self.display_on { self.m.s.interval_ms } else { self.m.s.interval_ms.max(5000) };
+        let ctx = crate::insights::Ctx {
+            now_ms: crate::insights::unix_ms(),
+            snap: &self.m.snap,
+            display_on: self.display_on,
+            input_idle_ms: crate::insights::input_idle_ms(),
+            interval_ms,
+            procs_sampled,
+        };
+        let notes = self.ins.on_sample(&ctx);
+        self.insight_notices(notes);
+        crate::insights::ui::refresh();
+    }
+
+    /// Show Insights notices as tray notifications (when the user wants them).
+    pub fn insight_notices(&mut self, notes: Vec<crate::insights::Notice>) {
+        for n in notes {
+            crate::util::diag(&format!("insight: {} \u{2014} {}", n.title, n.text));
+            if self.m.s.insight_toasts {
+                self.tray.balloon(&n.title, &n.text);
+            }
+        }
+    }
+
+    pub fn open_insights(&mut self) {
+        crate::insights::ui::open(self);
     }
 
     /// Feed the achievements observer from the sample just taken (no extra timers).
@@ -1027,6 +1070,8 @@ impl App {
         self.need_locate = true;
         self.m.dark = effective_dark(self.m.s.theme);
         crate::achievements::ui::set_dark(self.m.dark);
+        crate::insights::ui::set_dark(self.m.dark);
+        self.ins.set_enabled(self.m.s.insights, self.hwnd as isize);
         if !self.m.s.achievements {
             crate::achievements::ui::close_all();
         }
@@ -1482,6 +1527,7 @@ impl App {
         self.shut_down = true;
         self.m.usage.save();
         self.ach.flush();
+        self.ins.flush();
         self.tray.remove();
         unsafe {
             if !self.hook.is_null() {
@@ -1626,6 +1672,10 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
                 a.open_achievements();
                 return 0;
             }
+            if w == 3 {
+                a.open_insights();
+                return 0;
+            }
             if !a.m.s.visible {
                 a.m.s.visible = true;
                 a.save_settings();
@@ -1716,6 +1766,7 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             // Theme switch, taskbar moved/resized (work area), auto-hide toggled…
             a.m.dark = effective_dark(a.m.s.theme);
             crate::achievements::ui::set_dark(a.m.dark);
+            crate::insights::ui::set_dark(a.m.dark);
             crate::settings_ui::apply_menu_theme(a.m.s.theme, hwnd);
             a.update_timer();
             a.need_locate = true;
@@ -1723,13 +1774,24 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             0
         }
         WM_POWERBROADCAST => {
+            use crate::insights::Power;
+            let now_ms = crate::insights::unix_ms();
             match w as u32 {
                 PBT_APMSUSPEND => {
                     a.m.usage.save();
                     a.ach.flush();
+                    let n = a.ins.on_power(Power::Suspend, now_ms);
+                    a.insight_notices(n);
                 }
                 PBT_POWERSETTINGCHANGE => {
                     let p = l as *const POWERBROADCAST_SETTING;
+                    if !p.is_null() && (*p).DataLength >= 4 {
+                        let data = u32::from_le_bytes([(*p).Data[0], *(*p).Data.as_ptr().add(1), *(*p).Data.as_ptr().add(2), *(*p).Data.as_ptr().add(3)]);
+                        if let Some(ev) = crate::insights::power_from_setting(&(*p).PowerSetting, data) {
+                            let n = a.ins.on_power(ev, now_ms);
+                            a.insight_notices(n);
+                        }
+                    }
                     if !p.is_null() && guid_eq(&(*p).PowerSetting, &GUID_CONSOLE_DISPLAY_STATE) {
                         let on = (*p).Data[0] != 0;
                         if on != a.display_on {
@@ -1741,15 +1803,33 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
                 }
                 PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND => {
                     a.need_locate = true;
+                    // Both messages arrive after a real resume; Insights de-duplicates.
+                    let n = a.ins.on_power(Power::Resume, now_ms);
+                    a.insight_notices(n);
                     a.refresh(true)
                 }
                 _ => {}
             }
             1
         }
+        crate::insights::WM_APP_INSIGHT_EVENT => {
+            if l != 0 {
+                // SAFETY: posted by insights::events with Box::into_raw; we take ownership once.
+                let e = Box::from_raw(l as *mut crate::insights::events::SysEvent);
+                let n = a.ins.on_event(&e, crate::insights::unix_ms());
+                a.insight_notices(n);
+            }
+            0
+        }
+        crate::insights::WM_APP_POWER_MODE => {
+            let n = a.ins.on_power(crate::insights::Power::Mode(w as i32), crate::insights::unix_ms());
+            a.insight_notices(n);
+            0
+        }
         WM_QUERYENDSESSION => {
             a.m.usage.save();
             a.ach.flush();
+            a.ins.flush();
             1
         }
         WM_ENDSESSION => {

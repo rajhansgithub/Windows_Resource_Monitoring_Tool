@@ -157,6 +157,12 @@ pub struct Settings {
     pub windows_accent: bool,
     /// Track achievements (observer in `achievements::observer`).
     pub achievements: bool,
+    /// Insights: incident cards, sleep verdict, held back, before/after, ghost memory.
+    pub insights: bool,
+    /// Tray notifications from Insights (sleep verdict on wake, big incidents).
+    pub insight_toasts: bool,
+    /// Bag Guard: hibernate when the lid is shut on battery and the PC keeps draining fast.
+    pub bag_guard: bool,
     /// Alerts (tray notifications). 0 disables a rule.
     pub alerts: bool,
     pub alert_cpu_pct: f32,
@@ -212,6 +218,9 @@ impl Default for Settings {
             colors: Vec::new(),
             windows_accent: false,
             achievements: true,
+            insights: true,
+            insight_toasts: true,
+            bag_guard: false,
             alerts: true,
             alert_cpu_pct: 95.0,
             alert_ram_pct: 90.0,
@@ -384,6 +393,9 @@ impl Settings {
                 "windows_accent" => self.windows_accent = parse_bool(v).unwrap_or(self.windows_accent),
                 "alerts" => self.alerts = parse_bool(v).unwrap_or(self.alerts),
                 "achievements" => self.achievements = parse_bool(v).unwrap_or(self.achievements),
+                "insights" => self.insights = parse_bool(v).unwrap_or(self.insights),
+                "insight_toasts" => self.insight_toasts = parse_bool(v).unwrap_or(self.insight_toasts),
+                "bag_guard" => self.bag_guard = parse_bool(v).unwrap_or(self.bag_guard),
                 "alert_cpu_pct" => self.alert_cpu_pct = v.parse().unwrap_or(self.alert_cpu_pct),
                 "alert_ram_pct" => self.alert_ram_pct = v.parse().unwrap_or(self.alert_ram_pct),
                 "alert_secs" => self.alert_secs = v.parse().map(|x: u32| x.clamp(5, 3600)).unwrap_or(self.alert_secs),
@@ -549,7 +561,9 @@ impl Settings {
         o.push_str(&format!(
             "\n# Alerts (tray notifications). 0 turns a rule off.\nalerts = {}\nalert_cpu_pct = {}\nalert_ram_pct = {}\n\
              # seconds a CPU/RAM level must last\nalert_secs = {}\nalert_disk_free_pct = {}\nalert_battery_pct = {}\nalert_cap = {}\n\n\
-             # 1 = keep the achievements (counts real use only)\nachievements = {}\n\n",
+             # 1 = keep the achievements (counts real use only)\nachievements = {}\n\n\
+             # Insights: incident cards, sleep verdict, held back, before/after, ghost memory\n\
+             insights = {}\ninsight_toasts = {}\n# 1 = hibernate a lid-shut laptop that keeps draining on battery\nbag_guard = {}\n\n",
             b(self.alerts),
             self.alert_cpu_pct,
             self.alert_ram_pct,
@@ -557,7 +571,10 @@ impl Settings {
             self.alert_disk_free_pct,
             self.alert_battery_pct,
             b(self.alert_cap),
-            b(self.achievements)
+            b(self.achievements),
+            b(self.insights),
+            b(self.insight_toasts),
+            b(self.bag_guard)
         ));
         for (k, v) in &self.stacked_on {
             o.push_str(&format!("stacked.{} = {}\n", k, b(*v)));
