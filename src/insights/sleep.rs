@@ -486,6 +486,11 @@ fn read_battery(fallback: Option<Battery>) -> BatRead {
     BatRead { present: true, on_ac: st.AcOnLine != 0, mwh, max_mwh, pct }
 }
 
+/// Test stand-in: reports failure, touches nothing.
+fn no_hibernate() -> Option<Receiver<bool>> {
+    None
+}
+
 /// Start hibernation on a short-lived thread. The receiver gets true when it worked.
 fn hibernate_async() -> Option<Receiver<bool>> {
     let (tx, rx) = mpsc::channel();
@@ -582,7 +587,8 @@ impl Sleep {
             cores: std::thread::available_parallelism().map_or(1, |n| n.get()) as f32,
             dirty: false,
             reader: read_battery,
-            hibernate: hibernate_async,
+            // Unit tests must never hibernate the machine running them.
+            hibernate: if cfg!(test) { no_hibernate } else { hibernate_async },
         }
     }
 
