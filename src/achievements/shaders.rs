@@ -967,41 +967,11 @@ float3 ageOn(float3 col, float2 q, bool fr, float rec, float flt){
   return ageApply(col,1.,ageHaze(q,rec,flt),ageL(q,fr));
 }
 
-float4 main(float4 sv : SV_Position) : SV_Target {
-  gFrag = float2(sv.x - uOff.x, uRes.y - (sv.y - uOff.y));
-  float S=min(uRes.x,uRes.y);
-  { float a=.12*sin(uTime*.21); gER=float2(cos(a),sin(a)); }
-#ifdef LAYER
-  // the age layer L of one face, seen straight on (front: uLayer 1, back: 2), q in [-1, 1] across the item
-  {
-    float2 q=(gFrag-.5*uRes)/(.5*S);
-    float aa=2./S;
-    bool fr=uLayer<1.5;
-    float3 ro=fr?float3(q,1.):float3(-q.x,q.y,-1.), rd=float3(0.,0.,fr?-1.:1.);
-    float t=0., mn, tm;
-    bool hit=march(ro,rd,t,2.,.0005,mn,tm);
-    float rec=0., flt=1.;
-#if STONE == 1 || STONE == 2
-    float3 og, gnIn; float gIn, gOut;
-    bool st=fr && stoneHit(ro,rd,t,hit,og,gIn,gnIn,gOut);
-#else
-    bool st=false;
-#endif
-    if(!st){
-      if(!hit) return float4(0.,0.,0.,0.);
-      float3 p=ro+rd*t;
-      float id=map(p).y; float3 n=nrm(p);
-      float r=length(q);
-      float paint=(fr && n.z>.3)?paintF(q,r,id,aa,0.):0.;
-      spot(id,paint,r,p,n,rec,flt);
-    }
-    float3 h; float4 L;
-    if(!ageLayers(q,rec,flt,aa,h,L)) return float4(0.,0.,0.,0.);
-    return L;
-  }
-#else
+#ifndef LAYER
+// one sample of the coin at f (px, y up inside the item), premultiplied; main averages uP4 of them per pixel
+float4 coinPx(float2 f, float S){
   float ext=kR0.w;
-  float2 pp=(gFrag-.5*uRes)/(.5*S)*ext;
+  float2 pp=(f-.5*uRes)/(.5*S)*ext;
   float3 ow=float3(0.,0.,6.), dw=normalize(float3(pp,0.)-ow); float pxw=2.*ext/S;
   float3 ro=toC(ow), rd=toC(dw);
   float b=dot(ro,rd), c=dot(ro,ro)-1.44, h=b*b-c;
@@ -1067,13 +1037,16 @@ float4 main(float4 sv : SV_Position) : SV_Target {
   }
 #endif
   float lodR=max(log2(1024.*pxw/2.),0.);
-  if(!fr && face && kR2.w>0. && r<.9){               // the name on the reverse
-    float lod=max(log2(1024.*pxw/(2.*.92)),0.);
-    float dd=1.4*pxw;
-    float m=texM(uBack,q,.92,lod);
-    float gx=texM(uBack,q+float2(dd,0.),.92,lod)-texM(uBack,q-float2(dd,0.),.92,lod), gy=texM(uBack,q+float2(0.,dd),.92,lod)-texM(uBack,q-float2(0.,dd),.92,lod);
-    float w=saturate(length(float2(gx,gy))*1.6);
-    nl=normalize(nl+float3(-gx,gy,0.)*2.2*w); matte=max(matte,smoothstep(.15,.85,m)*(1.-w));
+  float fill=0.;
+  if(!fr && face && kR2.w>0. && r<.9){               // the name on the reverse: cut in and filled with dark enamel (reads
+    const float kB=.92, tx=2.*kB/1024.;              // in any light, at any size), a thin polished bevel round each letter
+    float lod=max(log2(pxw/tx),0.);
+    float dd=max(1.5*tx,.75*pxw);
+    float m=texM(uBack,q,kB,lod);
+    float gx=texM(uBack,q+float2(dd,0.),kB,lod)-texM(uBack,q-float2(dd,0.),kB,lod), gy=texM(uBack,q+float2(0.,dd),kB,lod)-texM(uBack,q-float2(0.,dd),kB,lod);
+    float w=saturate(length(float2(gx,gy))*1.2)*(1.-smoothstep(.5,.9,m));
+    nl=normalize(nl+float3(-gx,gy,0.)*1.6*w);
+    fill=smoothstep(.4,.8,m);
   }
   if(fr && n.z>.3) paint=max(paint,paintF(q,r,id,aa,lodR));
   float trace=0.;
@@ -1111,6 +1084,7 @@ float4 main(float4 sv : SV_Position) : SV_Target {
   if(trace>0.){ float3 G=kM2.xyz+(1.-kM2.xyz)*fz; col=lerp(col,G*envS(R,tt),trace); }
   if(matte>0.){ float grain=.85+.3*hash(floor(gFrag)); col=lerp(col,M*(.10+.10*envS(float3(-.35,.4,.85),tt))*grain,matte); }
   if(paint>0.) col=lerp(col,v3(.018),paint*.94);
+  if(fill>0.) col=lerp(col,v3(.016)+.04*envS(R,tt),fill*.95);   // enamel: near black with a faint gloss
   if(paint<0.){ float3 G=M+(1.-M)*fz; col=lerp(col,G*envS(R,tt),-paint); }
   col=aces(col*1.1);
   { float rec, flt; spot(id,paint,r,p,n,rec,flt); col=ageOn(col,q,fr,rec,flt); }   // age: dust in the barrel, the scale and the grooves
@@ -1122,6 +1096,53 @@ float4 main(float4 sv : SV_Position) : SV_Target {
   }
 #endif
   return o4;
+}
+#endif
+
+float4 main(float4 sv : SV_Position) : SV_Target {
+  gFrag = float2(sv.x - uOff.x, uRes.y - (sv.y - uOff.y));
+  float S=min(uRes.x,uRes.y);
+  { float a=.12*sin(uTime*.21); gER=float2(cos(a),sin(a)); }
+#ifdef LAYER
+  // the age layer L of one face, seen straight on (front: uLayer 1, back: 2), q in [-1, 1] across the item
+  {
+    float2 q=(gFrag-.5*uRes)/(.5*S);
+    float aa=2./S;
+    bool fr=uLayer<1.5;
+    float3 ro=fr?float3(q,1.):float3(-q.x,q.y,-1.), rd=float3(0.,0.,fr?-1.:1.);
+    float t=0., mn, tm;
+    bool hit=march(ro,rd,t,2.,.0005,mn,tm);
+    float rec=0., flt=1.;
+#if STONE == 1 || STONE == 2
+    float3 og, gnIn; float gIn, gOut;
+    bool st=fr && stoneHit(ro,rd,t,hit,og,gIn,gnIn,gOut);
+#else
+    bool st=false;
+#endif
+    if(!st){
+      if(!hit) return float4(0.,0.,0.,0.);
+      float3 p=ro+rd*t;
+      float id=map(p).y; float3 n=nrm(p);
+      float r=length(q);
+      float paint=(fr && n.z>.3)?paintF(q,r,id,aa,0.):0.;
+      spot(id,paint,r,p,n,rec,flt);
+    }
+    float3 h; float4 L;
+    if(!ageLayers(q,rec,flt,aa,h,L)) return float4(0.,0.,0.,0.);
+    return L;
+  }
+#else
+  // anti-aliasing: uP4 samples per pixel (1, 2 or 4 on a rotated grid), averaged premultiplied. The edges, the
+  // engraved letters, the reeding and the sharp studio highlights all come out smooth instead of stair-stepped.
+  int ns=uP4>3.5?4:(uP4>1.5?2:1);
+  float4 acc=float4(0.,0.,0.,0.);
+  [loop] for(int k=0;k<ns;k++){
+    float2 o=float2(0.,0.);
+    if(ns==4) o=k==0?float2(.125,.375):k==1?float2(-.375,.125):k==2?float2(.375,-.125):float2(-.125,-.375);
+    else if(ns==2) o=k==0?float2(.25,.25):float2(-.25,-.25);
+    acc+=coinPx(gFrag+o,S);
+  }
+  return acc/float(ns);
 #endif
 }
 "#;

@@ -104,6 +104,8 @@ pub struct Coin<'a> {
     /// The size (px) the dust and cobweb are drawn for; 0 = `size_px`. The full view keeps it while it drops pixels to
     /// hold the frame rate, so the age layer is not drawn again.
     pub age_px: u32,
+    /// Anti-aliasing: samples per pixel, 1, 2 or 4 (rotated grid), averaged in the shader (`uP4`).
+    pub ss: u8,
 }
 
 /// Side of the coin's ring and back text masks.
@@ -855,7 +857,7 @@ impl Gpu {
                         icon_mask: None,
                         detail_mask: None,
                         layer,
-                        coin: Some(Coin { yaw: 0.0, pitch: 0.0, ext: 1.0, ring: p.coin.and_then(|c| c.ring), back: None, age_px: 0 }),
+                        coin: Some(Coin { yaw: 0.0, pitch: 0.0, ext: 1.0, ring: p.coin.and_then(|c| c.ring), back: None, age_px: 0, ss: 1 }),
                     });
                 }
             }
@@ -993,6 +995,7 @@ impl Gpu {
                 c[12] = p.tilt.0;
                 c[13] = p.tilt.1;
                 c[14] = if icons[i].is_some() { 1.0 } else { 0.0 };
+                c[15] = p.coin.as_ref().map_or(1.0, |cn| cn.ss.clamp(1, 4) as f32);
                 c[16] = p.wear[0];
                 c[17] = p.wear[1];
                 c[18] = p.wear[2];
@@ -1318,7 +1321,7 @@ mod tests {
         }
         assert!(gpu.ps_coin.iter().all(|p| p.is_some()));
         let (ic, ring) = (icon(), ring_mask());
-        let coin = |m: Material, t: f32, yaw: f32, pitch: f32, wear: [f32; 3], px: u32| Params {
+        let coin = |m: Material, t: f32, yaw: f32, pitch: f32, wear: [f32; 3], px: u32, ss: u8| Params {
             material: m,
             size_px: px,
             time_s: t,
@@ -1328,12 +1331,12 @@ mod tests {
             icon_mask: Some(&ic),
             detail_mask: None,
             layer: 0,
-            coin: Some(Coin { yaw, pitch, ext: 1.24, ring: Some(&ring), back: Some(&ring), age_px: 0 }),
+            coin: Some(Coin { yaw, pitch, ext: 1.24, ring: Some(&ring), back: Some(&ring), age_px: 0, ss }),
         };
         let old = [0.85, 0.4, 1.0];
-        let a = render(&mut gpu, &ALL.map(|m| coin(m, 9.0, 28.0, -16.0, [0.0; 3], PX)));
-        let b = render(&mut gpu, &ALL.map(|m| coin(m, 2.5, 160.0, 25.0, [0.0; 3], PX)));
-        let c = render(&mut gpu, &ALL.map(|m| coin(m, 9.0, 28.0, -16.0, old, PX)));
+        let a = render(&mut gpu, &ALL.map(|m| coin(m, 9.0, 28.0, -16.0, [0.0; 3], PX, 4)));
+        let b = render(&mut gpu, &ALL.map(|m| coin(m, 2.5, 160.0, 25.0, [0.0; 3], PX, 4)));
+        let c = render(&mut gpu, &ALL.map(|m| coin(m, 9.0, 28.0, -16.0, old, PX, 4)));
         for (i, m) in ALL.iter().enumerate() {
             let (cov, sd, mean) = stats(&a[i]);
             let (cov2, sd2, mean2) = stats(&c[i]);
@@ -1357,12 +1360,14 @@ mod tests {
         }
         // live cost of the full view (one coin, 512 px, a fresh frame each time)
         for m in [Material::Gold, Material::Diamond, Material::Emulsion] {
-            let _ = render(&mut gpu, &[coin(m, 1.0, 20.0, -10.0, old, 512)]);
-            let t0 = std::time::Instant::now();
-            for k in 0..8 {
-                let _ = render(&mut gpu, &[coin(m, 1.0 + k as f32 * 0.016, 20.0 + k as f32, -10.0, old, 512)]);
+            for ss in [1u8, 2, 4] {
+                let _ = render(&mut gpu, &[coin(m, 1.0, 20.0, -10.0, old, 512, ss)]);
+                let t0 = std::time::Instant::now();
+                for k in 0..8 {
+                    let _ = render(&mut gpu, &[coin(m, 1.0 + k as f32 * 0.016, 20.0 + k as f32, -10.0, old, 512, ss)]);
+                }
+                println!("coin {m:?} 512 px live frame, {ss} sample(s): {:.1} ms ({})", t0.elapsed().as_secs_f32() * 1000.0 / 8.0, if gpu.hardware { "hardware" } else { "WARP" });
             }
-            println!("coin {m:?} 512 px live frame: {:.1} ms ({})", t0.elapsed().as_secs_f32() * 1000.0 / 8.0, if gpu.hardware { "hardware" } else { "WARP" });
         }
         let (w, h) = (PX * ALL.len() as u32, PX * 3);
         let mut img = vec![0u8; (w * h * 3) as usize];
