@@ -16,6 +16,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW;
 #[derive(Clone, Debug, Default)]
 pub struct SysEvent {
     /// "System" or "Application".
+    #[allow(dead_code)] // kept for diagnostics
     pub channel: String,
     /// Provider name, e.g. "Display", "Microsoft-Windows-WHEA-Logger".
     pub provider: String,

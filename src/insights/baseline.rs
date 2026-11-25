@@ -10,10 +10,6 @@
 //! * `diff_at` compares the median of daily medians before and after a marker and reports
 //!   only changes big enough to matter.
 
-// The panel text is reached only through `Insights::panels()`, which the Insights window
-// calls; until that window is wired in, rustc sees it as unused. Remove once it is.
-#![allow(dead_code)]
-
 use super::events::SysEvent;
 use super::store::obj;
 use super::time;
