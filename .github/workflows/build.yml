@@ -98,8 +98,6 @@ jobs:
             $g.CopyFromScreen($r.L, $r.T, 0, 0, (New-Object System.Drawing.Size $w, $hh))
             $bmp.Save("target/insights-shots/insights.png", [System.Drawing.Imaging.ImageFormat]::Png)
           }
-          # TEMP: print the screenshot into the log for a cloud review (artifact downloads are blocked there).
-          if (Test-Path target/insights-shots/insights.png) { $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes("target/insights-shots/insights.png")); for ($i = 0; $i -lt $b64.Length; $i += 4000) { Write-Output ("B64:" + $b64.Substring($i, [Math]::Min(4000, $b64.Length - $i))) } }
           $log = "$env:LOCALAPPDATA/ResourceMonitor/diagnostics.log"
           if (Test-Path $log) { Get-Content $log -Tail 30 }
           if ($p.HasExited) { Write-Error "app exited early (code $($p.ExitCode))"; exit 1 }
