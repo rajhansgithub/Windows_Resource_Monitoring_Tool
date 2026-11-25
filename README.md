@@ -63,7 +63,7 @@ Pick any combination in **Settings → Metrics**. Default: CPU, RAM, GPU, ▲, �
 
 ## Updates
 
-The app updates itself: once at startup it asks GitHub for the latest release, downloads the new `ResourceMonitor.exe`, checks its SHA-256 against the digest GitHub publishes, swaps it in and restarts (you get a “Updated to vX” notification). Nothing runs on a timer. Settings → About → *Check for updates* any time, or turn off *Update automatically*. If the app lives in a folder it can't write to (e.g. Program Files), it tells you and opens the download page instead.
+The app updates itself: once at startup it asks GitHub for the latest release, downloads the new `ResourceMonitor.exe`, checks its SHA-256 against the digest GitHub publishes, swaps it in and restarts (you get a “Updated to vX” notification). Nothing runs on a timer. Right-click → *Check for updates* (or Settings → About) any time, or turn off *Update automatically*. If the app lives in a folder it can't write to (e.g. Program Files), it tells you and opens the download page instead.
 
 ## Install
 
@@ -76,7 +76,7 @@ Upgrading from the old .NET version: settings and data usage history are importe
 
 ## Settings
 
-Right-click → **Settings…** opens a native settings window (General, Metrics with drag-free reordering, Colours with the Windows colour picker, Alerts, Data, About). The right-click menu stays short: the *Resource Monitor by Emulsion Labs* header opens the website, then Show widget, Settings, Achievements, Task Manager and Exit. Everything is also in `%LOCALAPPDATA%\ResourceMonitor\settings.ini` (Settings → About → *Settings file*); edits apply within a few seconds.
+Right-click → **Settings…** opens a native settings window (General, Metrics with drag-free reordering, Colours with the Windows colour picker, Alerts, Data, About). The right-click menu stays short: the *Resource Monitor by Emulsion Labs* header opens the website, then Show widget, Settings, Achievements, Task Manager, Check for updates and Exit. Everything is also in `%LOCALAPPDATA%\ResourceMonitor\settings.ini` (Settings → About → *Settings file*); edits apply within a few seconds.
 
 | Key | Meaning |
 |---|---|
