@@ -745,7 +745,8 @@ impl App {
             // Details stay "warm" a while after hover so the panel has data instantly
             // and counters aren't attached/detached on every hover.
             gpu: sh(Metric::Gpu) || sh(Metric::Vram) || sh(Metric::GpuTemp) || self.detail_warm(),
-            disk: sh(Metric::DiskRead) || sh(Metric::DiskWrite) || sh(Metric::DiskActive) || self.detail_warm(),
+            // Disk counters are cheap; Insights needs them for disk incidents and the idle baseline.
+            disk: sh(Metric::DiskRead) || sh(Metric::DiskWrite) || sh(Metric::DiskActive) || self.detail_warm() || self.ins.enabled(),
             // Insights asks for process lists only while an incident or awake burst needs a culprit.
             procs: sh(Metric::TopProc) || self.detail_warm() || self.ins.wants_procs(),
         }
