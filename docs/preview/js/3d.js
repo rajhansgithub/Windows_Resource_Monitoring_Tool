@@ -719,13 +719,26 @@ void main(){
     else { nl=normalize(nl+vec3(gx,gy,0.)*2.2*w); matte=smoothstep(.15,.85,m)*(1.-w); }
   }
   // the name on the reverse
-  if(!fr && face && uBackOn>0. && r<.9){
+  float fill=0.;
+#ifdef OLDTEXT
+  if(!fr && face && uBackOn>0. && r<.9){             // before v2.14.1: walls sized by screen pixels (thin letters = outlines)
     float dd=1.4*pxw;
     float m=tex(uBack,q,.92);
     float gx=tex(uBack,q+vec2(dd,0.),.92)-tex(uBack,q-vec2(dd,0.),.92), gy=tex(uBack,q+vec2(0.,dd),.92)-tex(uBack,q-vec2(0.,dd),.92);
     float w=clamp(length(vec2(gx,gy))*1.6,0.,1.);
     nl=normalize(nl+vec3(-gx,gy,0.)*2.2*w); matte=max(matte,smoothstep(.15,.85,m)*(1.-w));
   }
+#else
+  if(!fr && face && uBackOn>0. && r<.9){             // cut in and filled with dark enamel, a thin polished bevel (app: shaders.rs)
+    float tx=2.*.92/1024.;
+    float dd=max(1.5*tx,.75*pxw);
+    float m=tex(uBack,q,.92);
+    float gx=tex(uBack,q+vec2(dd,0.),.92)-tex(uBack,q-vec2(dd,0.),.92), gy=tex(uBack,q+vec2(0.,dd),.92)-tex(uBack,q-vec2(0.,dd),.92);
+    float w=clamp(length(vec2(gx,gy))*1.2,0.,1.)*(1.-smoothstep(.5,.9,m));
+    nl=normalize(nl+vec3(-gx,gy,0.)*1.6*w);
+    fill=smoothstep(.4,.8,m);
+  }
+#endif
   // paint-filled engraving on the front: the ring text, the dial's scale, the die's traces
   if(fr && n.z>.3){
     if(uRingOn>0.) paint=max(paint,smoothstep(.1,.7,tex(uRing,q,1.)));
@@ -773,6 +786,7 @@ void main(){
   if(trace>0.){ vec3 G=uMetal2+(1.-uMetal2)*fz; col=mix(col,G*envS(R,tt),trace); }
   if(matte>0.){ float grain=.85+.3*hash(floor(gl_FragCoord.xy)); col=mix(col,M*(.10+.10*envS(vec3(-.35,.4,.85),tt))*grain,matte); }
   if(paint>0.) col=mix(col,vec3(.018),paint*.94);
+  if(fill>0.) col=mix(col,vec3(.016)+.04*envS(R,tt),fill*.95);   // enamel: near black with a faint gloss
   if(paint<0.){ vec3 G=M+(1.-M)*fz; col=mix(col,G*envS(R,tt),-paint); }
   col=aces(col*1.1);
 #ifdef AGED
@@ -795,7 +809,7 @@ void main(){
   function variant(k, o, w) {
     const name = k === 'bubble' ? 'bubble' : k === 'medal' ? 'medal' : k === 'coin' ? 'coin' : 'gem';
     let defs = '';
-    if (name === 'coin') { const ww = w || (o && o.wear); defs = `#define uDesign ${(o && o.design) || 0}.\n#define uStone ${(o && o.stone) || 0}.\n` + (ww && (ww[0] > 0 || (ww[2] || 0) > 0) ? '#define AGED\n' : ''); }
+    if (name === 'coin') { const ww = w || (o && o.wear); defs = `#define uDesign ${(o && o.design) || 0}.\n#define uStone ${(o && o.stone) || 0}.\n` + (ww && (ww[0] > 0 || (ww[2] || 0) > 0) ? '#define AGED\n' : '') + (o && o.oldText ? '#define OLDTEXT\n' : ''); }
     else if ((name === 'medal' || name === 'gem') && w && (w[0] > 0 || (w[2] || 0) > 0)) defs = '#define AGED\n';
     return { key: '3d:' + name + (defs ? ':' + defs.replace(/#define |\n/g, ' ').trim() : ''), name, defs };
   }
@@ -911,9 +925,12 @@ void main(){
   function coinTex(o) {
     const g = gl;
     const mk = () => { const c = document.createElement('canvas'); c.width = c.height = 1024; return c; };
-    const font = '"Chakra Petch", "Segoe UI", system-ui, sans-serif';
+    // v2.14.1: Bahnschrift (the app's coin face, Windows 10+), bigger and bold; o.oldText = the look before
+    const old = !!o.oldText;
+    const font = o.font || (old ? '"Chakra Petch", "Segoe UI", system-ui, sans-serif' : 'Bahnschrift, "Barlow Semi Condensed", "Segoe UI", system-ui, sans-serif');
+    const wt = old ? 600 : 700;
     const arc = (x, text, rad, px, bottom) => {   // text along a circle (radius in coin units: 1 = rim), upright to the centre
-      x.font = `600 ${px}px ${font}`;
+      x.font = `${wt} ${px}px ${font}`;
       const R0 = rad * 512, tw = x.measureText(text).width, span = tw / R0;
       let a = bottom ? Math.PI / 2 + span / 2 : -Math.PI / 2 - span / 2;
       for (const ch of text) { const w = x.measureText(ch).width, mid = a + (bottom ? -1 : 1) * w / R0 / 2; x.save(); x.translate(512 + Math.cos(mid) * R0, 512 + Math.sin(mid) * R0); x.rotate(bottom ? mid - Math.PI / 2 : mid + Math.PI / 2); x.fillText(ch, 0, 0); x.restore(); a += (bottom ? -1 : 1) * w / R0; }
@@ -922,10 +939,18 @@ void main(){
     if (!g) return Promise.resolve(out);
     const b = mk(), x = b.getContext('2d');
     x.fillStyle = '#fff'; x.textAlign = 'center'; x.textBaseline = 'middle';
-    x.font = `700 ${o.title && o.title.length > 14 ? 80 : 100}px ${font}`; x.fillText(o.title || '', 512, 472);
-    x.font = `600 52px ${font}`; x.fillText((o.sub || '').toUpperCase(), 512, 592);
-    arc(x, 'RESOURCE MONITOR  ·  UPTIME MEDAL', .82, 46, false);
-    arc(x, 'EMULSION LABS', .82, 40, true);
+    const fit = (t, px, w) => { x.font = `700 ${px}px ${font}`; const m = x.measureText(t).width; if (m > w) x.font = `700 ${Math.floor(px * w / m)}px ${font}`; };
+    if (old) {
+      x.font = `700 ${o.title && o.title.length > 14 ? 80 : 100}px ${font}`; x.fillText(o.title || '', 512, 472);
+      x.font = `600 52px ${font}`; x.fillText((o.sub || '').toUpperCase(), 512, 592);
+      arc(x, 'RESOURCE MONITOR  ·  UPTIME MEDAL', .82, 46, false);
+      arc(x, 'EMULSION LABS', .82, 40, true);
+    } else {
+      fit(o.title || '', o.title && o.title.length > 14 ? 96 : 116, 600); x.fillText(o.title || '', 512, 470);
+      fit((o.sub || '').toUpperCase(), 60, 560); x.fillText((o.sub || '').toUpperCase(), 512, 596);
+      arc(x, 'RESOURCE MONITOR  ·  ACHIEVEMENT MEDAL', .82, 50, false);
+      arc(x, 'EMULSION LABS', .82, 48, true);
+    }
     x.lineWidth = 6; x.strokeStyle = '#fff'; x.beginPath(); x.arc(512, 512, 330, 0, Math.PI * 2); x.stroke();
     out.B = upload(b);
     if (o.ring && o.ring.length) {

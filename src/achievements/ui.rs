@@ -2593,8 +2593,8 @@ impl Ui {
             } else if fv.cost < 5.0 && fv.scale < 1.0 {
                 fv.scale = (fv.scale + 0.05).min(1.0);
                 fv.cost = 5.0;
-            } else if fv.cost < 4.5 && fv.ss < 4 {
-                fv.ss *= 2; // twice the samples: about twice the cost, still under the limit
+            } else if fv.cost < 5.5 && fv.ss < 4 {
+                fv.ss *= 2; // twice the samples: about twice the cost (under 11 ms), still under the limit
                 fv.cost = 8.0;
             }
             // already at half the pixels and still slow: leave the UI thread as much time again before the next one
