@@ -72,6 +72,43 @@ jobs:
           name: medal-shots
           path: target/medal-shots/
           if-no-files-found: warn
+      - name: Run app, screenshot Insights window (demo data)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force target/insights-shots | Out-Null
+          Add-Type @"
+          using System; using System.Runtime.InteropServices;
+          public static class W2 {
+            [StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Rt, B; }
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string c, string t);
+            [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r);
+          }
+          "@
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $env:RESMON_INSIGHTS_DEMO = "1"
+          $p = Start-Process target/release/ResourceMonitor.exe -ArgumentList "--insights" -PassThru
+          Start-Sleep -Seconds 8
+          $h = [W2]::FindWindowW("ResourceMonitor.Insights", [NullString]::Value)
+          if ($h -ne [IntPtr]::Zero) {
+            $r = New-Object W2+R
+            [void][W2]::GetWindowRect($h, [ref]$r)
+            $w = $r.Rt - $r.L; $hh = $r.B - $r.T
+            $bmp = New-Object System.Drawing.Bitmap $w, $hh
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($r.L, $r.T, 0, 0, (New-Object System.Drawing.Size $w, $hh))
+            $bmp.Save("target/insights-shots/insights.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          }
+          $log = "$env:LOCALAPPDATA/ResourceMonitor/diagnostics.log"
+          if (Test-Path $log) { Get-Content $log -Tail 30 }
+          if ($p.HasExited) { Write-Error "app exited early (code $($p.ExitCode))"; exit 1 }
+          Stop-Process -Id $p.Id
+          if ($h -eq [IntPtr]::Zero) { Write-Error "Insights window did not open"; exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: insights-shots
+          path: target/insights-shots/
+          if-no-files-found: warn
       - name: Installer
         shell: pwsh
         run: |
