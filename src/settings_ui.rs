@@ -133,6 +133,13 @@ const ID_UPDATES: i32 = 651;
 const ID_EDITFILE: i32 = 652;
 const ID_DATADIR: i32 = 653;
 
+// Insights page.
+const ID_INSIGHTS: i32 = 900;
+const ID_INS_TOASTS: i32 = 901;
+const ID_BAGGUARD: i32 = 902;
+const ID_INS_OPEN: i32 = 903;
+const ID_INS_CLEAR: i32 = 904;
+
 // Per-display toggles, + index in `Ui::displays`.
 const ID_DSHOW: i32 = 800;
 const ID_DSTACK: i32 = 820;
@@ -143,9 +150,11 @@ const ID_MTOG: i32 = 700;
 const ID_MUP: i32 = 720;
 const ID_MDN: i32 = 740;
 
-const PAGES: [&str; 6] = ["General", "Metrics", "Colours", "Alerts", "Data", "About"];
+const PAGES: [&str; 7] = ["General", "Metrics", "Colours", "Alerts", "Data", "About", "Insights"];
 /// Segoe Fluent Icons / Segoe MDL2 Assets glyphs of the navigation items.
-const NAV_GLYPHS: [char; 6] = ['\u{E713}', '\u{E9D9}', '\u{E790}', '\u{EA8F}', '\u{E8F1}', '\u{E946}'];
+const NAV_GLYPHS: [char; 7] = ['\u{E713}', '\u{E9D9}', '\u{E790}', '\u{EA8F}', '\u{E8F1}', '\u{E946}', '\u{E82F}'];
+/// Index of the Insights page in `PAGES` (for `open_page`).
+pub const PAGE_INSIGHTS: usize = 6;
 const G_CHEVRON_DOWN: char = '\u{E70D}';
 const G_CHEVRON_UP: char = '\u{E70E}';
 const G_MINUS: char = '\u{E738}';
@@ -329,7 +338,7 @@ impl Pal {
 
 /// The Windows accent colour (lightened a little on dark backgrounds, as the
 /// system's own controls do), with the stock blues as a fallback.
-fn accent_color(dark: bool) -> Rgba {
+pub(crate) fn accent_color(dark: bool) -> Rgba {
     let (mut c, mut opaque) = (0u32, 0i32);
     if unsafe { DwmGetColorizationColor(&mut c, &mut opaque) } == 0 {
         let a = hx(c & 0xFF_FFFF);
@@ -460,7 +469,7 @@ struct Fonts {
 }
 
 /// `want` if the system has it, else `fallback`.
-fn pick_face(want: &'static str, fallback: &'static str) -> &'static str {
+pub(crate) fn pick_face(want: &'static str, fallback: &'static str) -> &'static str {
     unsafe {
         let dc = CreateCompatibleDC(std::ptr::null_mut());
         let f = create_font(12, 400, want, true);
@@ -800,6 +809,9 @@ impl Ui {
             ID_ALERTS => d.alerts,
             ID_A_CAP => d.alert_cap,
             ID_WINACCENT => d.windows_accent,
+            ID_INSIGHTS => d.insights,
+            ID_INS_TOASTS => d.insight_toasts,
+            ID_BAGGUARD => d.bag_guard,
             _ if (ID_DSHOW..ID_DSHOW + MAX_DISPLAYS).contains(&id) => {
                 self.displays.get((id - ID_DSHOW) as usize).is_some_and(|(k, _, p)| d.wants_display(k, *p))
             }
@@ -825,6 +837,9 @@ impl Ui {
             ID_ALERTS => &mut d.alerts,
             ID_A_CAP => &mut d.alert_cap,
             ID_WINACCENT => &mut d.windows_accent,
+            ID_INSIGHTS => &mut d.insights,
+            ID_INS_TOASTS => &mut d.insight_toasts,
+            ID_BAGGUARD => &mut d.bag_guard,
             _ => &mut d.show[m?.idx()],
         })
     }
@@ -1236,6 +1251,27 @@ impl Ui {
                     vec![cell(ID_REPORT, Kind::Button("Open data usage report", false), 0)],
                 ),
             ],
+            6 => {
+                let on = d.insights;
+                vec![
+                    toggle_card("Insights", "Explain spikes, sleep, throttling and memory. Nothing leaves this PC", ID_INSIGHTS),
+                    Def::Heading("Notifications"),
+                    gated(toggle_card("Insight notifications", "Sleep verdict on wake, crashes and driver resets", ID_INS_TOASTS), on),
+                    Def::Heading("Sleep"),
+                    gated(toggle_card("Bag Guard", "Hibernate a lid-shut laptop that keeps draining on battery", ID_BAGGUARD), on),
+                    Def::Heading("History"),
+                    card(
+                        "Insights window",
+                        "Incidents, sleep, limits, changes and memory",
+                        vec![cell(ID_INS_OPEN, Kind::Button("Open Insights", false), 0)],
+                    ),
+                    card(
+                        "Clear history",
+                        "Forget every incident, night and daily baseline",
+                        vec![Cell::Ctl { id: ID_INS_CLEAR, kind: Kind::Button("Clear", false), w: BTN_W, enabled: on }],
+                    ),
+                ]
+            }
             _ => vec![
                 Def::Note(concat!("Resource Monitor v", env!("CARGO_PKG_VERSION"), " by Emulsion Labs.")),
                 card("Emulsion Labs", "Visit the website", vec![cell(ID_WEBSITE, Kind::Button("Open website", false), 0)]),
@@ -1933,6 +1969,9 @@ fn merge(dst: &mut Settings, src: &Settings) {
     dst.alert_disk_free_pct = src.alert_disk_free_pct;
     dst.alert_battery_pct = src.alert_battery_pct;
     dst.alert_cap = src.alert_cap;
+    dst.insights = src.insights;
+    dst.insight_toasts = src.insight_toasts;
+    dst.bag_guard = src.bag_guard;
 }
 
 /// Validate, apply to the app, save. Returns false if the app is gone.
@@ -2140,6 +2179,19 @@ fn activate(hwnd: HWND, id: i32) {
                 run(Cmd::EditSettings);
             }
             ID_DATADIR => run(Cmd::DataFolder),
+            ID_INS_OPEN => {
+                // Apply a pending on/off first so the window shows the right state.
+                flush(hwnd);
+                if let Some(a) = app() {
+                    crate::insights::ui::open(a);
+                }
+            }
+            ID_INS_CLEAR => {
+                if let Some(a) = app() {
+                    a.ins.clear();
+                }
+                crate::insights::ui::reload();
+            }
             _ => {}
         },
         Kind::Slider | Kind::Stepper => {}
@@ -2458,7 +2510,7 @@ fn on_repeat(hwnd: HWND) {
 
 /// Windows 11: Mica behind the whole window (frame extended into the client
 /// area, painted with alpha 0). Returns false where that is not available.
-fn enable_mica(hwnd: HWND) -> bool {
+pub(crate) fn enable_mica(hwnd: HWND) -> bool {
     if darkmode::build() < 22000 {
         return false;
     }
@@ -2593,6 +2645,16 @@ pub fn open(a: &mut crate::app::App) {
         fit(hwnd, ui().map_or(96, |u| u.dpi));
         ShowWindow(hwnd, SW_SHOWNORMAL);
         SetForegroundWindow(hwnd);
+    }
+}
+
+/// Open Settings (or bring it to the front) on page `page` (e.g. `PAGE_INSIGHTS`).
+pub fn open_page(a: &mut crate::app::App, page: usize) {
+    open(a);
+    if let Some(u) = ui() {
+        if !u.hwnd.is_null() {
+            u.show_page(page);
+        }
     }
 }
 
