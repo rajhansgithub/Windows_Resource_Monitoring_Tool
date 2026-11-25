@@ -832,7 +832,7 @@ impl App {
         };
         let notes = self.ins.on_sample(&ctx);
         self.insight_notices(notes);
-        crate::insights::ui::refresh();
+        crate::insights::ui::refresh(self);
     }
 
     /// Show Insights notices as tray notifications (when the user wants them).
@@ -1071,9 +1071,10 @@ impl App {
         self.need_locate = true;
         self.m.dark = effective_dark(self.m.s.theme);
         crate::achievements::ui::set_dark(self.m.dark);
-        crate::insights::ui::set_dark(self.m.dark);
         self.ins.set_enabled(self.m.s.insights, self.hwnd as isize);
         self.ins.sleep.bag_guard = self.m.s.bag_guard;
+        // After set_enabled, so an open Insights window shows the new on/off state.
+        crate::insights::ui::set_dark(self.m.dark, self);
         if !self.m.s.achievements {
             crate::achievements::ui::close_all();
         }
@@ -1768,7 +1769,7 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             // Theme switch, taskbar moved/resized (work area), auto-hide toggled…
             a.m.dark = effective_dark(a.m.s.theme);
             crate::achievements::ui::set_dark(a.m.dark);
-            crate::insights::ui::set_dark(a.m.dark);
+            crate::insights::ui::set_dark(a.m.dark, a);
             crate::settings_ui::apply_menu_theme(a.m.s.theme, hwnd);
             a.update_timer();
             a.need_locate = true;

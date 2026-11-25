@@ -32,6 +32,9 @@ const LEAK_MIN_DAYS: f32 = 3.0;
 const LARGE_SHARE: f32 = 0.25;
 /// Below this much trend data we only watch.
 const LEARN_MIN_DAYS: f32 = 1.0;
+/// The slope is fitted over this many most recent days of the boot only, so a leak that
+/// starts after a long flat stretch is not averaged away by the old flat points.
+const FIT_WINDOW_DAYS: f32 = 7.0;
 
 const GB: f64 = 1024.0 * 1024.0 * 1024.0;
 
@@ -143,11 +146,25 @@ impl Trend {
     }
 
     /// Days covered by the points.
+    #[cfg(test)]
     pub fn span_days(&self) -> f32 {
-        match (self.pts.first(), self.pts.last()) {
-            (Some(a), Some(b)) => (b.0 - a.0).max(0.0) / 24.0,
-            _ => 0.0,
-        }
+        span_days(&self.pts)
+    }
+
+    /// The points of the last `FIT_WINDOW_DAYS` of uptime (what the slope is fitted on).
+    pub fn recent(&self) -> &[(f32, f32)] {
+        let Some(last) = self.pts.last() else { return &self.pts };
+        let from = last.0 - FIT_WINDOW_DAYS * 24.0;
+        let i = self.pts.iter().position(|p| p.0 >= from).unwrap_or(0);
+        &self.pts[i..]
+    }
+}
+
+/// Days covered by a run of (uptime hours, GB) points.
+fn span_days(pts: &[(f32, f32)]) -> f32 {
+    match (pts.first(), pts.last()) {
+        (Some(a), Some(b)) => (b.0 - a.0).max(0.0) / 24.0,
+        _ => 0.0,
     }
 }
 
@@ -460,8 +477,9 @@ impl Ghost {
             }
             return p;
         };
-        let slope = slope_per_day(&self.trend.pts);
-        (p.tone, p.headline) = headline(verdict(gb(m.pool()), gb(m.total), slope, self.trend.span_days()));
+        let recent = self.trend.recent();
+        let slope = slope_per_day(recent);
+        (p.tone, p.headline) = headline(verdict(gb(m.pool()), gb(m.total), slope, span_days(recent)));
         let b = breakdown(&m);
         p.lines.push(format!("Apps: {:.1} GB", gb(b.apps)));
         p.lines.push(match m.compressed {
@@ -605,7 +623,9 @@ mod tests {
         assert_eq!(verdict(0.9, 16.0, Some(0.05), 0.5), Verdict::Learning);
         assert_eq!(verdict(0.9, 16.0, Some(0.05), 2.0), Verdict::Steady { pool_gb: 0.9 });
         assert_eq!(verdict(2.0, 16.0, Some(0.6), 2.0), Verdict::Growing { per_day: 0.6 });
-        assert_eq!(verdict(5.0, 16.0, Some(0.6), 9.0), Verdict::Leak { per_day: 0.6, days: 9.0 });
+        assert_eq!(verdict(5.0, 32.0, Some(0.6), 9.0), Verdict::Leak { per_day: 0.6, days: 9.0 });
+        // 5 GB of pool on a 16 GB PC is bad on its own, whatever the trend.
+        assert!(matches!(verdict(5.0, 16.0, Some(0.6), 9.0), Verdict::Large { .. }));
         assert!(matches!(verdict(4.2, 16.0, None, 0.0), Verdict::Large { .. }));
         let (tone, h) = headline(Verdict::Leak { per_day: 0.6, days: 9.0 });
         assert_eq!(tone, Tone::Warn);
@@ -632,6 +652,25 @@ mod tests {
         assert!(t.observe(now, 120, 0.8));
         assert_eq!(t.pts, vec![(120.0 / 3600.0, 0.8)]);
         assert_eq!(t.boot, boot_id(now, 120));
+    }
+
+    #[test]
+    fn late_leak_is_not_averaged_away() {
+        // 20 flat days, then +0.6 GB a day for 4 days, one point per hour.
+        let mut t = Trend::default();
+        let boot_ms = 1_700_000_000_000u64;
+        for h in 1..=(24 * 24u64) {
+            let d = h as f32 / 24.0;
+            let gb = if d <= 20.0 { 1.0 } else { 1.0 + (d - 20.0) * 0.6 };
+            t.observe(boot_ms + h * 3_600_000, h * 3600, gb);
+        }
+        let whole = slope_per_day(&t.pts).unwrap();
+        assert!(whole < 0.3, "whole-boot fit hides it: {}", whole);
+        let r = t.recent();
+        let s = slope_per_day(r).unwrap();
+        assert!(s >= 0.3, "recent fit sees it: {}", s);
+        let v = verdict(3.4, 32.0, Some(s), span_days(r));
+        assert!(matches!(v, Verdict::Leak { .. }), "{:?}", v);
     }
 
     #[test]

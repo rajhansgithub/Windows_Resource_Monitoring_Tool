@@ -727,11 +727,15 @@ impl Incidents {
             more,
             detail: cut(detail, 200),
         };
-        if event_toasts(k) && now_ms.saturating_sub(t_ms) <= DAY_MS {
-            self.queue(Notice { title: card.what.clone(), text: card.title() });
-        }
+        let notice = (event_toasts(k) && now_ms.saturating_sub(t_ms) <= DAY_MS)
+            .then(|| Notice { title: card.what.clone(), text: card.title() });
         self.last_end[k as usize] = Some(t_s);
         self.add_card(card);
+        // Only toast a card that was kept: an old one dropped at once by the 60-card cap is
+        // not in the list, so a boot-event replay would otherwise toast it on every start.
+        if let Some(n) = notice.filter(|_| self.cards.iter().any(|c| c.kind == k && c.t_ms == t_ms)) {
+            self.queue(n);
+        }
         Vec::new()
     }
 

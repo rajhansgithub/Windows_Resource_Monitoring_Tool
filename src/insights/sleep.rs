@@ -555,6 +555,8 @@ pub struct Sleep {
     late_wake: bool,
     attach_until: u64,
     guard_rx: Option<Receiver<bool>>,
+    /// Local day of the last toast for a night without a drain figure.
+    awake_toast_day: u32,
     cores: f32,
     dirty: bool,
     reader: fn(Option<Battery>) -> BatRead,
@@ -576,6 +578,7 @@ impl Sleep {
             late_wake: false,
             attach_until: 0,
             guard_rx: None,
+            awake_toast_day: u32::MAX,
             cores: std::thread::available_parallelism().map_or(1, |n| n.get()) as f32,
             dirty: false,
             reader: read_battery,
@@ -597,8 +600,17 @@ impl Sleep {
         }
         if self.pending && (self.late_wake || now >= self.attach_until) {
             self.pending = false;
-            if let Some(n) = self.nights.last().and_then(notice_for) {
-                out.push(n);
+            if let Some(night) = self.nights.last() {
+                // Without a drain figure (on power, no battery) the toast only says the PC
+                // stayed awake; on a desktop that is every time the screen sleeps. Once a day.
+                let no_drain = night.drain_per_h().is_none();
+                let day = time::day(now);
+                if let Some(n) = notice_for(night).filter(|_| !no_drain || self.awake_toast_day != day) {
+                    if no_drain {
+                        self.awake_toast_day = day;
+                    }
+                    out.push(n);
+                }
             }
         }
         out
@@ -802,6 +814,18 @@ impl Sleep {
     /// Persistent state changed since the last save.
     pub fn dirty(&self) -> bool {
         self.dirty
+    }
+
+    /// The state was written (`save` takes `&self`, so the orchestrator clears the flag).
+    pub fn mark_saved(&mut self) {
+        self.dirty = false;
+    }
+
+    /// Insights was switched off: power events will be missed, so the night in progress
+    /// can no longer be measured. Drop it (nothing recorded, no toast).
+    pub fn abandon(&mut self) {
+        self.cur = None;
+        self.pending = false;
     }
 
     pub fn save(&self) -> Json {

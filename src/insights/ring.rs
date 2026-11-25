@@ -177,6 +177,8 @@ pub struct Ring {
     names: Names,
     /// Process lists were sampled on the previous push (rates are valid from the 2nd).
     prev_procs: bool,
+    /// Sample interval of the previous push (0 = none yet).
+    prev_interval_ms: u32,
 }
 
 fn pct(v: f32) -> u8 {
@@ -197,7 +199,7 @@ fn kb(bps: f64) -> u32 {
 
 impl Ring {
     pub fn new() -> Ring {
-        Ring { buf: Vec::new(), head: 0, names: Names::default(), prev_procs: false }
+        Ring { buf: Vec::new(), head: 0, names: Names::default(), prev_procs: false, prev_interval_ms: 0 }
     }
 
     /// Record one sample. O(1); allocates only on the first push and for unseen names.
@@ -205,9 +207,16 @@ impl Ring {
         let s = c.snap;
         let t_s = (c.now_ms / 1000).min(u32::MAX as u64) as u32;
         let elapsed_ms = if s.elapsed.is_finite() { (s.elapsed * 1000.0).max(0.0) } else { 0.0 };
+        // Right after an interval change (Settings, display on / off) this gap was timed by the
+        // old interval: measure lateness against the longer one so it is not a false freeze.
+        let interval_ms = c.interval_ms.max(self.prev_interval_ms);
+        self.prev_interval_ms = c.interval_ms;
+        // Wall-clock gap since the last tick: also catches pauses the sample clock did not see
+        // (Insights switched off for a while, a clock that stops in sleep).
+        let wall_gap_s = self.last().map_or(0, |l| t_s.saturating_sub(l.t_s));
         let mut t = Tick {
             t_s,
-            late_ms: (elapsed_ms - c.interval_ms as f64).clamp(0.0, u32::MAX as f64) as u32,
+            late_ms: (elapsed_ms - interval_ms as f64).clamp(0.0, u32::MAX as f64) as u32,
             ram_mb: (s.ram_used / (1024 * 1024)).min(u32::MAX as u64) as u32,
             disk_kbps: kb(s.disk_read + s.disk_write),
             net_kbps: kb(s.net_up + s.net_down),
@@ -225,7 +234,7 @@ impl Ring {
         if c.display_on {
             t.flags |= flag::DISPLAY;
         }
-        if elapsed_ms > GAP_MS {
+        if elapsed_ms > GAP_MS || wall_gap_s as f64 * 1000.0 > GAP_MS {
             t.flags |= flag::GAP;
         }
         if c.procs_sampled && self.prev_procs {
@@ -434,6 +443,25 @@ mod tests {
         assert_eq!(top[1].0, "svchost");
         assert!((top[1].1 - 18.0).abs() < 0.01); // (10*4 + 50) / 5
         assert!(r.top_cpu(0, 99_000, 3).is_empty());
+    }
+
+    #[test]
+    fn interval_change_and_wall_gap() {
+        let mut r = Ring::new();
+        let push = |r: &mut Ring, t_s: u64, elapsed: f64, interval_ms: u32| {
+            let snap = Snapshot { elapsed, ..Default::default() };
+            let c = Ctx { now_ms: t_s * 1000, snap: &snap, display_on: true, input_idle_ms: 0, interval_ms, procs_sampled: false };
+            r.push(&c);
+        };
+        push(&mut r, 100, 5.0, 5000);
+        // Interval just went 5 s -> 1 s: the 5 s gap was the old interval, not a freeze.
+        push(&mut r, 105, 5.0, 1000);
+        assert_eq!(r.last().map(|t| t.late_ms), Some(0));
+        push(&mut r, 108, 3.0, 1000);
+        assert_eq!(r.last().map(|t| t.late_ms), Some(2000));
+        // A long wall-clock pause the sample clock did not see still marks a gap.
+        push(&mut r, 400, 1.0, 1000);
+        assert!(r.last().is_some_and(|t| t.has(flag::GAP)));
     }
 
     #[test]

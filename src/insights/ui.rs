@@ -1482,20 +1482,21 @@ pub fn open(a: &mut crate::app::App) {
 
 /// New data: repaint if the window is open (cheap no-op when closed).
 /// Called on every app tick; rebuilds the panels at most every 2 s.
-pub fn refresh() {
+pub fn refresh(a: &crate::app::App) {
     let Some(u) = ui() else { return };
     // SAFETY: no preconditions.
     let now = unsafe { GetTickCount64() };
     if now.saturating_sub(u.built) < REBUILD_MS {
         return;
     }
-    reload();
+    reload(a);
 }
 
 /// Rebuild the panels now (after Clear history, or the on/off setting changed).
-pub fn reload() {
+/// Takes the caller's `App` so no second `&mut App` is made through `app()` while the
+/// caller (e.g. `App::insights_sample`) still holds one.
+pub fn reload(a: &crate::app::App) {
     let Some(u) = ui() else { return };
-    let Some(a) = app() else { return };
     let (on, panels) = fetch(a, unix_ms());
     if u.take(on, panels) {
         u.refresh_hover();
@@ -1503,7 +1504,7 @@ pub fn reload() {
     }
 }
 
-pub fn set_dark(dark: bool) {
+pub fn set_dark(dark: bool, a: &crate::app::App) {
     let Some(u) = ui() else { return };
     if u.dark != dark {
         u.dark = dark;
@@ -1512,7 +1513,7 @@ pub fn set_dark(dark: bool) {
         invalidate(u.hwnd);
     }
     // Also called after every settings change: Insights may have been turned on or off.
-    reload();
+    reload(a);
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {

@@ -898,6 +898,11 @@ impl Baseline {
         self.dirty
     }
 
+    /// The state was written (`save` takes `&self`, so the orchestrator clears the flag).
+    pub fn mark_saved(&mut self) {
+        self.dirty = false;
+    }
+
     /// Start a new day: finish the old one (merged with any carried part) and keep 60.
     fn roll(&mut self, day: u32) {
         if let Some(r) = self.finished_today() {
@@ -967,7 +972,11 @@ impl Baseline {
             return;
         }
         if self.next_probe_ms == 0 {
-            self.next_probe_ms = (now_ms + PROBE_FIRST_DELAY_MS).max(self.last_probe_ms + PROBE_EVERY_MS);
+            // At most a day out: a saved time from a clock that was ahead must not stop the
+            // check for months (and must not overflow).
+            self.next_probe_ms = (now_ms + PROBE_FIRST_DELAY_MS)
+                .max(self.last_probe_ms.saturating_add(PROBE_EVERY_MS))
+                .min(now_ms + PROBE_EVERY_MS);
         }
         if now_ms < self.next_probe_ms {
             return;

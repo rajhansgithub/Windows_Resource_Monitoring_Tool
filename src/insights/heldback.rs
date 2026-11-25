@@ -288,6 +288,8 @@ pub struct HeldBack {
     chart_last_ms: u64,
     /// (plan name, read at unix ms). RefCell: `panel(&self)` refreshes it at most once a minute.
     plan: RefCell<(Option<String>, u64)>,
+    /// Bumped whenever an episode closes or a firmware report lands (save trigger).
+    changes: usize,
 }
 
 impl HeldBack {
@@ -310,6 +312,7 @@ impl HeldBack {
             chart_min: f32::INFINITY,
             chart_last_ms: 0,
             plan: RefCell::new((active_plan_name(), super::unix_ms())),
+            changes: 0,
         }
     }
 
@@ -346,7 +349,9 @@ impl HeldBack {
             mode: self.mode,
             fg_eco: eco_name(&self.fg),
         };
-        self.eps.step(now, self.capped_since, ceiling, || reason(&inputs));
+        if self.eps.step(now, self.capped_since, ceiling, || reason(&inputs)) {
+            self.changes = self.changes.wrapping_add(1);
+        }
 
         if let Some(c) = ceiling {
             self.chart_min = self.chart_min.min(c);
@@ -380,6 +385,7 @@ impl HeldBack {
         let t = if e.t_ms > 0 { e.t_ms } else { super::unix_ms() };
         self.fw_last_ms = Some(self.fw_last_ms.map_or(t, |x| x.max(t)));
         self.eps.firmware(t, fw_seconds(e));
+        self.changes = self.changes.wrapping_add(1);
     }
 
     pub fn on_power(&mut self, p: Power) {
@@ -417,9 +423,10 @@ impl HeldBack {
         obj(vec![("episodes", Json::Arr(eps))])
     }
 
-    /// Finished episodes kept (the orchestrator saves when this changes).
+    /// Changes to the finished episodes (the orchestrator saves when this changes). A counter,
+    /// not the list length: once the list is at `EPISODE_CAP` its length stops changing.
     pub fn episode_count(&self) -> usize {
-        self.eps.done.len()
+        self.changes
     }
 
     pub fn load(&mut self, j: &Json) {

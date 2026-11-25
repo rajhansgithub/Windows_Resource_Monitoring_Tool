@@ -242,6 +242,7 @@ impl Insights {
             self.events = events::Listener::start(hwnd);
         } else {
             self.events = None;
+            self.sleep.abandon();
             self.flush();
         }
     }
@@ -326,6 +327,10 @@ impl Insights {
             return;
         }
         let _ = store::save(&self.save());
+        // Sleep and Baseline keep plain flags that `save(&self)` cannot clear; without this
+        // the file was rewritten every 5 minutes forever after their first change.
+        self.sleep.mark_saved();
+        self.baseline.mark_saved();
         self.dirty = false;
         self.last_save_ms = unix_ms();
     }
@@ -333,7 +338,10 @@ impl Insights {
     /// Forget everything (Settings → Insights → Clear history).
     pub fn clear(&mut self) {
         self.incidents = incidents::Incidents::new();
+        // Keep the user's Bag Guard setting (only re-applied on the next settings change).
+        let bag_guard = self.sleep.bag_guard;
         self.sleep = sleep::Sleep::new();
+        self.sleep.bag_guard = bag_guard;
         self.baseline = baseline::Baseline::new();
         self.ghost = ghost::Ghost::new();
         self.held = heldback::HeldBack::new();

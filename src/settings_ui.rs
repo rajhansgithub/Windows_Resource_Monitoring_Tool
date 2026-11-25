@@ -2189,8 +2189,8 @@ fn activate(hwnd: HWND, id: i32) {
             ID_INS_CLEAR => {
                 if let Some(a) = app() {
                     a.ins.clear();
+                    crate::insights::ui::reload(a);
                 }
-                crate::insights::ui::reload();
             }
             _ => {}
         },
