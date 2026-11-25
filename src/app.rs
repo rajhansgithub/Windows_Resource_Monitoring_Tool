@@ -1506,7 +1506,7 @@ impl App {
 }
 
 /// Emulsion Labs website, opened from the tray menu header and Settings > About.
-pub const WEBSITE: &str = "https://github.com/rajhansgithub/Windows_Resource_Monitoring_Tool";
+pub const WEBSITE: &str = "https://emulsionlabs.in/";
 
 /// What the Settings window can ask the app to do.
 #[derive(Clone, Copy, PartialEq)]
