@@ -6,6 +6,7 @@ mod app;
 mod autostart;
 mod fmt;
 mod icons;
+mod insights;
 mod overlay;
 mod popup;
 mod render;
@@ -39,6 +40,7 @@ fn main() {
         let report = std::env::args().any(|a| a.eq_ignore_ascii_case("--report"));
         let after_update = std::env::args().any(|a| a.eq_ignore_ascii_case("--after-update"));
         let achievements = std::env::args().any(|a| a.eq_ignore_ascii_case("--achievements"));
+        let insights = std::env::args().any(|a| a.eq_ignore_ascii_case("--insights"));
         let name = wide("Local\\ResourceMonitor.SingleInstance");
         let mut mutex = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
         // Just updated: the previous version is still shutting down; wait for it.
@@ -54,7 +56,7 @@ fn main() {
             if !h.is_null() {
                 // Let the running instance bring its windows to the front.
                 AllowSetForegroundWindow(ASFW_ANY);
-                let w = if achievements { 2 } else { report as usize };
+                let w = if insights { 3 } else if achievements { 2 } else { report as usize };
                 PostMessageW(h, app::WM_APP_ACTIVATE, w, 0);
             }
             return;
@@ -88,6 +90,11 @@ fn main() {
         if achievements {
             if let Some(a) = app::app() {
                 a.open_achievements();
+            }
+        }
+        if insights {
+            if let Some(a) = app::app() {
+                a.open_insights();
             }
         }
 

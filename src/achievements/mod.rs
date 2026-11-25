@@ -4,7 +4,7 @@
 
 pub mod core;
 pub mod gpu;
-mod json;
+pub mod json;
 pub mod observer;
 pub mod store;
 pub mod ui;

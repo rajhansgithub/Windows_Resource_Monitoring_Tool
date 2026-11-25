@@ -268,6 +268,27 @@ impl Procs {
     }
 }
 
+/// One-shot lookup for `sensors::find_process`: scans a fresh process list once.
+pub fn find_pid(name: &str) -> Option<u32> {
+    let mut p = Procs::new();
+    let valid = p.query()?;
+    let base = p.buf.as_ptr().cast::<u8>();
+    let mut offset = 0usize;
+    while offset + size_of::<ProcessInfo>() <= valid {
+        // SAFETY: bounds checked by the loop condition; entries are 8-byte aligned in a u64 buffer.
+        let e = unsafe { &*base.add(offset).cast::<ProcessInfo>() };
+        let pid = e.unique_process_id as u32;
+        if pid != 0 && p.image_name(offset, valid).eq_ignore_ascii_case(name) {
+            return Some(pid);
+        }
+        if e.next_entry_offset == 0 {
+            break;
+        }
+        offset += e.next_entry_offset as usize;
+    }
+    None
+}
+
 /// Indices (and their count) of the `TOP` rows with the largest positive key, descending.
 fn top_n(rows: &[Row], key: impl Fn(&Row) -> f64) -> ([usize; TOP], usize) {
     let mut best: [(f64, usize); TOP] = [(0.0, 0); TOP];

@@ -5,6 +5,14 @@
 //!   let mut s = Sensors::new();
 //!   let snap: &Snapshot = s.sample(&SampleOpts { .. });   // call ~once per interval
 //!   let list: Vec<AdapterInfo> = s.adapters();              // for the tray menu
+//!   let pid: Option<u32> = sensors::find_process("Memory Compression"); // one-shot, never per tick
+//!
+//!   CPU ceiling fields on `Snapshot` (PDH, attached once to the shared query; `None` when the
+//!   counter does not exist on this PC, which is common for the thermal zone one):
+//!     cpu_perf_limit         % of max performance the system allows right now (100 = no cap)
+//!     cpu_perf_pct           current speed as % of nominal (above 100 with turbo)
+//!     cpu_perf_flags         raw "Performance Limit Flags" bit mask (nonzero = some limit active)
+//!     thermal_passive_limit  lowest "% Passive Limit" across ACPI thermal zones
 
 mod cpu;
 mod disk;
@@ -13,6 +21,7 @@ mod gpu_temp;
 mod mem;
 mod net;
 mod pdh;
+mod perf;
 mod power;
 mod procs;
 mod volume;
@@ -89,6 +98,14 @@ pub struct Snapshot {
     pub proc_count: u32,
     pub battery: Option<Battery>,
     pub uptime_secs: u64,
+    /// `% Performance Limit`: share of max CPU performance currently allowed, 0..100.
+    pub cpu_perf_limit: Option<f32>,
+    /// `% Processor Performance`: current speed vs nominal; above 100 when boosting.
+    pub cpu_perf_pct: Option<f32>,
+    /// `Performance Limit Flags` bit mask (thinly documented; nonzero = some limit is active).
+    pub cpu_perf_flags: Option<u32>,
+    /// Lowest `% Passive Limit` over the ACPI thermal zones (below 100 = thermal throttling).
+    pub thermal_passive_limit: Option<f32>,
     /// Seconds since previous sample (first sample: 0).
     pub elapsed: f64,
 }
@@ -131,6 +148,7 @@ pub struct Sensors {
     snap: Snapshot,
     clock: Clock,
     cpu: cpu::Cpu,
+    perf: perf::Perf,
     gpu: gpu::Gpu,
     gpu_temp: gpu_temp::GpuTemp,
     sys_drive: volume::SystemDrive,
@@ -147,6 +165,7 @@ impl Sensors {
             snap: Snapshot::default(),
             clock: Clock::new(),
             cpu: cpu::Cpu::default(),
+            perf: perf::Perf::default(),
             gpu: gpu::Gpu::default(),
             gpu_temp: gpu_temp::GpuTemp::default(),
             sys_drive: volume::SystemDrive::default(),
@@ -163,6 +182,7 @@ impl Sensors {
         // One PDH collection per sample; counters are attached only while their metric is enabled.
         if let Some(q) = &self.pdh {
             self.cpu.attach(q);
+            self.perf.attach(q);
             self.gpu.sync(q, opts.gpu);
             self.disk.sync(q, opts.disk);
             q.collect();
@@ -171,6 +191,7 @@ impl Sensors {
         let s = &mut self.snap;
         s.elapsed = elapsed;
         s.cpu = self.cpu.sample();
+        self.perf.sample(s);
         (s.ram_used, s.ram_total) = mem::usage();
         s.ram_pct = if s.ram_total > 0 {
             (s.ram_used as f64 / s.ram_total as f64 * 100.0) as f32
@@ -211,4 +232,10 @@ impl Sensors {
     pub fn adapters(&self) -> Vec<AdapterInfo> {
         net::adapters()
     }
+}
+
+/// PID of the first process whose image name (without ".exe") matches `name`, ignoring case.
+/// One full process-list query: call once at start (or after a failure), never per tick.
+pub fn find_process(name: &str) -> Option<u32> {
+    procs::find_pid(name)
 }
