@@ -24,11 +24,11 @@
 //! * The layout (controls and cards of the current page) is rebuilt from the
 //!   draft after every change; it is a few dozen rectangles.
 
-use crate::app::{app, default_accent, effective_dark};
+use crate::app::{app, default_accent, effective_dark, Cmd};
 use crate::fmt::SpeedUnit;
 use crate::popup::style_window;
 use crate::render::{create_font, measure_dc, ui_face, Canvas, Rgba};
-use crate::settings::{Metric, Settings, Theme};
+use crate::settings::{Metric, Mode, Settings, Theme};
 use crate::util::*;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use windows_sys::Win32::Foundation::*;
@@ -101,6 +101,11 @@ const ID_FULLSCREEN: i32 = 110;
 const ID_CLICKTHRU: i32 = 111;
 const ID_AUTOUPDATE: i32 = 112;
 const ID_AUTOSTART: i32 = 113;
+const ID_MODE: i32 = 114;
+const ID_MAXW: i32 = 115;
+const ID_RESETPOS: i32 = 116;
+const ID_RECHECK: i32 = 117;
+const ID_SHOWON: i32 = 118;
 const ID_ACHIEVE: i32 = 199;
 
 const ID_SWATCH: i32 = 300; // + metric index
@@ -123,20 +128,33 @@ const ID_DAY: i32 = 601;
 const ID_ADAPTER: i32 = 602;
 const ID_REPORT: i32 = 603;
 
+const ID_WEBSITE: i32 = 650;
+const ID_UPDATES: i32 = 651;
+const ID_EDITFILE: i32 = 652;
+const ID_DATADIR: i32 = 653;
+
+// Per-display toggles, + index in `Ui::displays`.
+const ID_DSHOW: i32 = 800;
+const ID_DSTACK: i32 = 820;
+const MAX_DISPLAYS: i32 = 16;
+
 // Metrics page: controls are addressed by list *position*, not by metric.
 const ID_MTOG: i32 = 700;
 const ID_MUP: i32 = 720;
 const ID_MDN: i32 = 740;
 
-const PAGES: [&str; 5] = ["General", "Metrics", "Colours", "Alerts", "Data"];
+const PAGES: [&str; 6] = ["General", "Metrics", "Colours", "Alerts", "Data", "About"];
 /// Segoe Fluent Icons / Segoe MDL2 Assets glyphs of the navigation items.
-const NAV_GLYPHS: [char; 5] = ['\u{E713}', '\u{E9D9}', '\u{E790}', '\u{EA8F}', '\u{E8F1}'];
+const NAV_GLYPHS: [char; 6] = ['\u{E713}', '\u{E9D9}', '\u{E790}', '\u{EA8F}', '\u{E8F1}', '\u{E946}'];
 const G_CHEVRON_DOWN: char = '\u{E70D}';
 const G_CHEVRON_UP: char = '\u{E70E}';
 const G_MINUS: char = '\u{E738}';
 const G_PLUS: char = '\u{E710}';
 
 const INTERVALS: [(&str, u32); 4] = [("0.5 seconds", 500), ("1 second", 1000), ("2 seconds", 2000), ("5 seconds", 5000)];
+const MODES: [(&str, Mode); 2] = [("Dock to taskbar", Mode::Dock), ("Floating (drag anywhere)", Mode::Float)];
+const MAX_WIDTHS: [(&str, u32); 5] =
+    [("Auto (don't cover app icons)", 0), ("20% of taskbar", 20), ("30% of taskbar", 30), ("40% of taskbar", 40), ("50% of taskbar", 50)];
 const THEMES: [(&str, Theme); 3] = [("Match Windows", Theme::Auto), ("Dark", Theme::Dark), ("Light", Theme::Light)];
 /// Offered widget fonts; the first means "default" (empty setting).
 const FONTS: [&str; 5] = ["Default", "Segoe UI", "Cascadia Mono", "Consolas", "Bahnschrift"];
@@ -688,6 +706,8 @@ struct Ui {
     /// Adapter aliases offered in the drop-down (index + 1; 0 = automatic).
     adapters: Vec<String>,
     adapter_labels: Vec<String>,
+    /// Taskbars present when the window opened: (settings key, label, primary).
+    displays: Vec<(String, String, bool)>,
     autostart: bool,
     /// Something changed since the last apply (enables Apply).
     dirty: bool,
@@ -696,7 +716,15 @@ struct Ui {
 }
 
 impl Ui {
-    fn new(dpi: u32, dark: bool, theme: Theme, draft: Settings, adapters: Vec<String>, labels: Vec<String>) -> Ui {
+    fn new(
+        dpi: u32,
+        dark: bool,
+        theme: Theme,
+        draft: Settings,
+        adapters: Vec<String>,
+        labels: Vec<String>,
+        displays: Vec<(String, String, bool)>,
+    ) -> Ui {
         Ui {
             hwnd: std::ptr::null_mut(),
             dpi,
@@ -727,6 +755,7 @@ impl Ui {
             draft,
             adapters,
             adapter_labels: labels,
+            displays,
             autostart: crate::autostart::enabled(),
             dirty: false,
             cust: [0x00FF_FFFF; 16],
@@ -761,7 +790,7 @@ impl Ui {
         match id {
             ID_SPARK => d.sparklines,
             ID_LABELS => d.labels,
-            ID_STACKED => d.stacked,
+            ID_STACKED => d.stacked_for(self.displays.first().map_or("", |x| x.0.as_str())),
             ID_AUTOSTACK => d.auto_stack,
             ID_FULLSCREEN => d.hide_fullscreen,
             ID_CLICKTHRU => d.click_through,
@@ -771,6 +800,12 @@ impl Ui {
             ID_ALERTS => d.alerts,
             ID_A_CAP => d.alert_cap,
             ID_WINACCENT => d.windows_accent,
+            _ if (ID_DSHOW..ID_DSHOW + MAX_DISPLAYS).contains(&id) => {
+                self.displays.get((id - ID_DSHOW) as usize).is_some_and(|(k, _, p)| d.wants_display(k, *p))
+            }
+            _ if (ID_DSTACK..ID_DSTACK + MAX_DISPLAYS).contains(&id) => {
+                self.displays.get((id - ID_DSTACK) as usize).is_some_and(|(k, ..)| d.stacked_for(k))
+            }
             _ => self.metric_at(id - ID_MTOG).is_some_and(|m| d.show[m.idx()]),
         }
     }
@@ -781,7 +816,6 @@ impl Ui {
         Some(match id {
             ID_SPARK => &mut d.sparklines,
             ID_LABELS => &mut d.labels,
-            ID_STACKED => &mut d.stacked,
             ID_AUTOSTACK => &mut d.auto_stack,
             ID_FULLSCREEN => &mut d.hide_fullscreen,
             ID_CLICKTHRU => &mut d.click_through,
@@ -793,6 +827,44 @@ impl Ui {
             ID_WINACCENT => &mut d.windows_accent,
             _ => &mut d.show[m?.idx()],
         })
+    }
+
+    /// Flip a toggle switch. Returns true if the draft changed.
+    fn toggle(&mut self, id: i32) -> bool {
+        let on = !self.flag(id);
+        let d = &mut self.draft;
+        if id == ID_STACKED {
+            // One display: this is the default for every display.
+            d.stacked = on;
+            d.stacked_on.clear();
+        } else if (ID_DSTACK..ID_DSTACK + MAX_DISPLAYS).contains(&id) {
+            let Some((k, ..)) = self.displays.get((id - ID_DSTACK) as usize) else { return false };
+            d.set_stacked(k, on);
+        } else if (ID_DSHOW..ID_DSHOW + MAX_DISPLAYS).contains(&id) {
+            let Some((key, ..)) = self.displays.get((id - ID_DSHOW) as usize) else { return false };
+            let mut keys: Vec<&str> =
+                self.displays.iter().filter(|(k, _, p)| d.wants_display(k, *p)).map(|(k, ..)| k.as_str()).collect();
+            if on {
+                keys.push(key);
+            } else {
+                keys.retain(|k| k != key);
+            }
+            let all = self.displays.iter().all(|(k, ..)| keys.contains(&k.as_str()));
+            let primary_only = keys.len() == 1 && self.displays.iter().any(|(k, _, p)| *p && k == keys[0]);
+            d.displays = if keys.is_empty() || primary_only {
+                "primary".into()
+            } else if all {
+                "all".into()
+            } else {
+                keys.join(",")
+            };
+        } else {
+            match self.flag_slot(id) {
+                Some(v) => *v = on,
+                None => return false,
+            }
+        }
+        true
     }
 
     fn num_get(&self, id: i32) -> f64 {
@@ -927,6 +999,33 @@ impl Ui {
                 (v, cur)
             }
             ID_DAY => ((1..=28).map(|n: u32| n.to_string()).collect(), (d.cap_reset_day.clamp(1, 28) - 1) as usize),
+            ID_MODE => (
+                MODES.iter().map(|(t, _)| t.to_string()).collect(),
+                MODES.iter().position(|(_, m)| *m == d.mode).unwrap_or(0),
+            ),
+            ID_MAXW => {
+                let mut v: Vec<String> = MAX_WIDTHS.iter().map(|(t, _)| t.to_string()).collect();
+                let cur = match MAX_WIDTHS.iter().position(|(_, p)| *p == d.max_width_pct) {
+                    Some(i) => i,
+                    None => {
+                        v.push(format!("{}% of taskbar", d.max_width_pct));
+                        v.len() - 1
+                    }
+                };
+                (v, cur)
+            }
+            ID_SHOWON => {
+                let mut v = vec!["Main taskbar only".to_string(), "All taskbars".to_string()];
+                let cur = match d.displays.to_ascii_lowercase().as_str() {
+                    "primary" => 0,
+                    "all" => 1,
+                    _ => {
+                        v.push("Selected displays".to_string());
+                        2
+                    }
+                };
+                (v, cur)
+            }
             _ => (Vec::new(), 0),
         }
     }
@@ -965,6 +1064,15 @@ impl Ui {
                 },
             },
             ID_DAY => d.cap_reset_day = (i as u32 + 1).clamp(1, 28),
+            ID_MAXW => match MAX_WIDTHS.get(i) {
+                Some((_, p)) => d.max_width_pct = *p,
+                None => return false, // the custom width: already current
+            },
+            ID_SHOWON => match i {
+                0 => d.displays = "primary".into(),
+                1 => d.displays = "all".into(),
+                _ => return false,
+            },
             _ => return false,
         }
         true
@@ -996,34 +1104,68 @@ impl Ui {
     fn page_defs(&self, page: usize) -> Vec<Def> {
         let d = &self.draft;
         match page {
-            0 => vec![
-                card("Update interval", "How often the widget refreshes", vec![cell(ID_INTERVAL, Kind::Dropdown, 200)]),
-                card("Network speed unit", "Show speeds in bits or bytes per second", vec![cell(ID_UNIT, Kind::Dropdown, 200)]),
-                card(
-                    "Text size",
-                    "Scale of the text on the widget",
-                    vec![cell(ID_SCALE, Kind::Slider, 180), Cell::Value(ID_SCALE)],
-                ),
-                card("Theme", "Colours of the widget and this window", vec![cell(ID_THEME, Kind::Dropdown, 200)]),
-                card(
-                    "Background opacity",
-                    "How solid the widget background is",
-                    vec![cell(ID_OPACITY, Kind::Slider, 180), Cell::Value(ID_OPACITY)],
-                ),
-                card("Font", "Typeface used on the widget", vec![cell(ID_FONT, Kind::Dropdown, 200)]),
-                Def::Heading("Behaviour"),
-                toggle_card("Sparklines", "Draw a small history graph behind each value", ID_SPARK),
-                toggle_card("Metric labels", "Show the name next to each value", ID_LABELS),
-                toggle_card("Stacked rows", "Two metrics per column on the taskbar", ID_STACKED),
-                toggle_card("Auto-stack when crowded", "Switch to stacked rows when the widget would not fit", ID_AUTOSTACK),
-                toggle_card("Hide in full-screen apps", "Keep the widget out of the way of games and videos", ID_FULLSCREEN),
-                toggle_card("Click-through", "Mouse clicks pass through the widget to the taskbar", ID_CLICKTHRU),
-                toggle_card("Update automatically", "Install new versions when they are released", ID_AUTOUPDATE),
-                toggle_card("Start with Windows", "Launch Resource Monitor when you sign in", ID_AUTOSTART),
-                toggle_card("Achievements", "Earn medals for real use. Nothing leaves this PC", ID_ACHIEVE),
-                Def::Heading("About"),
-                Def::Note(concat!("Resource Monitor v", env!("CARGO_PKG_VERSION"), " by Emulsion Labs.")),
-            ],
+            0 => {
+                let multi = self.displays.len() > 1;
+                let mut v = vec![
+                    card("Update interval", "How often the widget refreshes", vec![cell(ID_INTERVAL, Kind::Dropdown, 200)]),
+                    card("Network speed unit", "Show speeds in bits or bytes per second", vec![cell(ID_UNIT, Kind::Dropdown, 200)]),
+                    card(
+                        "Text size",
+                        "Scale of the text on the widget",
+                        vec![cell(ID_SCALE, Kind::Slider, 180), Cell::Value(ID_SCALE)],
+                    ),
+                    card("Theme", "Colours of the widget and this window", vec![cell(ID_THEME, Kind::Dropdown, 200)]),
+                    card(
+                        "Background opacity",
+                        "How solid the widget background is",
+                        vec![cell(ID_OPACITY, Kind::Slider, 180), Cell::Value(ID_OPACITY)],
+                    ),
+                    card("Font", "Typeface used on the widget", vec![cell(ID_FONT, Kind::Dropdown, 200)]),
+                    Def::Heading("Position"),
+                    card("Placement", "Docked next to the tray, or floating anywhere", vec![cell(ID_MODE, Kind::Dropdown, 220)]),
+                    card("Max width", "How much of the taskbar the widget may use", vec![cell(ID_MAXW, Kind::Dropdown, 220)]),
+                    card(
+                        "Reset position",
+                        "Move the widget back to its starting place",
+                        vec![cell(ID_RESETPOS, Kind::Button("Reset", false), BTN_W)],
+                    ),
+                    card(
+                        "Taskbar icons",
+                        "Measure the taskbar again if the widget covers app icons",
+                        vec![cell(ID_RECHECK, Kind::Button("Re-check", false), BTN_W)],
+                    ),
+                    toggle_card("Hide in full-screen apps", "Keep the widget out of the way of games and videos", ID_FULLSCREEN),
+                    toggle_card("Click-through", "Mouse clicks pass through the widget to the taskbar", ID_CLICKTHRU),
+                ];
+                if multi {
+                    v.push(Def::Heading("Displays"));
+                    v.push(card("Show the widget on", "Needs \u{201C}Show my taskbar on all displays\u{201D}", vec![cell(ID_SHOWON, Kind::Dropdown, 220)]));
+                    for (i, (_, label, _)) in self.displays.iter().enumerate() {
+                        v.push(card(label, "Show the widget on this taskbar", vec![cell(ID_DSHOW + i as i32, Kind::Toggle, 0)]));
+                    }
+                    for (i, (key, ..)) in self.displays.iter().enumerate() {
+                        let label = self.displays[i].1.split("  (").next().unwrap_or(key);
+                        v.push(card(
+                            &format!("Stacked rows on {}", label),
+                            "Two metrics per column on this taskbar",
+                            vec![cell(ID_DSTACK + i as i32, Kind::Toggle, 0)],
+                        ));
+                    }
+                }
+                v.push(Def::Heading("Behaviour"));
+                v.push(toggle_card("Sparklines", "Draw a small history graph behind each value", ID_SPARK));
+                v.push(toggle_card("Metric labels", "Show the name next to each value", ID_LABELS));
+                if !multi {
+                    v.push(toggle_card("Stacked rows", "Two metrics per column on the taskbar", ID_STACKED));
+                }
+                v.extend([
+                    toggle_card("Auto-stack when crowded", "Switch to stacked rows when the widget would not fit", ID_AUTOSTACK),
+                    toggle_card("Update automatically", "Install new versions when they are released", ID_AUTOUPDATE),
+                    toggle_card("Start with Windows", "Launch Resource Monitor when you sign in", ID_AUTOSTART),
+                    toggle_card("Achievements", "Earn medals for real use. Nothing leaves this PC", ID_ACHIEVE),
+                ]);
+                v
+            }
             1 => {
                 let mut v = vec![Def::Note("Choose which metrics appear on the widget, and move them to change their order.")];
                 let n = d.order.len();
@@ -1084,7 +1226,7 @@ impl Ui {
                     self.number_card("Red from", "Values turn red from this percentage", ID_CRIT, "%"),
                 ]
             }
-            _ => vec![
+            4 => vec![
                 self.number_card("Monthly data cap", "In gigabytes. 0 turns the cap off", ID_CAP, "GB"),
                 card("Billing cycle resets on day", "Data is counted since the last reset day", vec![cell(ID_DAY, Kind::Dropdown, 120)]),
                 card("Network adapter", "Which adapter the data counters follow", vec![cell(ID_ADAPTER, Kind::Dropdown, 250)]),
@@ -1093,6 +1235,17 @@ impl Ui {
                     "Daily and monthly totals",
                     vec![cell(ID_REPORT, Kind::Button("Open data usage report", false), 0)],
                 ),
+            ],
+            _ => vec![
+                Def::Note(concat!("Resource Monitor v", env!("CARGO_PKG_VERSION"), " by Emulsion Labs.")),
+                card("Emulsion Labs", "Visit the website", vec![cell(ID_WEBSITE, Kind::Button("Open website", false), 0)]),
+                card(
+                    "Updates",
+                    concat!("Version ", env!("CARGO_PKG_VERSION"), ". Look for a newer one now"),
+                    vec![cell(ID_UPDATES, Kind::Button("Check for updates", false), 0)],
+                ),
+                card("Settings file", "Edit settings.ini in Notepad", vec![cell(ID_EDITFILE, Kind::Button("Edit", false), BTN_W)]),
+                card("Data folder", "Settings, usage history and logs", vec![cell(ID_DATADIR, Kind::Button("Open", false), BTN_W)]),
             ],
         }
     }
@@ -1745,8 +1898,11 @@ fn flush(hwnd: HWND) {
 }
 
 /// Copy the settings this window owns into `dst`; everything else (widget
-/// position, displays, per-display stacking, ...) keeps its live value.
+/// position and placement, ...) keeps its live value.
 fn merge(dst: &mut Settings, src: &Settings) {
+    dst.max_width_pct = src.max_width_pct;
+    dst.displays = src.displays.clone();
+    dst.stacked_on = src.stacked_on.clone();
     dst.show = src.show;
     dst.order = src.order.clone();
     dst.colors = src.colors.clone();
@@ -1901,10 +2057,29 @@ fn open_dropdown(hwnd: HWND, id: i32) {
     let Some(u) = ui() else { return };
     u.open_dd = None;
     u.refresh_hover();
+    if id == ID_MODE {
+        // Placement is the app's: floating starts where the docked widget is.
+        if let Some((_, m)) = (cmd > 0).then(|| MODES.get(cmd as usize - 1)).flatten() {
+            u.draft.mode = *m;
+            u.layout();
+            invalidate(hwnd);
+            run(if *m == Mode::Float { Cmd::Float } else { Cmd::Dock });
+        } else {
+            invalidate(hwnd);
+        }
+        return;
+    }
     if cmd > 0 && u.dd_select(id, cmd as usize - 1) {
         changed(hwnd);
     } else {
         invalidate(hwnd);
+    }
+}
+
+/// Ask the app to do something. May pump messages: no `ui()` borrow is held across it.
+fn run(cmd: Cmd) {
+    if let Some(a) = app() {
+        a.run(cmd);
     }
 }
 
@@ -1922,8 +2097,7 @@ fn activate(hwnd: HWND, id: i32) {
             invalidate(hwnd);
         }
         Kind::Toggle => {
-            if let Some(v) = u.flag_slot(id) {
-                *v = !*v;
+            if u.toggle(id) {
                 changed(hwnd);
             }
         }
@@ -1955,11 +2129,17 @@ fn activate(hwnd: HWND, id: i32) {
                 u.draft.colors.clear();
                 changed(hwnd);
             }
-            ID_REPORT => {
-                if let Some(a) = app() {
-                    crate::report::open(a);
-                }
+            ID_REPORT => run(Cmd::Report),
+            ID_WEBSITE => run(Cmd::Website),
+            ID_UPDATES => run(Cmd::CheckUpdates),
+            ID_RECHECK => run(Cmd::RecheckIcons),
+            ID_RESETPOS => run(Cmd::ResetPosition),
+            ID_EDITFILE => {
+                // Save pending edits first, so the file shows them.
+                flush(hwnd);
+                run(Cmd::EditSettings);
             }
+            ID_DATADIR => run(Cmd::DataFolder),
             _ => {}
         },
         Kind::Slider | Kind::Stepper => {}
@@ -2385,7 +2565,7 @@ pub fn open(a: &mut crate::app::App) {
         }
 
         let dpi = GetDpiForSystem().max(96);
-        let state = Box::new(Ui::new(dpi, a.m.dark, a.m.s.theme, draft, adapters, labels));
+        let state = Box::new(Ui::new(dpi, a.m.dark, a.m.s.theme, draft, adapters, labels, a.displays()));
         free_ui();
         UI = Box::into_raw(state);
 
