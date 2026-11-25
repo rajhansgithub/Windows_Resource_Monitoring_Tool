@@ -417,6 +417,11 @@ impl HeldBack {
         obj(vec![("episodes", Json::Arr(eps))])
     }
 
+    /// Finished episodes kept (the orchestrator saves when this changes).
+    pub fn episode_count(&self) -> usize {
+        self.eps.done.len()
+    }
+
     pub fn load(&mut self, j: &Json) {
         let Some(list) = j.get("episodes").and_then(Json::as_arr) else { return };
         let mut done: Vec<Episode> = list

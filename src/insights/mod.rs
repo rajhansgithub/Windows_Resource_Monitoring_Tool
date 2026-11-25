@@ -205,6 +205,7 @@ pub struct Insights {
     pub ghost: ghost::Ghost,
     events: Option<events::Listener>,
     last_save_ms: u64,
+    held_eps: usize,
     dirty: bool,
     enabled: bool,
 }
@@ -220,6 +221,7 @@ impl Insights {
             ghost: ghost::Ghost::new(),
             events: None,
             last_save_ms: unix_ms(),
+            held_eps: 0,
             dirty: false,
             enabled: false,
         };
@@ -266,6 +268,11 @@ impl Insights {
         self.held.on_sample(c);
         self.baseline.on_sample(c);
         self.ghost.on_sample(c);
+        let held_eps = self.held.episode_count();
+        if held_eps != self.held_eps {
+            self.held_eps = held_eps;
+            self.dirty = true;
+        }
         if self.incidents.dirty() || self.sleep.dirty() || self.baseline.dirty() || self.ghost.dirty() {
             self.dirty = true;
         }
@@ -329,6 +336,7 @@ impl Insights {
         self.sleep = sleep::Sleep::new();
         self.baseline = baseline::Baseline::new();
         self.ghost = ghost::Ghost::new();
+        self.held = heldback::HeldBack::new();
         self.ring = ring::Ring::new();
         self.dirty = true;
         self.flush();

@@ -579,6 +579,7 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         let a = app()?;
         a.hook = hook;
         a.ins.set_enabled(a.m.s.insights, hwnd as isize);
+        a.ins.sleep.bag_guard = a.m.s.bag_guard;
         a.sample();
         a.update_timer();
         a.refresh(true);
@@ -1072,6 +1073,7 @@ impl App {
         crate::achievements::ui::set_dark(self.m.dark);
         crate::insights::ui::set_dark(self.m.dark);
         self.ins.set_enabled(self.m.s.insights, self.hwnd as isize);
+        self.ins.sleep.bag_guard = self.m.s.bag_guard;
         if !self.m.s.achievements {
             crate::achievements::ui::close_all();
         }
