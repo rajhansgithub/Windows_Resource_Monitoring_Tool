@@ -357,8 +357,6 @@ pub struct App {
     shut_down: bool,
     detail_until: Option<Instant>,
     pub menu_open: bool,
-    /// Item under the mouse/keyboard in the open menu (from WM_MENUSELECT).
-    menu_sel: (HMENU, usize),
     /// Update window and what it shows.
     pub upd: HWND,
     pub upd_text: String,
@@ -511,7 +509,6 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
             upd: std::ptr::null_mut(),
             upd_text: String::new(),
             upd_pct: None,
-            menu_sel: (std::ptr::null_mut(), 0),
             need_locate: true,
             need_check: true,
             move_hook: std::ptr::null_mut(),
@@ -1228,176 +1225,35 @@ impl App {
     // ---------------------------------------------------------------- menu
 
     fn menu(&mut self, x: i32, y: i32) {
-        self.adapters = self.sensors.adapters();
         let s = &self.m.s;
         let hm = unsafe { CreatePopupMenu() };
         let add = |m: HMENU, id: usize, text: &str, checked: bool| unsafe {
             let t = wide(text);
             AppendMenuW(m, MF_STRING | if checked { MF_CHECKED } else { MF_UNCHECKED }, id, t.as_ptr());
         };
-        let radio = |m: HMENU, id: usize, text: &str, on: bool| unsafe {
-            let t = wide(text);
-            AppendMenuW(m, MF_STRING, id, t.as_ptr());
-            if on {
-                CheckMenuRadioItem(m, id as u32, id as u32, id as u32, MF_BYCOMMAND);
-            }
-        };
-        let sub = |parent: HMENU, child: HMENU, text: &str| unsafe {
-            let t = wide(text);
-            AppendMenuW(parent, MF_POPUP, child as usize, t.as_ptr());
-        };
         let sep = |m: HMENU| unsafe {
             AppendMenuW(m, MF_SEPARATOR, 0, std::ptr::null());
         };
+        // Short on purpose: everything else lives in the Settings window.
         unsafe {
-            let title = wide(concat!("Resource Monitor ", env!("CARGO_PKG_VERSION"), " \u{b7} Emulsion Labs"));
-            AppendMenuW(hm, MF_STRING | MF_GRAYED, 0, title.as_ptr());
+            // Header (bold, as the default item): opens the Emulsion Labs website.
+            add(hm, ID_WEBSITE, "Resource Monitor by Emulsion Labs", false);
+            SetMenuDefaultItem(hm, ID_WEBSITE as u32, 0);
             sep(hm);
             add(hm, ID_VISIBLE, "Show widget", s.visible);
             add(hm, ID_SETTINGS, "Settings\u{2026}", false);
             if s.achievements {
                 add(hm, ID_ACHIEVE, "Achievements\u{2026}", false);
             }
-
-            let mm = CreatePopupMenu();
-            for (i, m) in Metric::ALL.iter().enumerate() {
-                if matches!(m, Metric::DiskRead | Metric::Up | Metric::TodayUp | Metric::TopProc) {
-                    sep(mm);
-                }
-                add(mm, ID_METRIC + i, m.menu_label(), s.shown(*m));
-            }
-            sub(hm, mm, "Metrics");
-
-            let dm = CreatePopupMenu();
-            add(dm, ID_SPARK, "Sparklines", s.sparklines);
-            add(dm, ID_LABELS, "Labels", s.labels);
-            // Stacked: one checkbox, or one per display when there are several.
-            if self.taskbars.len() > 1 {
-                let km = CreatePopupMenu();
-                for (i, t) in self.taskbars.iter().take(MAX_DISPLAYS).enumerate() {
-                    let label = format!("{}{}", t.label(), if t.primary { " \u{2014} main" } else { "" });
-                    add(km, ID_STACK_DISP + i, &label, s.stacked_for(&t.key()));
-                }
-                AppendMenuW(km, MF_SEPARATOR, 0, std::ptr::null());
-                add(km, ID_AUTOSTACK, "Stack automatically when crowded", s.auto_stack);
-                sub(dm, km, "Stacked (2 rows)");
-            } else {
-                let key = self.taskbars.first().map(|t| t.key()).unwrap_or_default();
-                add(dm, ID_STACKED, "Stacked (2 rows)", s.stacked_for(&key));
-                add(dm, ID_AUTOSTACK, "Stack automatically when crowded", s.auto_stack);
-            }
-            let wm = CreatePopupMenu();
-            for (i, (n, v)) in MAX_WIDTHS.iter().enumerate() {
-                radio(wm, ID_MAXW + i, n, s.max_width_pct == *v);
-            }
-            sub(dm, wm, "Max width");
-            add(dm, ID_RECHECK, "Re-check taskbar icons", false);
-            sep(dm);
-            let tm = CreatePopupMenu();
-            for (i, (n, t)) in [("Match Windows", Theme::Auto), ("Dark", Theme::Dark), ("Light", Theme::Light)]
-                .iter()
-                .enumerate()
-            {
-                radio(tm, ID_THEME + i, n, s.theme == *t);
-            }
-            sub(dm, tm, "Theme");
-            let zm = CreatePopupMenu();
-            for (i, (n, v)) in TEXT_SIZES.iter().enumerate() {
-                radio(zm, ID_SIZE + i, n, s.text_scale == *v);
-            }
-            sub(dm, zm, "Text size");
-            let fm = CreatePopupMenu();
-            for (i, (n, v)) in FONTS.iter().enumerate() {
-                radio(fm, ID_FONT + i, n, s.font.eq_ignore_ascii_case(v));
-            }
-            sub(dm, fm, "Font");
-            let bm = CreatePopupMenu();
-            for (i, (n, v)) in BACKGROUNDS.iter().enumerate() {
-                radio(bm, ID_BG + i, n, s.bg_opacity == *v);
-            }
-            sub(dm, bm, "Background");
-            sub(hm, dm, "Appearance");
-
-            let um = CreatePopupMenu();
-            for (i, u) in SpeedUnit::ALL.iter().enumerate() {
-                radio(um, ID_UNIT + i, u.label(), s.unit == *u);
-            }
-            sub(hm, um, "Speed unit");
-
-            let am = CreatePopupMenu();
-            radio(am, ID_ADAPTER, "Automatic (all connected adapters)", s.adapter.is_empty());
-            sep(am);
-            for (i, a) in self.adapters.iter().take(MAX_ADAPTERS).enumerate() {
-                let label = format!(
-                    "{}{}  \u{2014}  {}",
-                    a.alias,
-                    if a.connected { "" } else { " (disconnected)" },
-                    a.description
-                );
-                radio(am, ID_ADAPTER + 1 + i, &label, s.adapter.eq_ignore_ascii_case(&a.alias));
-            }
-            sub(hm, am, "Network adapter");
-
-            let im = CreatePopupMenu();
-            for (i, (n, v)) in INTERVALS.iter().enumerate() {
-                radio(im, ID_INTERVAL + i, n, s.interval_ms == *v);
-            }
-            sub(hm, im, "Update interval");
-
-            let pm = CreatePopupMenu();
-            radio(pm, ID_DOCK, "Dock to taskbar", s.mode == Mode::Dock);
-            radio(pm, ID_FLOAT, "Floating (drag anywhere)", s.mode == Mode::Float);
-            sep(pm);
-            add(pm, ID_RESET_POS, "Reset position", false);
-            add(pm, ID_FULLSCREEN, "Hide during full-screen apps", s.hide_fullscreen);
-            add(pm, ID_CLICKTHRU, "Click-through (no hover)", s.click_through);
-            sub(hm, pm, "Position");
-
-            // Displays: which taskbars get a widget.
-            let xm = CreatePopupMenu();
-            let mode = s.displays.to_ascii_lowercase();
-            radio(xm, ID_DISP_PRIMARY, "Main taskbar only", mode == "primary");
-            radio(xm, ID_DISP_ALL, "All taskbars", mode == "all");
-            sep(xm);
-            for (i, t) in self.taskbars.iter().take(MAX_DISPLAYS).enumerate() {
-                let label = format!(
-                    "{}{}  ({}\u{00D7}{})",
-                    t.label(),
-                    if t.primary { " \u{2014} main" } else { "" },
-                    t.monitor.w(),
-                    t.monitor.h()
-                );
-                add(xm, ID_DISP + i, &label, s.wants_display(&t.key(), t.primary));
-            }
-            if self.taskbars.len() < 2 {
-                let t = wide("Turn on \u{201C}Show my taskbar on all displays\u{201D} for more");
-                AppendMenuW(xm, MF_STRING | MF_GRAYED, 0, t.as_ptr());
-            }
-            sub(hm, xm, "Displays");
-
-            sep(hm);
-            add(hm, ID_REPORT, "Data usage report\u{2026}", false);
             add(hm, ID_TASKMGR, "Task Manager", false);
-            sep(hm);
-            add(hm, ID_AUTOSTART, "Start with Windows", crate::autostart::enabled());
-            add(hm, ID_AUTOUPDATE, "Update automatically", s.auto_update);
-            add(hm, ID_UPDATE_NOW, "Check for updates now", false);
-            add(hm, ID_EDIT, "Edit settings file\u{2026}", false);
-            add(hm, ID_DATA, "Open data folder", false);
             sep(hm);
             add(hm, ID_EXIT, "Exit", false);
 
             let hwnd = self.hwnd;
             self.menu_open = true;
-            self.menu_sel = (std::ptr::null_mut(), 0);
             SetForegroundWindow(hwnd);
-            // Lets checkbox items toggle without closing the menu.
-            let hook = SetWindowsHookExW(WH_MSGFILTER, Some(menu_filter), std::ptr::null_mut(), windows_sys::Win32::System::Threading::GetCurrentThreadId());
             // `self` must not be used past this point: the menu loop re-enters.
             let cmd = TrackPopupMenuEx(hm, TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, hwnd, std::ptr::null());
-            if !hook.is_null() {
-                UnhookWindowsHookEx(hook);
-            }
             DestroyMenu(hm);
             PostMessageW(hwnd, WM_NULL, 0, 0);
             if let Some(a) = app() {
@@ -1409,47 +1265,6 @@ impl App {
         }
     }
 
-    /// Checkbox items that keep the menu open when clicked; returns new state.
-    fn sticky_state(&self, id: usize) -> Option<bool> {
-        let s = &self.m.s;
-        match id {
-            ID_SPARK => Some(s.sparklines),
-            ID_LABELS => Some(s.labels),
-            ID_STACKED => Some(s.stacked_for(&self.taskbars.first().map(|t| t.key()).unwrap_or_default())),
-            ID_AUTOSTACK => Some(s.auto_stack),
-            _ if (ID_STACK_DISP..ID_STACK_DISP + MAX_DISPLAYS).contains(&id) => {
-                self.taskbars.get(id - ID_STACK_DISP).map(|t| s.stacked_for(&t.key()))
-            }
-            _ if (ID_METRIC..ID_METRIC + Metric::ALL.len()).contains(&id) => Some(s.show[id - ID_METRIC]),
-            _ => None,
-        }
-    }
-
-    fn toggle_display(&mut self, i: usize) {
-        let Some(t) = self.taskbars.get(i).copied() else { return };
-        let mut on: Vec<String> = self
-            .taskbars
-            .iter()
-            .filter(|o| self.m.s.wants_display(&o.key(), o.primary))
-            .map(|o| o.key())
-            .collect();
-        let key = t.key();
-        if let Some(p) = on.iter().position(|k| *k == key) {
-            on.remove(p);
-        } else {
-            on.push(key);
-        }
-        let all = self.taskbars.iter().all(|o| on.contains(&o.key()));
-        let primary_only = on.len() == 1 && self.taskbars.iter().any(|o| o.primary && o.key() == on[0]);
-        self.m.s.displays = if on.is_empty() || primary_only {
-            "primary".into()
-        } else if all {
-            "all".into()
-        } else {
-            on.join(",")
-        };
-    }
-
     /// The Achievements window (tray menu entry, or `--achievements` on the command line).
     pub fn open_achievements(&mut self) {
         self.command(ID_ACHIEVE);
@@ -1457,68 +1272,56 @@ impl App {
 
     fn command(&mut self, id: usize) {
         match id {
-            ID_SETTINGS => return crate::settings_ui::open(self),
+            ID_WEBSITE => shell_open(WEBSITE, None),
+            ID_SETTINGS => crate::settings_ui::open(self),
             ID_ACHIEVE => {
                 let st = self.ach.state().clone();
-                return crate::achievements::ui::open(self.hwnd, &st, self.m.dark);
+                crate::achievements::ui::open(self.hwnd, &st, self.m.dark);
             }
-            ID_REPORT => return report::open(self),
-            ID_TASKMGR => return shell_open("taskmgr.exe", None),
-            ID_UPDATE_NOW => {
+            ID_TASKMGR => shell_open("taskmgr.exe", None),
+            ID_EXIT => unsafe {
+                DestroyWindow(self.hwnd);
+            },
+            ID_VISIBLE => {
+                self.m.s.visible = !self.m.s.visible;
+                self.save_settings();
+                self.apply_settings();
+            }
+            _ => {}
+        }
+    }
+
+    /// Actions of the Settings window that act on the app rather than on its
+    /// copy of the settings.
+    pub fn run(&mut self, cmd: Cmd) {
+        match cmd {
+            Cmd::Website => return shell_open(WEBSITE, None),
+            Cmd::Report => return report::open(self),
+            Cmd::CheckUpdates => {
                 crate::update_ui::show(self, "Checking GitHub for a newer version\u{2026}", Some(0.0), true);
                 return crate::update::check(self.hwnd as isize, true);
             }
-            ID_RECHECK => {
+            Cmd::RecheckIcons => {
                 if let Some(w) = &self.icons {
                     w.kick();
                 }
                 return;
             }
-            ID_AUTOSTART => return crate::autostart::set(!crate::autostart::enabled()),
-            ID_EDIT => {
+            Cmd::EditSettings => {
                 self.save_settings();
                 return shell_open("notepad.exe", Some(&format!("\"{}\"", Settings::path().display())));
             }
-            ID_DATA => {
+            Cmd::DataFolder => {
                 self.m.usage.save();
                 return shell_open(&data_dir().display().to_string(), None);
             }
-            ID_EXIT => {
-                unsafe { DestroyWindow(self.hwnd) };
-                return;
-            }
             _ => {}
-        }
-        if (ID_DISP..ID_DISP + MAX_DISPLAYS).contains(&id) {
-            self.toggle_display(id - ID_DISP);
-            self.save_settings();
-            self.apply_settings();
-            return;
         }
         let first = self.overlays.first().map(|o| (o.pos, o.tb));
         let s = &mut self.m.s;
-        match id {
-            ID_VISIBLE => s.visible = !s.visible,
-            ID_SPARK => s.sparklines = !s.sparklines,
-            ID_LABELS => s.labels = !s.labels,
-            ID_STACKED => {
-                // Single display: this is the default for every display.
-                s.stacked = !s.stacked;
-                s.stacked_on.clear();
-            }
-            ID_AUTOSTACK => s.auto_stack = !s.auto_stack,
-            ID_AUTOUPDATE => s.auto_update = !s.auto_update,
-            _ if (ID_STACK_DISP..ID_STACK_DISP + MAX_DISPLAYS).contains(&id) => {
-                if let Some(t) = self.taskbars.get(id - ID_STACK_DISP) {
-                    let k = t.key();
-                    let on = !s.stacked_for(&k);
-                    s.set_stacked(&k, on);
-                }
-            }
-            ID_FULLSCREEN => s.hide_fullscreen = !s.hide_fullscreen,
-            ID_CLICKTHRU => s.click_through = !s.click_through,
-            ID_DOCK => s.mode = Mode::Dock,
-            ID_FLOAT => {
+        match cmd {
+            Cmd::Dock => s.mode = Mode::Dock,
+            Cmd::Float => {
                 if s.mode != Mode::Float {
                     s.mode = Mode::Float;
                     if let Some((pos, _)) = first {
@@ -1527,7 +1330,7 @@ impl App {
                     }
                 }
             }
-            ID_RESET_POS => {
+            Cmd::ResetPosition => {
                 s.dock_offset = 0;
                 s.offsets.clear();
                 if let Some((_, tb)) = first {
@@ -1535,33 +1338,28 @@ impl App {
                     s.float_y = tb.work.b - 80;
                 }
             }
-            ID_DISP_PRIMARY => s.displays = "primary".into(),
-            ID_DISP_ALL => s.displays = "all".into(),
-            ID_ADAPTER => s.adapter.clear(),
-            _ if (ID_METRIC..ID_METRIC + Metric::ALL.len()).contains(&id) => {
-                let i = id - ID_METRIC;
-                s.show[i] = !s.show[i];
-            }
-            _ if (ID_UNIT..ID_UNIT + SpeedUnit::ALL.len()).contains(&id) => s.unit = SpeedUnit::ALL[id - ID_UNIT],
-            _ if (ID_ADAPTER + 1..=ID_ADAPTER + MAX_ADAPTERS).contains(&id) => {
-                if let Some(a) = self.adapters.get(id - ID_ADAPTER - 1) {
-                    s.adapter = a.alias.clone();
-                }
-            }
-            _ if (ID_INTERVAL..ID_INTERVAL + INTERVALS.len()).contains(&id) => {
-                s.interval_ms = INTERVALS[id - ID_INTERVAL].1
-            }
-            _ if (ID_THEME..ID_THEME + 3).contains(&id) => {
-                s.theme = [Theme::Auto, Theme::Dark, Theme::Light][id - ID_THEME]
-            }
-            _ if (ID_SIZE..ID_SIZE + TEXT_SIZES.len()).contains(&id) => s.text_scale = TEXT_SIZES[id - ID_SIZE].1,
-            _ if (ID_BG..ID_BG + BACKGROUNDS.len()).contains(&id) => s.bg_opacity = BACKGROUNDS[id - ID_BG].1,
-            _ if (ID_FONT..ID_FONT + FONTS.len()).contains(&id) => s.font = FONTS[id - ID_FONT].1.to_string(),
-            _ if (ID_MAXW..ID_MAXW + MAX_WIDTHS.len()).contains(&id) => s.max_width_pct = MAX_WIDTHS[id - ID_MAXW].1,
             _ => return,
         }
         self.save_settings();
         self.apply_settings();
+    }
+
+    /// Taskbars that can get a widget: (settings key, label, primary), for the Settings window.
+    pub fn displays(&self) -> Vec<(String, String, bool)> {
+        self.taskbars
+            .iter()
+            .take(MAX_DISPLAYS)
+            .map(|t| {
+                let label = format!(
+                    "{}{}  ({}\u{00D7}{})",
+                    t.label(),
+                    if t.primary { " \u{2014} main" } else { "" },
+                    t.monitor.w(),
+                    t.monitor.h()
+                );
+                (t.key(), label, t.primary)
+            })
+            .collect()
     }
 
     // ---------------------------------------------------------------- mouse
@@ -1707,84 +1505,33 @@ impl App {
     }
 }
 
-const ID_METRIC: usize = 100;
-const ID_UNIT: usize = 200;
-const ID_ADAPTER: usize = 300;
-const MAX_ADAPTERS: usize = 40;
-const ID_INTERVAL: usize = 400;
-const ID_THEME: usize = 450;
-const ID_SIZE: usize = 500;
-const ID_BG: usize = 550;
+/// Emulsion Labs website, opened from the tray menu header and Settings > About.
+pub const WEBSITE: &str = "https://emulsionlabs.in/";
+
+/// What the Settings window can ask the app to do.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Cmd {
+    Website,
+    Report,
+    CheckUpdates,
+    RecheckIcons,
+    EditSettings,
+    DataFolder,
+    Dock,
+    Float,
+    ResetPosition,
+}
+
+// Tray menu items.
 const ID_VISIBLE: usize = 600;
-const ID_SPARK: usize = 601;
-const ID_LABELS: usize = 602;
-const ID_FULLSCREEN: usize = 603;
-const ID_CLICKTHRU: usize = 604;
-const ID_DOCK: usize = 605;
-const ID_FLOAT: usize = 606;
-const ID_RESET_POS: usize = 607;
-const ID_STACKED: usize = 608;
-const ID_AUTOSTACK: usize = 610;
-const ID_AUTOUPDATE: usize = 611;
-const ID_UPDATE_NOW: usize = 612;
-const ID_STACK_DISP: usize = 1000;
-const ID_MAXW: usize = 900;
-const ID_FONT: usize = 950;
-const FONTS: [(&str, &str); 5] = [
-    ("Default (Segoe UI Variable)", ""),
-    ("Segoe UI", "Segoe UI"),
-    ("Cascadia Mono (fixed-width digits)", "Cascadia Mono"),
-    ("Consolas", "Consolas"),
-    ("Bahnschrift", "Bahnschrift"),
-];
-const ID_RECHECK: usize = 609;
-const MAX_WIDTHS: [(&str, u32); 5] =
-    [("Auto (don't cover app icons)", 0), ("20% of taskbar", 20), ("30% of taskbar", 30), ("40% of taskbar", 40), ("50% of taskbar", 50)];
-const ID_REPORT: usize = 700;
 const ID_TASKMGR: usize = 701;
-const ID_AUTOSTART: usize = 702;
-const ID_EDIT: usize = 703;
-const ID_DATA: usize = 704;
 const ID_EXIT: usize = 705;
 const ID_SETTINGS: usize = 706;
+const ID_WEBSITE: usize = 707;
 const ID_ACHIEVE: usize = 799;
-const ID_DISP_PRIMARY: usize = 800;
-const ID_DISP_ALL: usize = 801;
-const ID_DISP: usize = 810;
 const MAX_DISPLAYS: usize = 16;
 
-const INTERVALS: [(&str, u32); 4] = [("0.5 s", 500), ("1 s", 1000), ("2 s", 2000), ("5 s", 5000)];
-const TEXT_SIZES: [(&str, u32); 4] = [("Small", 90), ("Normal", 100), ("Large", 115), ("Extra large", 130)];
-const BACKGROUNDS: [(&str, u8); 4] = [("None", 0), ("Subtle", 90), ("Strong", 180), ("Solid", 255)];
 const NIN_KEYSELECT_: u32 = NIN_SELECT | 1;
-
-/// Runs inside the menu's modal loop. A click (or Space/Enter) on a checkbox
-/// item toggles it in place and is swallowed, so the menu stays open.
-unsafe extern "system" fn menu_filter(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
-    if code == MSGF_MENU as i32 && l != 0 {
-        let msg = &*(l as *const MSG);
-        let key = msg.message == WM_KEYDOWN && (msg.wParam == VK_RETURN as usize || msg.wParam == VK_SPACE as usize);
-        if msg.message == WM_LBUTTONUP || key {
-            if let Some(a) = app() {
-                let (hm, id) = a.menu_sel;
-                let over = key || {
-                    let pos = MenuItemFromPoint(std::ptr::null_mut(), hm, msg.pt);
-                    pos >= 0 && GetMenuItemID(hm, pos) as usize == id
-                };
-                if !hm.is_null() && over && a.sticky_state(id).is_some() {
-                    a.command(id);
-                    let on = a.sticky_state(id).unwrap_or(false);
-                    CheckMenuItem(hm, id as u32, MF_BYCOMMAND | if on { MF_CHECKED } else { MF_UNCHECKED });
-                    if !msg.hwnd.is_null() {
-                        InvalidateRect(msg.hwnd, std::ptr::null(), 1);
-                    }
-                    return 1;
-                }
-            }
-        }
-    }
-    CallNextHookEx(std::ptr::null_mut(), code, w, l)
-}
 
 unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match msg {
@@ -1958,16 +1705,6 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             if changed {
                 a.refresh(true);
             }
-            0
-        }
-        WM_MENUSELECT => {
-            // Remember the highlighted item for the menu filter (popups have no id).
-            let flags = (w >> 16) as u32 & 0xFFFF;
-            a.menu_sel = if flags & MF_POPUP == 0 && flags != 0xFFFF {
-                (l as HMENU, loword(w) as usize)
-            } else {
-                (std::ptr::null_mut(), 0)
-            };
             0
         }
         WM_DISPLAYCHANGE | WM_DPICHANGED => {

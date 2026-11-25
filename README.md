@@ -32,13 +32,13 @@ Docked beside the tray, on the taskbar:
 | Top process | `NtQuerySystemInformation` |
 | Battery | `GetSystemPowerStatus` |
 
-Pick any combination from **right-click → Metrics**. Default: CPU, RAM, GPU, ▲, ▼, today's download.
+Pick any combination in **Settings → Metrics**. Default: CPU, RAM, GPU, ▲, ▼, today's download.
 
 ## Smart overlay
 
 - **Auto-docks** next to the tray. Follows the taskbar: bottom, top, left, right, any DPI, small/large taskbar, Explorer restarts.
-- **Multi-monitor**: a widget on every taskbar, or only the ones you pick (right-click → *Displays*). Needs Windows' "Show my taskbar on all displays". Each display keeps its own drag position; mixed DPI is handled per monitor.
-- **Never covers your app icons**: at startup it asks the taskbar (UI Automation) where its buttons end and keeps the widget in the free space. Too many metrics? It compacts step by step — one line → pairs stacked (▲ over ▼, CPU over RAM) → groups share columns → no sparklines — and anything that still doesn't fit moves to the hover panel (shown as “+N”). Opened lots of apps? Right-click → Appearance → *Re-check taskbar icons*.
+- **Multi-monitor**: a widget on every taskbar, or only the ones you pick (Settings → General → *Displays*). Needs Windows' "Show my taskbar on all displays". Each display keeps its own drag position; mixed DPI is handled per monitor.
+- **Never covers your app icons**: at startup it asks the taskbar (UI Automation) where its buttons end and keeps the widget in the free space. Too many metrics? It compacts step by step — one line → pairs stacked (▲ over ▼, CPU over RAM) → groups share columns → no sparklines — and anything that still doesn't fit moves to the hover panel (shown as “+N”). Opened lots of apps? Settings → General → *Taskbar icons → Re-check*.
 - **No background polling**: besides reading the metrics each interval, everything is event-driven — taskbar moves, auto-hide, full-screen apps, theme and settings-file changes all arrive as Windows notifications.
 - **Part of the taskbar**: the docked widget is a child window of its taskbar (like a deskband), so it moves with it, hides with it behind full-screen apps, and clicks on another monitor never affect it.
 - **Hides itself** for full-screen games, videos and presentations — decided per monitor from the window's real (DWM) bounds, ignoring shell surfaces like Start, Search, Alt-Tab and flyouts.
@@ -56,19 +56,19 @@ Pick any combination from **right-click → Metrics**. Default: CPU, RAM, GPU, �
 
 - Counted from interface byte counters, so totals are exact regardless of the update interval.
 - Physical adapters only — no double counting through VPN/filter/virtual adapters. Or choose one adapter.
-- **Report** (right-click → *Data usage report*, double-click the tray icon, or `ResourceMonitor.exe --report`):
+- **Report** (Settings → Data → *Open data usage report*, double-click the tray icon, or `ResourceMonitor.exe --report`):
   today, yesterday, this/last month, year, all time, last-30-days chart, monthly and yearly tables.
 - **Monthly data cap**: set `data_cap_gb` and `cap_reset_day` in the settings file → progress bar, and the widget turns amber/red as you approach it.
 - Stored in `%LOCALAPPDATA%\ResourceMonitor\usage.csv` (plain CSV, atomic writes, saved every minute and on sleep/shutdown).
 
 ## Updates
 
-The app updates itself: once at startup it asks GitHub for the latest release, downloads the new `ResourceMonitor.exe`, checks its SHA-256 against the digest GitHub publishes, swaps it in and restarts (you get a “Updated to vX” notification). Nothing runs on a timer. Right-click → *Check for updates now* any time, or untick *Update automatically*. If the app lives in a folder it can't write to (e.g. Program Files), it tells you and opens the download page instead.
+The app updates itself: once at startup it asks GitHub for the latest release, downloads the new `ResourceMonitor.exe`, checks its SHA-256 against the digest GitHub publishes, swaps it in and restarts (you get a “Updated to vX” notification). Nothing runs on a timer. Settings → About → *Check for updates* any time, or turn off *Update automatically*. If the app lives in a folder it can't write to (e.g. Program Files), it tells you and opens the download page instead.
 
 ## Install
 
 1. Download `ResourceMonitor.exe` (portable) or `Setup_ResourceMonitor.exe` (per-user install, no admin, into `%LOCALAPPDATA%\Programs\Emulsion Labs\Resource Monitor`, Start Menu folder *Emulsion Labs*) from [Releases](../../releases).
-2. Run it. Right-click the widget or tray icon → **Start with Windows**.
+2. Run it. Right-click the widget or tray icon → **Settings…** → turn on **Start with Windows**.
 
 Upgrading from a pre-2.13 install: Setup moves it from `...\Programs\Resource Monitor` into the Emulsion Labs folder, replaces the old shortcuts and removes the old folder. Settings and history stay where they are.
 
@@ -76,7 +76,7 @@ Upgrading from the old .NET version: settings and data usage history are importe
 
 ## Settings
 
-Right-click → **Settings…** opens a native settings window (General, Metrics with drag-free reordering, Colours with the Windows colour picker, Alerts, Data). Most options are also in the right-click menu. Everything is also in `%LOCALAPPDATA%\ResourceMonitor\settings.ini` (menu → *Edit settings file*); edits apply within a few seconds.
+Right-click → **Settings…** opens a native settings window (General, Metrics with drag-free reordering, Colours with the Windows colour picker, Alerts, Data, About). The right-click menu stays short: the *Resource Monitor by Emulsion Labs* header opens the website, then Show widget, Settings, Achievements, Task Manager and Exit. Everything is also in `%LOCALAPPDATA%\ResourceMonitor\settings.ini` (Settings → About → *Settings file*); edits apply within a few seconds.
 
 | Key | Meaning |
 |---|---|
