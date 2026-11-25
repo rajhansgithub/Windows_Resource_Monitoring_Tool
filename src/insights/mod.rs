@@ -341,6 +341,7 @@ impl Insights {
         m.insert("sleep".into(), self.sleep.save());
         m.insert("baseline".into(), self.baseline.save());
         m.insert("ghost".into(), self.ghost.save());
+        m.insert("held".into(), self.held.save());
         Json::Obj(m)
     }
 
@@ -357,6 +358,7 @@ impl Insights {
         if let Some(x) = j.get("ghost") {
             self.ghost.load(x);
         }
+        if let Some(x) = j.get("held") { self.held.load(x); }
     }
 }
 
