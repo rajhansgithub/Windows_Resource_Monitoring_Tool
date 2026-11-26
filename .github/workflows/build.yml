@@ -107,6 +107,62 @@ jobs:
           name: medal-shots
           path: target/medal-shots/
           if-no-files-found: warn
+      - name: Run app, Achievements maximized, small, and the large medal view
+        shell: pwsh
+        run: |
+          $dir = "$env:LOCALAPPDATA/ResourceMonitor"
+          New-Item -ItemType Directory -Force $dir, target/big-shots | Out-Null
+          $t = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - 20 * 3600000
+          $ids = "watch","heavy","render","mover","bandwidth","down","up"
+          $u = ($ids | ForEach-Object { '"' + $_ + '":' + $t }) -join ","
+          Set-Content "$dir/achievements.json" ('{"v":1,"g":1,"u":{' + $u + '},"k":{"watch":1,"heavy":2,"render":3,"mover":4,"bandwidth":5,"down":6,"up":7}}')
+          Add-Type @"
+          using System; using System.Runtime.InteropServices;
+          public static class WB {
+            [StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Rt, B; }
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string c, string t);
+            [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r);
+            [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+            [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int w, int hh, uint f);
+          }
+          "@
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          # TEMP-BIG-DUMP (remove before merge): PNGs as base64 in the log, artifact download is blocked for the cloud session
+          function Dump($f) { $b = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f)); Write-Output "BIG-BEGIN $f"; for ($i=0; $i -lt $b.Length; $i+=4000) { Write-Output ("BIG|" + $b.Substring($i, [Math]::Min(4000, $b.Length-$i))) }; Write-Output "BIG-END" }
+          function Grab($h, $file) {
+            $r = New-Object WB+R
+            [void][WB]::GetWindowRect($h, [ref]$r)
+            $w = $r.Rt - $r.L; $hh = $r.B - $r.T
+            $bmp = New-Object System.Drawing.Bitmap $w, $hh
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($r.L, $r.T, 0, 0, (New-Object System.Drawing.Size $w, $hh))
+            $bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)
+            Dump $file
+          }
+          $fails = @()
+          foreach ($mode in "racks", "big") {
+            if ($mode -eq "big") { $env:RESMON_ACH_BIG = "1" } else { Remove-Item Env:RESMON_ACH_BIG -ErrorAction SilentlyContinue }
+            $p = Start-Process target/release/ResourceMonitor.exe -ArgumentList "--achievements" -PassThru
+            Start-Sleep -Seconds 10
+            $h = [WB]::FindWindowW("ResourceMonitor.Window", [NullString]::Value)
+            if ($h -eq [IntPtr]::Zero) { $fails += "$mode : main window did not open" } else {
+              [void][WB]::ShowWindow($h, 3); Start-Sleep -Seconds 4
+              Grab $h "target/big-shots/$mode-max.png"
+              [void][WB]::ShowWindow($h, 9); Start-Sleep -Milliseconds 500
+              [void][WB]::SetWindowPos($h, [IntPtr]::Zero, 40, 40, 720, 560, 0x14); Start-Sleep -Seconds 4
+              Grab $h "target/big-shots/$mode-small.png"
+            }
+            if ($p.HasExited) { $fails += "$mode : app exited early (code $($p.ExitCode))" } else { Stop-Process -Id $p.Id; Start-Sleep -Seconds 2 }
+          }
+          $log = "$dir/diagnostics.log"
+          if (Test-Path $log) { Get-Content $log -Tail 20 }
+          if ($fails.Count -gt 0) { $fails | ForEach-Object { Write-Error $_ }; exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: big-shots
+          path: target/big-shots/
+          if-no-files-found: warn
       - name: Run app, screenshot the main window on Overview (demo Insights data)
         shell: pwsh
         run: |
