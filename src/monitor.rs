@@ -936,7 +936,8 @@ impl Draw<'_> {
             if tw <= 0.0 || th <= 0.0 {
                 continue;
             }
-            let score = (tw / th).ln().abs() + if n % cols != 0 { 0.15 } else { 0.0 };
+            // A short last row reads as a missing core: avoid it unless nothing else fits.
+            let score = (tw / th).ln().abs() + if n % cols != 0 { 1.0 } else { 0.0 };
             if score < best.0 {
                 best = (score, cols);
             }

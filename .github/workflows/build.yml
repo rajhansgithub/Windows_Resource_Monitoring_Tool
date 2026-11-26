@@ -333,6 +333,8 @@ jobs:
             [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r);
             [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
             [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int w, int hh, uint f);
+            [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+            [DllImport("user32.dll")] public static extern void mouse_event(uint f, int x, int y, uint d, UIntPtr e);
           }
           "@
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
@@ -353,6 +355,15 @@ jobs:
             $job = Start-Job { $e = (Get-Date).AddSeconds(14); while ((Get-Date) -lt $e) { [math]::Sqrt(12345) | Out-Null } }
             [void][W5]::ShowWindow($h, 3); Start-Sleep -Seconds 16
             Grab $h "target/monitor-shots/max.png"
+            # Scroll down the page: memory, GPU, disks, network, processes.
+            $r = New-Object W5+R
+            [void][W5]::GetWindowRect($h, [ref]$r)
+            [void][W5]::SetCursorPos([int](($r.L + $r.Rt) / 2 + 100), [int](($r.T + $r.B) / 2))
+            foreach ($k in 1..3) {
+              [W5]::mouse_event(0x0800, 0, 0, [uint32](-600 -band 0xFFFFFFFF), [UIntPtr]::Zero); Start-Sleep -Seconds 2
+              Grab $h "target/monitor-shots/max-scroll$k.png"
+            }
+            [W5]::mouse_event(0x0800, 0, 0, 3600, [UIntPtr]::Zero); Start-Sleep -Seconds 1
             [void][W5]::ShowWindow($h, 9); Start-Sleep -Milliseconds 500
             [void][W5]::SetWindowPos($h, [IntPtr]::Zero, 40, 40, 900, 760, 0x14); Start-Sleep -Seconds 3
             Grab $h "target/monitor-shots/small.png"
