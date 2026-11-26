@@ -72,4 +72,44 @@ impl Gpu {
         });
         (util, vram)
     }
+
+    /// Per engine type the busiest engine (summed over processes), and per process its busiest
+    /// engine. Reads the same counter as `sample` (no extra PDH work). Engine types are
+    /// sorted with 3D first.
+    pub fn detail(&mut self, types: &mut Vec<(String, f32)>, per_pid: &mut Vec<(u32, f32)>) {
+        types.clear();
+        per_pid.clear();
+        let Some(c) = &self.util else { return };
+        // (engine key, engine type, summed utilisation)
+        let mut eng: Vec<(u64, String, f64)> = Vec::new();
+        c.for_each(&mut self.buf, |name, v| {
+            let s = String::from_utf16_lossy(name);
+            let ty = s.split_once("engtype_").map_or("", |x| x.1).to_string();
+            let key = engine_key(name);
+            match eng.iter_mut().find(|e| e.0 == key) {
+                Some(e) => e.2 += v,
+                None => eng.push((key, ty, v)),
+            }
+            let pid = s.strip_prefix("pid_").and_then(|r| r.split('_').next()).and_then(|p| p.parse::<u32>().ok());
+            if let Some(pid) = pid {
+                let v = v.clamp(0.0, 100.0) as f32;
+                match per_pid.iter_mut().find(|p| p.0 == pid) {
+                    Some(p) => p.1 = p.1.max(v),
+                    None => per_pid.push((pid, v)),
+                }
+            }
+        });
+        for (_, ty, v) in eng {
+            if ty.is_empty() {
+                continue;
+            }
+            let v = v.clamp(0.0, 100.0) as f32;
+            match types.iter_mut().find(|t| t.0 == ty) {
+                Some(t) => t.1 = t.1.max(v),
+                None => types.push((ty, v)),
+            }
+        }
+        let rank = |t: &str| ["3D", "Copy", "VideoDecode", "VideoEncode", "Compute_0", "Compute_1"].iter().position(|x| *x == t).unwrap_or(9);
+        types.sort_by(|a, b| rank(&a.0).cmp(&rank(&b.0)).then_with(|| a.0.cmp(&b.0)));
+    }
 }
