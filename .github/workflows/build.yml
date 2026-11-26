@@ -72,7 +72,7 @@ jobs:
           name: medal-shots
           path: target/medal-shots/
           if-no-files-found: warn
-      - name: Run app, screenshot Insights window (demo data)
+      - name: Run app, screenshot the main window on Overview (demo Insights data)
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force target/insights-shots | Out-Null
@@ -88,7 +88,9 @@ jobs:
           $env:RESMON_INSIGHTS_DEMO = "1"
           $p = Start-Process target/release/ResourceMonitor.exe -ArgumentList "--insights" -PassThru
           Start-Sleep -Seconds 8
-          $h = [W2]::FindWindowW("ResourceMonitor.Insights", [NullString]::Value)
+          # One main window: class ResourceMonitor.Main, caption "Resource Monitor".
+          $h = [W2]::FindWindowW("ResourceMonitor.Main", [NullString]::Value)
+          if ($h -eq [IntPtr]::Zero) { $h = [W2]::FindWindowW([NullString]::Value, "Resource Monitor") }
           if ($h -ne [IntPtr]::Zero) {
             $r = New-Object W2+R
             [void][W2]::GetWindowRect($h, [ref]$r)
@@ -96,13 +98,16 @@ jobs:
             $bmp = New-Object System.Drawing.Bitmap $w, $hh
             $g = [System.Drawing.Graphics]::FromImage($bmp)
             $g.CopyFromScreen($r.L, $r.T, 0, 0, (New-Object System.Drawing.Size $w, $hh))
-            $bmp.Save("target/insights-shots/insights.png", [System.Drawing.Imaging.ImageFormat]::Png)
+            $bmp.Save("target/insights-shots/main-overview.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          }
+          if ([W2]::FindWindowW("ResourceMonitor.Insights", [NullString]::Value) -ne [IntPtr]::Zero) {
+            Write-Error "a separate Insights window opened"; exit 1
           }
           $log = "$env:LOCALAPPDATA/ResourceMonitor/diagnostics.log"
           if (Test-Path $log) { Get-Content $log -Tail 30 }
           if ($p.HasExited) { Write-Error "app exited early (code $($p.ExitCode))"; exit 1 }
           Stop-Process -Id $p.Id
-          if ($h -eq [IntPtr]::Zero) { Write-Error "Insights window did not open"; exit 1 }
+          if ($h -eq [IntPtr]::Zero) { Write-Error "Main window did not open"; exit 1 }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
