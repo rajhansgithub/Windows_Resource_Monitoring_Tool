@@ -33,7 +33,14 @@ pub struct Pal {
     pub line: Rgba,
 }
 
+/// Light theme base colours (eggshell), shared by every window and the widget.
+pub const EGG_BG: Rgba = Rgba::rgb(0xEF, 0xEA, 0xDF);
+pub const EGG_CARD: Rgba = Rgba::rgb(0xF8, 0xF4, 0xEA);
+pub const EGG_FG: Rgba = Rgba::rgb(0x2A, 0x26, 0x20);
+pub const EGG_DIM: Rgba = Rgba::rgb(0x67, 0x5F, 0x53);
+
 /// See docs/ui-reference: near-black base, raised cards, hairline borders.
+/// Light is eggshell rather than white: easier on the eyes.
 pub fn palette(dark: bool) -> Pal {
     if dark {
         Pal {
@@ -48,14 +55,15 @@ pub fn palette(dark: bool) -> Pal {
         }
     } else {
         Pal {
-            bg: Rgba::rgb(243, 243, 243),
-            card: Rgba::rgb(255, 255, 255),
-            chip: Rgba::rgb(235, 235, 235),
-            border: Rgba::rgb(222, 222, 222),
-            track: Rgba::rgb(228, 228, 228),
-            fg: Rgba::rgb(26, 26, 26),
-            dim: Rgba::rgb(100, 100, 100),
-            line: Rgba::rgb(224, 224, 224),
+            // Eggshell: warm and soft instead of bright white.
+            bg: EGG_BG,
+            card: EGG_CARD,
+            chip: Rgba::rgb(0xE6, 0xE0, 0xD2),
+            border: Rgba::rgb(0xDC, 0xD5, 0xC6),
+            track: Rgba::rgb(0xE0, 0xD9, 0xCA),
+            fg: EGG_FG,
+            dim: EGG_DIM,
+            line: Rgba::rgb(0xDC, 0xD5, 0xC6),
         }
     }
 }
@@ -140,7 +148,8 @@ unsafe fn acrylic_accent(hwnd: HWND, dark: bool) -> bool {
     let Some(f) = GetProcAddress(user32, b"SetWindowCompositionAttribute\0".as_ptr()) else { return false };
     let set: SetWca = std::mem::transmute(f);
     // Same tint strength as Windows flyouts: dark #202020 / light #F3F3F3 at ~70%.
-    let tint = if dark { 0xB320_2020u32 } else { 0xB3F3_F3F3u32 };
+    // Light: eggshell #EFEADF, a little stronger so the warm tone carries.
+    let tint = if dark { 0xB320_2020u32 } else { 0xC8DF_EAEFu32 };
     let mut policy = AccentPolicy { state: ACCENT_ENABLE_ACRYLICBLURBEHIND, flags: 2, color: tint, animation: 0 };
     let mut data = CompositionData {
         attribute: WCA_ACCENT_POLICY,

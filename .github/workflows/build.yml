@@ -207,6 +207,8 @@ jobs:
             "$d,$sent,$recv"
           }
           Set-Content "$dir/usage.csv" ($rows -join "`n")
+          # Taskbar widget with meters (later lines win in settings.ini).
+          Add-Content "$dir/settings.ini" "`nlabel_style = meters`ntheme = dark`n"
           Add-Type @"
           using System; using System.Runtime.InteropServices;
           public static class W4 {
@@ -223,9 +225,9 @@ jobs:
           # A second launch asks the running app to show the panel, pinned.
           Start-Process target/release/ResourceMonitor.exe; Start-Sleep -Seconds 3
           $h = [W4]::FindWindowW("ResourceMonitor.Popup", [NullString]::Value)
-          function Grab($file) {
+          function Grab($file, $win = $h) {
             $r = New-Object W4+R
-            [void][W4]::GetWindowRect($h, [ref]$r)
+            [void][W4]::GetWindowRect($win, [ref]$r)
             $w = $r.Rt - $r.L; $hh = $r.B - $r.T
             $bmp = New-Object System.Drawing.Bitmap $w, $hh
             $g = [System.Drawing.Graphics]::FromImage($bmp)
@@ -242,6 +244,13 @@ jobs:
             [W4]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 400
             [void][W4]::SetCursorPos($r.L + 300, $r.T + 240); Start-Sleep -Seconds 1
             Grab "target/popup-shots/popup-hover.png"
+            $ov = [W4]::FindWindowW("ResourceMonitor.Overlay", [NullString]::Value)
+            if ($ov -ne [IntPtr]::Zero) { Grab "target/popup-shots/widget-meters.png" $ov }
+            # Light (eggshell) theme, meters and text on the widget.
+            Add-Content "$dir/settings.ini" "`nlabel_style = both`ntheme = light`n"
+            Start-Sleep -Seconds 6
+            Grab "target/popup-shots/popup-light.png"
+            if ($ov -ne [IntPtr]::Zero) { Grab "target/popup-shots/widget-both.png" $ov }
             # TEMP (drop before merge): screenshots into the log, base64 between markers.
             foreach ($f in Get-ChildItem target/popup-shots/*.png) {
               "POPUP-BEGIN $($f.Name)"; [Convert]::ToBase64String([IO.File]::ReadAllBytes($f.FullName)) -split '(.{1,4000})' | Where-Object { $_ } | ForEach-Object { "POPUP|$_" }; "POPUP-END"
