@@ -334,7 +334,7 @@ jobs:
             [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
             [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int w, int hh, uint f);
             [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
-            [DllImport("user32.dll")] public static extern void mouse_event(uint f, int x, int y, uint d, UIntPtr e);
+            [DllImport("user32.dll")] public static extern void mouse_event(uint f, int x, int y, int d, UIntPtr e);
           }
           "@
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
@@ -360,7 +360,7 @@ jobs:
             [void][W5]::GetWindowRect($h, [ref]$r)
             [void][W5]::SetCursorPos([int](($r.L + $r.Rt) / 2 + 100), [int](($r.T + $r.B) / 2))
             foreach ($k in 1..3) {
-              [W5]::mouse_event(0x0800, 0, 0, [uint32](-600 -band 0xFFFFFFFF), [UIntPtr]::Zero); Start-Sleep -Seconds 2
+              [W5]::mouse_event(0x0800, 0, 0, -600, [UIntPtr]::Zero); Start-Sleep -Seconds 2
               Grab $h "target/monitor-shots/max-scroll$k.png"
             }
             [W5]::mouse_event(0x0800, 0, 0, 3600, [UIntPtr]::Zero); Start-Sleep -Seconds 1
