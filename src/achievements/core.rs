@@ -1338,6 +1338,115 @@ impl State {
 }
 
 // ---------------------------------------------------------------------------
+// Goals (the Server Room page, the Overview card, the nav chip, the tray tip)
+// ---------------------------------------------------------------------------
+
+/// The next tier of one ladder: how far along it is and what it pays.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Goal {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// Tier this goal reaches (1 = Bronze .. 7 = Emulsion).
+    pub tier: u8,
+    /// Count now, the previous threshold and the goal's threshold (in the badge's unit, fractional).
+    pub have: f64,
+    pub from: u64,
+    pub to: u64,
+    pub unit: &'static str,
+    /// XP the tier pays.
+    pub xp: u32,
+}
+
+impl Goal {
+    /// 0..1 along the way from the previous tier.
+    pub fn frac(&self) -> f32 {
+        let span = (self.to - self.from).max(1) as f64;
+        ((self.have - self.from as f64) / span).clamp(0.0, 1.0) as f32
+    }
+    /// How much is still missing, in the badge's unit.
+    pub fn left(&self) -> f64 {
+        (self.to as f64 - self.have).max(0.0)
+    }
+    pub fn tier_name(&self) -> &'static str {
+        TIER_NAMES[(self.tier.clamp(1, 7) - 1) as usize]
+    }
+}
+
+/// An amount in a badge's unit, short: "12 GB", "19 h", "1 alert", "3 tasks".
+pub fn fmt_amount(n: f64, unit: &str) -> String {
+    let whole = |n: f64| if n > 0.0 && n < 10.0 && n.fract() > 0.05 { format!("{:.1}", n) } else { format!("{}", n.ceil() as u64) };
+    match unit {
+        "hours" => format!("{} h", whole(n)),
+        "GB" if n >= 1000.0 => format!("{:.1} TB", n / 1000.0),
+        "GB" => format!("{} GB", whole(n)),
+        _ => {
+            let v = n.ceil() as u64;
+            let one = unit.strip_suffix('s').unwrap_or(unit);
+            format!("{} {}", v, if v == 1 { one } else { unit })
+        }
+    }
+}
+
+/// A ladder's count in its own unit, with the fraction kept (38.6 GB). 0 for singles.
+pub fn amount_of(s: &State, b: &Badge) -> f64 {
+    if !b.is_ladder() {
+        return 0.0;
+    }
+    counter(s, b.counter) as f64 / b.per.max(1) as f64
+}
+
+/// The next tier of ladder `id`, or None at the top (Ruby is the top until the Emulsion gate opens).
+pub fn goal_of(s: &State, id: &str) -> Option<Goal> {
+    let b = Catalog::get(id).filter(|b| b.is_ladder())?;
+    let k = s.tier(b.id).min(7);
+    if k >= 7 || (k >= 6 && !s.g) {
+        return None;
+    }
+    let to = next_threshold(b, k)?;
+    let from = if k == 0 { 0 } else { b.tiers[(k - 1) as usize] };
+    let have = amount_of(s, b);
+    Some(Goal { id: b.id, name: b.name, tier: k + 1, have, from, to, unit: b.unit, xp: LADDER_XP[k as usize] })
+}
+
+/// The goal closest to done (largest share of its step), ties to the cheaper tier. None when every ladder is at its top.
+pub fn next_goal(s: &State) -> Option<Goal> {
+    Catalog::ladders()
+        .filter_map(|b| goal_of(s, b.id))
+        .max_by(|a, b| a.frac().partial_cmp(&b.frac()).unwrap_or(std::cmp::Ordering::Equal).then(b.tier.cmp(&a.tier)))
+}
+
+/// A rack (set): its certified tier and the members that hold back the next certificate.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RackStatus {
+    pub cert: u8,
+    /// Tier the next certificate needs (None at the top).
+    pub next: Option<u8>,
+    /// Members still below `next`.
+    pub blockers: Vec<&'static str>,
+}
+
+pub fn rack_status(s: &State, set: &Set) -> RackStatus {
+    let cert = set.members.iter().map(|m| s.tier(m)).min().unwrap_or(0).min(7);
+    let top = if s.g { 7 } else { 6 };
+    if cert >= top {
+        return RackStatus { cert, next: None, blockers: Vec::new() };
+    }
+    let next = cert + 1;
+    let blockers = set.members.iter().copied().filter(|m| s.tier(m) < next).collect();
+    RackStatus { cert, next: Some(next), blockers }
+}
+
+/// One line for the tray tip: "Level 3 · 37 / 218 XP · Next: Data Mover, 12 GB to Bronze".
+pub fn tip_line(s: &State) -> String {
+    let (lv, into, need) = level_progress(total_xp(s));
+    let mut t = format!("Level {lv} \u{00B7} {into} / {need} XP");
+    if let Some(g) = next_goal(s) {
+        t.push_str(&format!(" \u{00B7} Next: {}, {} to {}", g.name, fmt_amount(g.left(), g.unit), g.tier_name()));
+    }
+    t
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -2247,5 +2356,40 @@ mod tests {
         let mut stray = State::default();
         stray.ag.insert("ghost:1".into(), Age { start: 1, left: 5.0, web: 1 });
         assert!(normalize(stray).ag.is_empty(), "aging only for earned badges");
+    }
+
+    #[test]
+    fn next_goal_is_the_closest_and_racks_name_their_blockers() {
+        let mut s = State::default();
+        s.c.insert("disk_b".into(), 38 * GB); // Data Mover: 38 of 50 GB (76%)
+        s.c.insert("net_b".into(), 64 * GB); // Bandwidth Bronze, 64 of 100 GB (60% of the step)
+        s.k.insert("bandwidth".into(), 1);
+        s.c.insert("min".into(), 31 * 60); // Watchkeeper Bronze, 31 of 50 h
+        s.k.insert("watch".into(), 1);
+        let g = next_goal(&s).unwrap();
+        assert_eq!((g.id, g.tier, g.from, g.to), ("mover", 1, 0, 50));
+        assert!((g.frac() - 0.76).abs() < 1e-3);
+        assert_eq!(fmt_amount(g.left(), g.unit), "12 GB");
+        assert_eq!(g.xp, LADDER_XP[0]);
+        let bw = goal_of(&s, "bandwidth").unwrap();
+        assert_eq!((bw.tier, bw.from, bw.to), (2, 10, 100));
+        assert!(goal_of(&s, "power_on").is_none());
+        // Flow rack: three at Bronze, Game On not started.
+        for m in ["bandwidth", "down", "up"] {
+            s.k.insert(m.into(), 1);
+        }
+        let r = rack_status(&s, Catalog::set("rack_flow").unwrap());
+        assert_eq!((r.cert, r.next, r.blockers.clone()), (0, Some(1), vec!["gameon"]));
+        s.k.insert("gameon".into(), 2);
+        let r = rack_status(&s, Catalog::set("rack_flow").unwrap());
+        assert_eq!((r.cert, r.next, r.blockers.len()), (1, Some(2), 3));
+        // Ruby is the top until the gate opens.
+        s.k.insert("up".into(), 6);
+        assert!(goal_of(&s, "up").is_none());
+        s.g = true;
+        assert_eq!(goal_of(&s, "up").unwrap().tier, 7);
+        assert!(tip_line(&s).starts_with("Level "));
+        assert_eq!(fmt_amount(1.0, "alerts"), "1 alert");
+        assert_eq!(fmt_amount(0.4, "hours"), "0.4 h");
     }
 }
