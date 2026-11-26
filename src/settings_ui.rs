@@ -53,7 +53,7 @@ use crate::insights::{unix_ms, Panel};
 use crate::nav::{self, Entry, History, Page, Placement};
 use crate::popup::style_window;
 use crate::render::{create_font, measure_dc, ui_face, Canvas, Rgba};
-use crate::settings::{Metric, Mode, Settings, Theme};
+use crate::settings::{LabelStyle, Metric, Mode, Settings, Theme};
 use crate::util::*;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::time::Instant;
@@ -227,7 +227,14 @@ const INTERVALS: [(&str, u32); 4] = [("0.5 seconds", 500), ("1 second", 1000), (
 const MODES: [(&str, Mode); 2] = [("Dock to taskbar", Mode::Dock), ("Floating (drag anywhere)", Mode::Float)];
 const MAX_WIDTHS: [(&str, u32); 5] =
     [("Auto (don't cover app icons)", 0), ("20% of taskbar", 20), ("30% of taskbar", 30), ("40% of taskbar", 40), ("50% of taskbar", 50)];
-const THEMES: [(&str, Theme); 3] = [("Match Windows", Theme::Auto), ("Dark", Theme::Dark), ("Light", Theme::Light)];
+const THEMES: [(&str, Theme); 3] = [("Dark", Theme::Dark), ("Light", Theme::Light), ("Match Windows", Theme::Auto)];
+/// Metric labels drop-down: (shown, labels on, style).
+const LABEL_STYLES: [(&str, bool, LabelStyle); 4] = [
+    ("Off", false, LabelStyle::Text),
+    ("Text", true, LabelStyle::Text),
+    ("Meters", true, LabelStyle::Meters),
+    ("Meters and text", true, LabelStyle::Both),
+];
 /// Offered widget fonts; the first means "default" (empty setting).
 const FONTS: [&str; 5] = ["Default", "Segoe UI", "Cascadia Mono", "Consolas", "Bahnschrift"];
 
@@ -374,24 +381,25 @@ impl Pal {
             let f9 = |a: u8| Rgba(0xF9, 0xF9, 0xF9, a);
             Pal {
                 dark,
-                bg: if mica { Rgba(0, 0, 0, 0) } else { hx(0xF3F3F3) },
-                card: if mica { wa(0xB3) } else { hx(0xFBFBFB) },
-                card_border: ka(0x0F),
-                bubble: hx(0xFFFFFF),
-                pane: hx(0xF9F9F9),
+                // Eggshell, opaque even with Mica (its light tint is bright white).
+                bg: crate::popup::EGG_BG,
+                card: crate::popup::EGG_CARD,
+                card_border: ka(0x12),
+                bubble: hx(0xFBF8F1),
+                pane: hx(0xF4EFE4),
                 nav_sel: ka(0x0A),
                 nav_hover: ka(0x06),
                 nav_press: ka(0x04),
-                ctl: wa(0xB3),
+                ctl: Rgba(0xFB, 0xF8, 0xF1, 0xC0),
                 ctl_hover: f9(0x80),
                 ctl_press: f9(0x4D),
                 ctl_dis: f9(0x4D),
                 ctl_border: ka(0x17),
                 subtle_hover: ka(0x09),
                 subtle_press: ka(0x06),
-                fg: hx(0x1A1A1A),
-                dim: hx(0x5D5D5D),
-                off: hx(0xA0A0A0),
+                fg: crate::popup::EGG_FG,
+                dim: crate::popup::EGG_DIM,
+                off: hx(0xA39B8E),
                 line: ka(0x0F),
                 chart_line: ka(0x14),
                 tog_stroke: ka(0x72),
@@ -401,7 +409,7 @@ impl Pal {
                 tog_dis: ka(0x37),
                 knob_dis: wa(0xFF),
                 rail: ka(0x72),
-                thumb: hx(0xFFFFFF),
+                thumb: hx(0xFBF8F1),
                 thumb_rim: ka(0x0F),
                 swatch_rim: ka(0x30),
                 sb: ka(0x72),
@@ -1087,7 +1095,6 @@ impl Ui {
         let d = &self.draft;
         match id {
             ID_SPARK => d.sparklines,
-            ID_LABELS => d.labels,
             ID_STACKED => d.stacked_for(self.displays.first().map_or("", |x| x.0.as_str())),
             ID_AUTOSTACK => d.auto_stack,
             ID_FULLSCREEN => d.hide_fullscreen,
@@ -1116,7 +1123,6 @@ impl Ui {
         let d = &mut self.draft;
         Some(match id {
             ID_SPARK => &mut d.sparklines,
-            ID_LABELS => &mut d.labels,
             ID_AUTOSTACK => &mut d.auto_stack,
             ID_FULLSCREEN => &mut d.hide_fullscreen,
             ID_CLICKTHRU => &mut d.click_through,
@@ -1273,6 +1279,13 @@ impl Ui {
                 SpeedUnit::ALL.iter().map(|u| u.label().to_string()).collect(),
                 SpeedUnit::ALL.iter().position(|u| *u == d.unit).unwrap_or(0),
             ),
+            ID_LABELS => (
+                LABEL_STYLES.iter().map(|(t, ..)| t.to_string()).collect(),
+                LABEL_STYLES
+                    .iter()
+                    .position(|(_, on, st)| *on == d.labels && (!on || *st == d.label_style))
+                    .unwrap_or(1),
+            ),
             ID_THEME => (
                 THEMES.iter().map(|(t, _)| t.to_string()).collect(),
                 THEMES.iter().position(|(_, t)| *t == d.theme).unwrap_or(0),
@@ -1347,6 +1360,13 @@ impl Ui {
             },
             ID_UNIT => match SpeedUnit::ALL.get(i) {
                 Some(u) => d.unit = *u,
+                None => return false,
+            },
+            ID_LABELS => match LABEL_STYLES.get(i) {
+                Some((_, on, st)) => {
+                    d.labels = *on;
+                    d.label_style = *st;
+                }
                 None => return false,
             },
             ID_THEME => match THEMES.get(i) {
@@ -1460,7 +1480,7 @@ impl Ui {
                 }
                 v.push(Def::Heading("Behaviour"));
                 v.push(toggle_card("Sparklines", "Draw a small history graph behind each value", ID_SPARK));
-                v.push(toggle_card("Metric labels", "Show the name next to each value", ID_LABELS));
+                v.push(card("Metric labels", "What sits before each value", vec![cell(ID_LABELS, Kind::Dropdown, 200)]));
                 if !multi {
                     v.push(toggle_card("Stacked rows", "Two metrics per column on the taskbar", ID_STACKED));
                 }
@@ -2825,6 +2845,7 @@ fn merge(dst: &mut Settings, src: &Settings) {
     dst.windows_accent = src.windows_accent;
     dst.sparklines = src.sparklines;
     dst.labels = src.labels;
+    dst.label_style = src.label_style;
     dst.stacked = src.stacked;
     dst.auto_stack = src.auto_stack;
     dst.auto_update = src.auto_update;

@@ -385,6 +385,12 @@ impl Canvas {
 
     /// Area sparkline. `data` oldest → newest, values 0..1, right-aligned.
     pub fn spark(&mut self, r: Rect, data: &[f32], c: Rgba) {
+        self.spark_dir(r, data, c, false);
+    }
+
+    /// Like `spark`; with `down` the area hangs from the top edge instead
+    /// (the lower half of a mirror chart).
+    pub fn spark_dir(&mut self, r: Rect, data: &[f32], c: Rgba, down: bool) {
         if data.is_empty() || r.is_empty() {
             return;
         }
@@ -410,7 +416,9 @@ impl Canvas {
                 if y < 0 || y >= h {
                     continue;
                 }
-                let yf = yy as f32;
+                // Mirrored: measure from the bottom edge so the same
+                // coverage math hangs the area from the top.
+                let yf = if down { (r.h() - 1 - yy) as f32 } else { yy as f32 };
                 let px = &mut buf[(y * w + x) as usize];
                 if yf + 1.0 <= top {
                     continue;

@@ -227,13 +227,14 @@ fn make_colors(dark: bool, mica: bool) -> Colors {
         if dark {
             (Rgba(255, 255, 255, 0x0D), Rgba(255, 255, 255, 0x0F), Rgba(255, 255, 255, 0x0F))
         } else {
-            (Rgba(255, 255, 255, 0xB3), Rgba(0, 0, 0, 0x0F), Rgba(0, 0, 0, 0x09))
+            (p.card, Rgba(0, 0, 0, 0x12), Rgba(0, 0, 0, 0x09))
         }
     } else {
         (p.card, p.border, p.chip)
     };
     Colors {
-        bg: if mica { Rgba(0, 0, 0, 0) } else { p.bg },
+        // Light stays eggshell even over Mica (whose light tint is white).
+        bg: if mica && dark { Rgba(0, 0, 0, 0) } else { p.bg },
         card,
         card_border,
         hover,

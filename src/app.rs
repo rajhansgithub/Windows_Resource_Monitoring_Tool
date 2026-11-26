@@ -388,10 +388,14 @@ pub struct App {
     pub popup_hits: Vec<(Rect, popup::PopupHit)>,
     /// Chart time range of the details panel, in seconds (= samples at 1 s).
     pub popup_range: usize,
+    /// Top-process list shown in the details panel: 0 CPU, 1 memory, 2 disk I/O.
+    pub popup_top: u8,
     /// Mouse position over the details panel (client coordinates).
     pub popup_hover: Option<(i32, i32)>,
     /// Panel uses the native acrylic backdrop (Windows 11).
     pub popup_acrylic: bool,
+    /// Theme the panel's backdrop was styled for (restyled when it changes).
+    pub popup_dark: bool,
     /// A WM_MOUSELEAVE for the details panel is pending.
     pub popup_tracking: bool,
 }
@@ -503,8 +507,10 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
             popup_cache: None,
             popup_hits: Vec::new(),
             popup_range: 60,
+            popup_top: 0,
             popup_hover: None,
             popup_acrylic: false,
+            popup_dark: true,
             popup_tracking: false,
             icons: None,
             alerts: AlertState::default(),

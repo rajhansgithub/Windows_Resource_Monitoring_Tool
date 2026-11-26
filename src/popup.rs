@@ -33,7 +33,14 @@ pub struct Pal {
     pub line: Rgba,
 }
 
+/// Light theme base colours (eggshell), shared by every window and the widget.
+pub const EGG_BG: Rgba = Rgba::rgb(0xEF, 0xEA, 0xDF);
+pub const EGG_CARD: Rgba = Rgba::rgb(0xF8, 0xF4, 0xEA);
+pub const EGG_FG: Rgba = Rgba::rgb(0x2A, 0x26, 0x20);
+pub const EGG_DIM: Rgba = Rgba::rgb(0x67, 0x5F, 0x53);
+
 /// See docs/ui-reference: near-black base, raised cards, hairline borders.
+/// Light is eggshell rather than white: easier on the eyes.
 pub fn palette(dark: bool) -> Pal {
     if dark {
         Pal {
@@ -48,14 +55,15 @@ pub fn palette(dark: bool) -> Pal {
         }
     } else {
         Pal {
-            bg: Rgba::rgb(243, 243, 243),
-            card: Rgba::rgb(255, 255, 255),
-            chip: Rgba::rgb(235, 235, 235),
-            border: Rgba::rgb(222, 222, 222),
-            track: Rgba::rgb(228, 228, 228),
-            fg: Rgba::rgb(26, 26, 26),
-            dim: Rgba::rgb(100, 100, 100),
-            line: Rgba::rgb(224, 224, 224),
+            // Eggshell: warm and soft instead of bright white.
+            bg: EGG_BG,
+            card: EGG_CARD,
+            chip: Rgba::rgb(0xE6, 0xE0, 0xD2),
+            border: Rgba::rgb(0xDC, 0xD5, 0xC6),
+            track: Rgba::rgb(0xE0, 0xD9, 0xCA),
+            fg: EGG_FG,
+            dim: EGG_DIM,
+            line: Rgba::rgb(0xDC, 0xD5, 0xC6),
         }
     }
 }
@@ -140,7 +148,8 @@ unsafe fn acrylic_accent(hwnd: HWND, dark: bool) -> bool {
     let Some(f) = GetProcAddress(user32, b"SetWindowCompositionAttribute\0".as_ptr()) else { return false };
     let set: SetWca = std::mem::transmute(f);
     // Same tint strength as Windows flyouts: dark #202020 / light #F3F3F3 at ~70%.
-    let tint = if dark { 0xB320_2020u32 } else { 0xB3F3_F3F3u32 };
+    // Light: eggshell #EFEADF, a little stronger so the warm tone carries.
+    let tint = if dark { 0xB320_2020u32 } else { 0xC8DF_EAEFu32 };
     let mut policy = AccentPolicy { state: ACCENT_ENABLE_ACRYLICBLURBEHIND, flags: 2, color: tint, animation: 0 };
     let mut data = CompositionData {
         attribute: WCA_ACCENT_POLICY,
@@ -246,6 +255,8 @@ pub enum PopupHit {
     UsageReport,
     /// A row of a top-process list (right-click for actions).
     Proc(u32),
+    /// Top-process list tab: 0 CPU, 1 memory, 2 disk I/O.
+    TopTab(u8),
     /// A chart (hover tooltip only; clicks fall through to the card below).
     Chart,
 }
@@ -270,23 +281,27 @@ const PAD: f32 = 12.0;
 const GAP: f32 = 8.0;
 const W: f32 = 392.0;
 const HEADER: f32 = 28.0;
-const RINGS: f32 = 166.0;
-const NET: f32 = 84.0;
-const DISK: f32 = 62.0;
-/// Extra disk card height for the "C: 82% used" line and bar.
-const DISK_SPACE: f32 = 22.0;
-const USAGE: f32 = 70.0;
+const RINGS: f32 = 146.0;
+/// Network and disk cards: dial, two values, mirror chart.
+const DIAL_CARD: f32 = 92.0;
+/// Extra disk card height for the drive-space cells.
+const DISK_SPACE: f32 = 20.0;
+const USAGE: f32 = 84.0;
 const CAP: f32 = 24.0;
-const PROC_ROW: f32 = 17.0;
-const PROCS: f32 = 30.0 + 5.0 * PROC_ROW;
-const FOOTER: f32 = 22.0;
+/// Days of history in the data usage bars.
+const USAGE_DAYS: usize = 14;
+const PROC_ROW: f32 = 22.0;
+const PROCS: f32 = 36.0 + 5.0 * PROC_ROW + 4.0;
+/// Dials sweep 240°, open at the bottom (radians clockwise from 3 o'clock).
+const DIAL_A0: f32 = std::f32::consts::PI * 0.75;
+const DIAL_SPAN: f32 = std::f32::consts::PI * 1.5;
 
 fn has_space(a: &App) -> bool {
     a.snap.disk_used_pct.is_some() && a.snap.disk_total > 0
 }
 
 fn size(a: &App) -> (i32, i32) {
-    let mut h = PAD + HEADER + GAP + RINGS + GAP + NET + GAP + DISK + GAP + USAGE + GAP + PROCS + GAP + FOOTER;
+    let mut h = PAD + HEADER + GAP + RINGS + GAP + DIAL_CARD + GAP + DIAL_CARD + GAP + USAGE + GAP + PROCS + PAD;
     if has_space(a) {
         h += DISK_SPACE;
     }
@@ -331,6 +346,7 @@ pub fn show(a: &mut App, pinned: bool) {
     }
     a.popup_pinned = pinned;
     a.popup_acrylic = style_popup(a.popup, a.dark);
+    a.popup_dark = a.dark;
     reposition(a);
     unsafe { ShowWindow(a.popup, SW_SHOWNOACTIVATE) };
 }
@@ -444,7 +460,10 @@ fn kind_text(e: &Env, k: Kind, v: f32) -> String {
 
 /// Draws one chart (one or more traces sharing a scale), registers its hover
 /// region and, while the mouse is over it, the marker and tooltip.
-fn chart(c: &mut Canvas, e: &Env, out: &mut Out, r: Rect, kind: Kind, traces: &[Trace]) {
+/// With `mirror`, the first trace grows up from a centre line and the second
+/// hangs below it (download / upload, read / write).
+#[allow(clippy::too_many_arguments)]
+fn chart(c: &mut Canvas, e: &Env, out: &mut Out, r: Rect, kind: Kind, traces: &[Trace], mirror: bool) {
     if r.is_empty() || traces.is_empty() {
         return;
     }
@@ -457,9 +476,22 @@ fn chart(c: &mut Canvas, e: &Env, out: &mut Out, r: Rect, kind: Kind, traces: &[
         Kind::Net => raws.iter().flatten().copied().filter(|v| !v.is_nan()).fold(64.0 * 1024.0, f32::max),
         Kind::Disk => raws.iter().flatten().copied().filter(|v| !v.is_nan()).fold(1024.0 * 1024.0, f32::max),
     };
-    for (t, raw) in traces.iter().zip(&raws) {
+    // Each trace's area and direction (down = hangs from its top edge).
+    let mid = r.t + r.h() * 56 / 100;
+    let area = |i: usize| -> (Rect, bool) {
+        match (mirror, i) {
+            (false, _) => (r, false),
+            (true, 0) => (Rect { b: mid, ..r }, false),
+            (true, _) => (Rect { t: mid + 1, ..r }, true),
+        }
+    };
+    if mirror {
+        c.fill_rect(Rect { t: mid, b: mid + 1, ..r }, e.pal.track);
+    }
+    for (i, (t, raw)) in traces.iter().zip(&raws).enumerate() {
         let norm: Vec<f32> = raw.iter().map(|v| if v.is_nan() { 0.0 } else { v / top }).collect();
-        c.spark(r, &norm, t.col);
+        let (ar, down) = area(i);
+        c.spark_dir(ar, &norm, t.col, down);
     }
     let hit = Rect { t: r.t - e.sc(4.0), b: r.b + e.sc(4.0), ..r };
     out.hits.push((hit, PopupHit::Chart));
@@ -478,12 +510,14 @@ fn chart(c: &mut Canvas, e: &Env, out: &mut Out, r: Rect, kind: Kind, traces: &[
     c.fill_rect(Rect { l: colx, t: r.t, r: colx + (e.scale.round() as i32).max(1), b: r.b }, e.base.fg.with_a(110));
     let d = e.sc(3.0);
     let mut parts = Vec::new();
-    for (t, raw) in traces.iter().zip(&raws) {
+    for (i, (t, raw)) in traces.iter().zip(&raws).enumerate() {
         let v = raw[k];
         if v.is_nan() {
             continue;
         }
-        let y = r.b - ((v / top).clamp(0.0, 1.0) * r.h() as f32).round() as i32;
+        let (ar, down) = area(i);
+        let off = ((v / top).clamp(0.0, 1.0) * ar.h() as f32).round() as i32;
+        let y = if down { ar.t + off } else { ar.b - off };
         c.fill_round(Rect { l: colx - d - 1, t: y - d - 1, r: colx + d + 2, b: y + d + 2 }, d as f32 + 1.5, e.base.card);
         c.fill_round(Rect { l: colx - d, t: y - d, r: colx + d + 1, b: y + d + 1 }, d as f32 + 0.5, t.col);
         let val = kind_text(e, kind, v);
@@ -540,6 +574,11 @@ fn paint(a: &mut App, hwnd: HWND) {
             reposition(a);
         }
     }
+    // Theme switched while open: restyle the backdrop (acrylic tint, frame).
+    if a.popup_dark != a.dark {
+        a.popup_acrylic = style_popup(hwnd, a.dark);
+        a.popup_dark = a.dark;
+    }
     let scale = scale(a);
     let mut ps: PAINTSTRUCT = unsafe { std::mem::zeroed() };
     let dc = unsafe { BeginPaint(hwnd, &mut ps) };
@@ -560,6 +599,68 @@ fn paint(a: &mut App, hwnd: HWND) {
     unsafe { EndPaint(hwnd, &ps) };
 }
 
+/// Avatar colour for a process name: stable hue from the name, soft pastel.
+fn avatar_col(name: &str) -> Rgba {
+    let h = name.bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32)) % 360;
+    // hsl(h, 55%, 68%)
+    let (s, l) = (0.55f32, 0.68f32);
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let hp = h as f32 / 60.0;
+    let x = c * (1.0 - (hp % 2.0 - 1.0).abs());
+    let (r, g, b) = match hp as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    let u = |v: f32| ((v + m) * 255.0).round() as u8;
+    Rgba::rgb(u(r), u(g), u(b))
+}
+
+/// 240° dial track plus the value arc (`frac` 0..1).
+#[allow(clippy::too_many_arguments)]
+fn dial(c: &mut Canvas, cx: f32, cy: f32, r: f32, thick: f32, frac: f32, col: Rgba, track: Rgba) {
+    c.stroke_arc(cx, cy, r, thick, DIAL_A0, DIAL_A0 + DIAL_SPAN, track);
+    let f = frac.clamp(0.0, 1.0);
+    if f > 0.004 {
+        c.stroke_arc(cx, cy, r, thick, DIAL_A0, DIAL_A0 + DIAL_SPAN * f, col);
+    }
+}
+
+/// Network rate on a log scale, 1 KB/s (empty) to 1 GB/s (full).
+fn log_frac(bytes_per_s: f64) -> f32 {
+    ((bytes_per_s.max(1024.0) / 1024.0).log10() / 6.0).clamp(0.0, 1.0) as f32
+}
+
+/// "64.2 KB/s" → ("64.2", "KB/s").
+fn split_unit(s: &str) -> (String, String) {
+    match s.rsplit_once(' ') {
+        Some((n, u)) => (n.to_string(), u.to_string()),
+        None => (s.to_string(), String::new()),
+    }
+}
+
+/// One "▼ 64.2 KB/s" line of a dial card: marker, value, small unit.
+#[allow(clippy::too_many_arguments)]
+fn value_row(c: &mut Canvas, f: &Fonts, x: i32, y: i32, mark: &str, text: &str, big: bool, col: Rgba, dim: Rgba, scale: f32) {
+    let sc = |v: f32| (v * scale).round() as i32;
+    let (n, u) = split_unit(text);
+    let font = if big { f.mid } else { f.bold };
+    let (_, nh) = c.measure(font, &n);
+    let (_, mh) = c.measure(f.caps, mark);
+    c.text(f.caps, mark, x, y + nh - mh - sc(1.0), col);
+    let nx = x + sc(12.0).max(c.measure(f.caps, mark).0 + sc(4.0));
+    let nw = c.measure(font, &n).0;
+    c.text(font, &n, nx, y, col);
+    let (_, uh) = c.measure(f.small, &u);
+    c.text(f.small, &u, nx + nw + sc(4.0), y + nh - uh - sc(1.0), dim);
+}
+
+const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
 fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
     let sc = |v: f32| (v * scale).round() as i32;
     let base = palette(a.dark);
@@ -574,7 +675,7 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
     let rad = 10.0 * scale;
     c.clear(pal.bg);
 
-    // ---- header: title + chips
+    // ---- header: title, range control, uptime (clock icon), battery
     let mut y = pad;
     c.text(f.mid, "System", pad, y + sc(2.0), pal.fg);
     let min_x = pad + c.measure(f.mid, "System").0 + sc(14.0);
@@ -601,7 +702,26 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
         }
         x = r.l - sc(6.0);
     }
-    chip(c, f.small, &format!("Up {}", fmt::duration(s.uptime_secs)), &mut x, min_x, y, chip_h, sc(6.0), pal);
+    {
+        // Uptime chip: clock icon + "2d 3h".
+        let t = fmt::duration(s.uptime_secs);
+        let (tw, th) = c.measure(f.small, &t);
+        let icon = sc(12.0);
+        let w = tw + icon + sc(5.0) + chip_h;
+        if x - w >= min_x {
+            let r = Rect { l: x - w, t: y, r: x, b: y + chip_h };
+            c.fill_round(r, chip_h as f32 / 2.0, pal.chip);
+            let (icx, icy) = ((r.l + chip_h / 2) as f32 + icon as f32 / 2.0, (y + chip_h / 2) as f32);
+            let ir = 4.8 * scale;
+            c.stroke_arc(icx, icy, ir, 1.3 * scale, 0.0, std::f32::consts::TAU, pal.dim);
+            let lw = (1.3 * scale).round().max(1.0) as i32;
+            let (hx, hy) = (icx.round() as i32, icy.round() as i32);
+            c.fill_rect(Rect { l: hx - lw / 2, t: hy - sc(3.0), r: hx - lw / 2 + lw, b: hy + 1 }, pal.dim);
+            c.fill_rect(Rect { l: hx - lw / 2, t: hy - lw / 2, r: hx + sc(2.5), b: hy - lw / 2 + lw }, pal.dim);
+            c.text(f.small, &t, r.l + chip_h / 2 + icon + sc(5.0), y + (chip_h - th) / 2, pal.dim);
+            x -= w + sc(6.0);
+        }
+    }
     if let Some(b) = s.battery {
         let mut t = format!("Battery {}%", b.percent);
         if b.charging {
@@ -611,27 +731,23 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
         }
         chip(c, f.small, &t, &mut x, min_x, y, chip_h, sc(6.0), pal);
     }
-    chip(c, f.small, &format!("{} processes", s.proc_count), &mut x, min_x, y, chip_h, sc(6.0), pal);
     y += sc(HEADER) + gap;
 
-    // ---- ring gauges
+    // ---- ring gauges: ring, label, one short line, sparkline
     struct Gauge {
         label: &'static str,
         pct: f32,
         sub: String,
-        sub2: String,
-        sub2_col: Rgba,
+        sub_col: Rgba,
         m: Metric,
         hit: PopupHit,
     }
-    let free = s.ram_total.saturating_sub(s.ram_used);
     let mut gauges = vec![
         Gauge {
             label: "CPU",
             pct: s.cpu,
             sub: s.top_cpu.first().map_or(String::new(), |p| format!("{} {:.0}%", p.name, p.cpu)),
-            sub2: format!("{} processes", s.proc_count),
-            sub2_col: pal.dim,
+            sub_col: pal.dim,
             m: Metric::Cpu,
             hit: PopupHit::TaskMgr,
         },
@@ -639,40 +755,27 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
             label: "MEMORY",
             pct: s.ram_pct,
             sub: format!("{} / {}", fmt::bytes(s.ram_used), fmt::bytes(s.ram_total)),
-            sub2: format!("{} free", fmt::bytes(free)),
-            sub2_col: pal.dim,
+            sub_col: pal.dim,
             m: Metric::Ram,
             hit: PopupHit::TaskMgr,
         },
     ];
     if let Some(g) = s.gpu {
-        let mut sub2 = String::new();
-        if let Some(t) = s.gpu_temp {
-            sub2 = format!("{:.0} \u{00B0}C", t);
-            // Fan speed if the driver reports it, else board power.
-            if let Some(rpm) = s.gpu_fan_rpm {
-                sub2.push_str(&format!(" \u{00B7} {} RPM", rpm));
-            } else if let Some(w) = s.gpu_power_w {
-                sub2.push_str(&format!(" \u{00B7} {:.0} W", w));
-            }
-        }
-        let sub2_col = a.pct_of(Metric::GpuTemp).map_or(pal.dim, |p| a.heat_text(pal.dim, p));
-        gauges.push(Gauge {
-            label: "GPU",
-            pct: g,
-            sub: s.vram_used.map_or(String::new(), |v| format!("{} VRAM", fmt::bytes(v))),
-            sub2,
-            sub2_col,
-            m: Metric::Gpu,
-            hit: PopupHit::TaskMgr,
-        });
+        // Temperature if known (tinted when hot), else VRAM in use.
+        let (sub, sub_col) = match s.gpu_temp {
+            Some(t) => (
+                format!("{:.0} \u{00B0}C", t),
+                a.pct_of(Metric::GpuTemp).map_or(pal.dim, |p| a.heat_text(pal.dim, p)),
+            ),
+            None => (s.vram_used.map_or(String::new(), |v| format!("{} VRAM", fmt::bytes(v))), pal.dim),
+        };
+        gauges.push(Gauge { label: "GPU", pct: g, sub, sub_col, m: Metric::Gpu, hit: PopupHit::TaskMgr });
     } else if let Some(d) = s.disk_active {
         gauges.push(Gauge {
             label: "DISK",
             pct: d,
             sub: "active time".into(),
-            sub2: String::new(),
-            sub2_col: pal.dim,
+            sub_col: pal.dim,
             m: Metric::DiskActive,
             hit: PopupHit::ResMon,
         });
@@ -688,116 +791,208 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
         let acc = accent(g.m, a.dark);
         let col = a.heat(acc, g.pct);
         let (cx, cy) = ((x + gw / 2) as f32, (y + sc(44.0)) as f32);
-        let rr = 33.0 * scale;
+        let rr = 34.0 * scale;
         let th = 6.5 * scale;
         c.ring(cx, cy, rr, th, 1.0, pal.track);
         c.ring(cx, cy, rr, th, g.pct / 100.0, col);
         let v = format!("{:.0}%", g.pct);
         let (_, vh) = c.measure(f.mid, &v);
         c.text_center(f.mid, &v, cx as i32, cy as i32 - vh / 2, a.heat_text(pal.fg, g.pct));
-        c.text_center(f.caps, g.label, cx as i32, y + sc(84.0), pal.dim);
+        c.text_center(f.caps, g.label, cx as i32, y + sc(85.0), pal.dim);
         let sub = c.ellipsize(f.small, &g.sub, gw - sc(16.0));
-        c.text_center(f.small, &sub, cx as i32, y + sc(98.0), pal.fg);
-        let sub2 = c.ellipsize(f.small, &g.sub2, gw - sc(16.0));
-        c.text_center(f.small, &sub2, cx as i32, y + sc(112.0), g.sub2_col);
-        let cr = Rect { l: x + sc(12.0), t: y + sc(134.0), r: x + gw - sc(12.0), b: y + gh - sc(10.0) };
-        chart(c, &e, out, cr, Kind::Pct, &[Trace { m: g.m, col: acc, tag: "" }]);
+        c.text_center(f.small, &sub, cx as i32, y + sc(99.0), g.sub_col);
+        let cr = Rect { l: x + sc(12.0), t: y + sc(118.0), r: x + gw - sc(12.0), b: y + gh - sc(9.0) };
+        chart(c, &e, out, cr, Kind::Pct, &[Trace { m: g.m, col: acc, tag: "" }], false);
     }
     y += gh + gap;
 
-    // ---- network
-    let chart_w = sc(150.0);
-    let nh = sc(NET);
+    // Shared geometry of the two dial cards.
+    let dial_d = sc(72.0);
+    let vals_x = pad + sc(10.0) + dial_d + sc(8.0);
+    let chart_l = vals_x + sc(104.0) + sc(8.0);
+    let ix = pad + sc(14.0);
+
+    // ---- network: dial (log scale), values, mirror chart
+    let nh = sc(DIAL_CARD);
     let r = Rect { l: pad, t: y, r: right, b: y + nh };
     card(c, r, rad, pal, e.hot(r));
     out.hits.push((r, PopupHit::NetSettings));
-    let ix = pad + sc(14.0);
-    let adapter = if a.s.adapter.is_empty() { "ALL ADAPTERS".to_string() } else { a.s.adapter.to_uppercase() };
-    c.text(f.caps, &format!("NETWORK  \u{00B7}  {}", adapter), ix, y + sc(10.0), pal.dim);
     let down_c = accent(Metric::Down, a.dark);
     let up_c = accent(Metric::Up, a.dark);
-    c.text(f.big, &format!("\u{25BC} {}", fmt::speed(s.net_down, a.s.unit)), ix, y + sc(26.0), down_c);
-    c.text(f.normal, &format!("\u{25B2} {}", fmt::speed(s.net_up, a.s.unit)), ix, y + sc(56.0), up_c);
     {
-        let cr = Rect { l: right - chart_w - sc(12.0), t: y + sc(12.0), r: right - sc(12.0), b: y + nh - sc(12.0) };
+        let (cx, cy) = ((pad + sc(10.0)) as f32 + dial_d as f32 / 2.0, (y + nh / 2) as f32);
+        dial(c, cx, cy, 32.0 * scale, 5.5 * scale, log_frac(s.net_down), down_c, pal.track);
+        dial(c, cx, cy, 25.5 * scale, 4.0 * scale, log_frac(s.net_up), up_c, pal.track);
+        // Decade ticks (KB, MB, GB) between the two arcs.
+        for t in [0.0f32, 0.5, 1.0] {
+            let ang = DIAL_A0 + DIAL_SPAN * t;
+            let (tx, ty) = (cx + 21.0 * scale * ang.cos(), cy + 21.0 * scale * ang.sin());
+            c.stroke_arc(tx, ty, 0.6 * scale, 1.2 * scale, 0.0, std::f32::consts::TAU, pal.dim);
+        }
+        let (dw, dh) = c.measure(f.small, "\u{25BC}");
+        let uw = c.measure(f.small, "\u{25B2}").0;
+        let gx = cx as i32 - (dw + uw + sc(1.0)) / 2;
+        c.text(f.small, "\u{25BC}", gx, cy as i32 - dh / 2 - sc(3.0), down_c);
+        c.text(f.small, "\u{25B2}", gx + dw + sc(1.0), cy as i32 - dh / 2 - sc(3.0), up_c);
+        c.text_center(f.caps, "NET", cx as i32, cy as i32 + sc(20.0), pal.dim);
+    }
+    let vy = y + nh / 2 - sc(19.0);
+    value_row(c, f, vals_x, vy, "\u{25BC}", &fmt::speed(s.net_down, a.s.unit), true, down_c, pal.dim, scale);
+    value_row(c, f, vals_x, vy + sc(22.0), "\u{25B2}", &fmt::speed(s.net_up, a.s.unit), false, up_c, pal.dim, scale);
+    {
+        let cr = Rect { l: chart_l, t: y + sc(14.0), r: right - sc(12.0), b: y + nh - sc(14.0) };
         let tr = [
             Trace { m: Metric::Down, col: down_c, tag: "\u{25BC}" },
             Trace { m: Metric::Up, col: up_c, tag: "\u{25B2}" },
         ];
-        chart(c, &e, out, cr, Kind::Net, &tr);
+        chart(c, &e, out, cr, Kind::Net, &tr, true);
     }
     y += nh + gap;
 
-    // ---- disk
+    // ---- disk: active-time dial, R/W values, mirror chart, drive cells
     let space = has_space(a);
-    let dh = sc(DISK + if space { DISK_SPACE } else { 0.0 });
+    let dh = sc(DIAL_CARD + if space { DISK_SPACE } else { 0.0 });
     let r = Rect { l: pad, t: y, r: right, b: y + dh };
     card(c, r, rad, pal, e.hot(r));
     out.hits.push((r, PopupHit::ResMon));
-    let dl = match s.disk_active {
-        Some(v) => format!("DISK  \u{00B7}  {:.0}% ACTIVE", v),
-        None => "DISK".into(),
-    };
-    c.text(f.caps, &dl, ix, y + sc(10.0), pal.dim);
-    c.text(
-        f.mid,
-        &format!("R {}   W {}", fmt::rate(s.disk_read), fmt::rate(s.disk_write)),
-        ix,
-        y + sc(28.0),
-        pal.fg,
-    );
     let rd_c = accent(Metric::DiskRead, a.dark);
     let mut wr_c = accent(Metric::DiskWrite, a.dark);
     if wr_c == rd_c {
         wr_c = rd_c.mix(pal.fg, 0.5);
     }
-    let cr = Rect { l: right - chart_w - sc(12.0), t: y + sc(12.0), r: right - sc(12.0), b: y + sc(DISK) - sc(12.0) };
-    let tr = [Trace { m: Metric::DiskRead, col: rd_c, tag: "R" }, Trace { m: Metric::DiskWrite, col: wr_c, tag: "W" }];
-    chart(c, &e, out, cr, Kind::Disk, &tr);
+    let nh = sc(DIAL_CARD);
+    {
+        let (cx, cy) = ((pad + sc(10.0)) as f32 + dial_d as f32 / 2.0, (y + nh / 2) as f32);
+        let act = s.disk_active.unwrap_or(0.0);
+        let act_c = a.heat(accent(Metric::DiskActive, a.dark), act);
+        dial(c, cx, cy, 30.0 * scale, 6.0 * scale, act / 100.0, act_c, pal.track);
+        let v = s.disk_active.map_or("\u{2013}".to_string(), |v| format!("{:.0}%", v));
+        let (_, vh) = c.measure(f.bold, &v);
+        c.text_center(f.bold, &v, cx as i32, cy as i32 - vh / 2 - sc(2.0), a.heat_text(pal.fg, act));
+        c.text_center(f.caps, "DISK", cx as i32, cy as i32 + sc(20.0), pal.dim);
+    }
+    let vy = y + nh / 2 - sc(19.0);
+    value_row(c, f, vals_x, vy, "R", &fmt::rate(s.disk_read), true, rd_c, pal.dim, scale);
+    value_row(c, f, vals_x, vy + sc(22.0), "W", &fmt::rate(s.disk_write), false, wr_c, pal.dim, scale);
+    {
+        let cr = Rect { l: chart_l, t: y + sc(14.0), r: right - sc(12.0), b: y + nh - sc(14.0) };
+        let tr = [Trace { m: Metric::DiskRead, col: rd_c, tag: "R" }, Trace { m: Metric::DiskWrite, col: wr_c, tag: "W" }];
+        chart(c, &e, out, cr, Kind::Disk, &tr, true);
+    }
     if space {
         let drive = std::env::var("SystemDrive").ok().filter(|d| !d.is_empty()).unwrap_or_else(|| "C:".into());
         let pct = s.disk_used_pct.unwrap_or(0.0);
-        let text = format!(
-            "{}  {:.0}% used  \u{00B7}  {} free of {}",
-            drive,
-            pct,
-            fmt::bytes(s.disk_total.saturating_sub(s.disk_used)),
-            fmt::bytes(s.disk_total)
-        );
-        let text = c.ellipsize(f.small, &text, right - sc(14.0) - ix);
-        c.text(f.small, &text, ix, y + sc(DISK) - sc(8.0), pal.fg);
-        let bar = Rect { l: ix, t: y + dh - sc(14.0), r: right - sc(14.0), b: y + dh - sc(10.0) };
-        c.fill_round(bar, 2.0 * scale, pal.track);
-        let fw = (bar.w() as f32 * (pct / 100.0).clamp(0.0, 1.0)) as i32;
-        if fw > 0 {
+        let free = format!("{} free", fmt::bytes(s.disk_total.saturating_sub(s.disk_used)));
+        let ry = y + nh - sc(6.0);
+        let (lw, lh) = c.measure(f.bold, &drive);
+        c.text(f.bold, &drive, ix, ry, pal.fg);
+        let fw = c.measure(f.small, &free).0;
+        c.text_right(f.small, &free, right - sc(12.0), ry + sc(1.0), pal.dim);
+        // 24 cells, filled for the used share, heat-coloured.
+        let (bl, br) = (ix + lw + sc(8.0), right - sc(12.0) - fw - sc(8.0));
+        let cell_gap = sc(2.0);
+        let cells = 24;
+        let cw = (br - bl - cell_gap * (cells - 1)) as f32 / cells as f32;
+        if cw >= 1.0 {
+            let filled = ((pct / 100.0).clamp(0.0, 1.0) * cells as f32).round() as i32;
             let col = a.heat(accent(Metric::DiskFree, a.dark), pct);
-            c.fill_round(Rect { r: bar.l + fw.max(bar.h()), ..bar }, 2.0 * scale, col);
+            let (ct, cb) = (ry + (lh - sc(9.0)) / 2, ry + (lh - sc(9.0)) / 2 + sc(9.0));
+            for i in 0..cells {
+                let l = bl + (i as f32 * (cw + cell_gap as f32)).round() as i32;
+                let rr = bl + (i as f32 * (cw + cell_gap as f32) + cw).round() as i32;
+                c.fill_round(Rect { l, t: ct, r: rr, b: cb }, 2.0 * scale, if i < filled { col } else { pal.track });
+            }
         }
     }
     y += dh + gap;
 
-    // ---- data usage
+    // ---- data usage: today + month figures, 14-day stacked bars
     let cap = a.cycle_usage();
     let uh = sc(USAGE) + if cap.is_some() { sc(CAP) } else { 0 };
     let r = Rect { l: pad, t: y, r: right, b: y + uh };
     card(c, r, rad, pal, e.hot(r));
     out.hits.push((r, PopupHit::UsageReport));
-    c.text(f.caps, "DATA USAGE", ix, y + sc(10.0), pal.dim);
     let now = usage::today();
     let (yy, mm, _) = usage::ymd(now);
     let today = a.usage.get(now);
     let month = a.usage.month(yy, mm);
-    let col2 = pad + (right - pad) / 2 + sc(6.0);
-    c.text(f.small, "Today", ix, y + sc(26.0), pal.dim);
-    c.text(f.mid, &fmt::bytes(today.total()), ix, y + sc(40.0), pal.fg);
-    c.text(f.small, "This month", col2, y + sc(26.0), pal.dim);
-    c.text(f.mid, &fmt::bytes(month.total()), col2, y + sc(40.0), pal.fg);
-    let split = |u: usage::Usage| format!("\u{25B2} {}  \u{25BC} {}", fmt::bytes(u.sent), fmt::bytes(u.recv));
-    let tw = c.measure(f.mid, &fmt::bytes(today.total())).0;
-    c.text(f.small, &split(today), ix + tw + sc(8.0), y + sc(44.0), pal.dim);
-    let mw = c.measure(f.mid, &fmt::bytes(month.total())).0;
-    let ms = c.ellipsize(f.small, &split(month), right - sc(12.0) - (col2 + mw + sc(8.0)));
-    c.text(f.small, &ms, col2 + mw + sc(8.0), y + sc(44.0), pal.dim);
+    c.text(f.caps, "TODAY", ix, y + sc(12.0), pal.dim);
+    c.text(f.big, &fmt::bytes(today.total()), ix, y + sc(24.0), pal.fg);
+    let mlw = c.measure(f.caps, "MONTH").0;
+    let (_, bh) = c.measure(f.bold, "0");
+    let (_, chh) = c.measure(f.caps, "M");
+    c.text(f.caps, "MONTH", ix, y + sc(58.0) + bh - chh - sc(1.0), pal.dim);
+    c.text(f.bold, &fmt::bytes(month.total()), ix + mlw + sc(6.0), y + sc(58.0), pal.fg);
+    {
+        let br = Rect { l: pad + sc(124.0), t: y + sc(12.0), r: right - sc(12.0), b: y + sc(USAGE) - sc(26.0) };
+        let mut days = Vec::with_capacity(USAGE_DAYS);
+        let mut d = now;
+        for _ in 0..USAGE_DAYS {
+            days.push(d);
+            d = usage::prev_day(d);
+        }
+        days.reverse();
+        let vals: Vec<usage::Usage> = days.iter().map(|d| a.usage.get(*d)).collect();
+        let max = vals.iter().map(|u| u.total()).max().unwrap_or(0).max(1) as f32;
+        let bgap = sc(3.0);
+        let nd = USAGE_DAYS as i32;
+        let bw = (br.w() - bgap * (nd - 1)) as f32 / nd as f32;
+        for (i, (day, u)) in days.iter().zip(&vals).enumerate() {
+            let l = br.l + (i as f32 * (bw + bgap as f32)).round() as i32;
+            let rr = br.l + (i as f32 * (bw + bgap as f32) + bw).round() as i32;
+            let col = Rect { l, t: br.t, r: rr, b: br.b };
+            let today_bar = i + 1 == USAGE_DAYS;
+            let alpha = if today_bar { 255 } else { 160 };
+            let th = (u.total() as f32 / max * br.h() as f32).round() as i32;
+            let oh = (u.sent as f32 / max * br.h() as f32).round() as i32;
+            if u.total() > 0 {
+                let top = br.b - th.max(sc(2.0));
+                c.fill_round(Rect { t: top, ..col }, 2.0 * scale, down_c.with_a(alpha));
+                if oh > 0 {
+                    c.fill_rect(Rect { t: br.b - oh, ..col }, up_c.with_a(alpha));
+                }
+            } else {
+                c.fill_rect(Rect { t: br.b - sc(1.0), ..col }, pal.track);
+            }
+            // Hover: whole column, tooltip with the day's split.
+            let hit = Rect { l: l - bgap / 2, r: rr + bgap - bgap / 2, ..col };
+            out.hits.push((hit, PopupHit::Chart));
+            if e.hot(hit) {
+                c.stroke_round(Rect { t: br.b - th.max(sc(2.0)) - 1, b: br.b + 1, l: l - 1, r: rr + 1 }, 3.0 * scale, pal.fg.with_a(150));
+                let (_, dm, dd) = usage::ymd(*day);
+                let label = if today_bar {
+                    "Today".to_string()
+                } else {
+                    format!("{} {}", MONTHS[(dm.clamp(1, 12) - 1) as usize], dd)
+                };
+                out.tip = Some(Tip {
+                    x: (l + rr) / 2,
+                    r: Rect { t: br.t, b: br.b, ..hit },
+                    text: format!(
+                        "{} \u{00B7} {}   \u{25BC} {}  \u{25B2} {}",
+                        label,
+                        fmt::bytes(u.total()),
+                        fmt::bytes(u.recv),
+                        fmt::bytes(u.sent)
+                    ),
+                });
+            }
+        }
+        // Legend, right-aligned under the bars.
+        let ly = br.b + sc(7.0);
+        let mut lx = right - sc(12.0);
+        let (dw, dh) = c.measure(f.small, "14 days");
+        lx -= dw;
+        c.text(f.small, "14 days", lx, ly, pal.dim);
+        let sq = sc(7.0);
+        for (t, col) in [("out", up_c), ("in", down_c)] {
+            let tw = c.measure(f.small, t).0;
+            lx -= sc(10.0) + tw;
+            c.text(f.small, t, lx, ly, pal.dim);
+            lx -= sq + sc(4.0);
+            c.fill_round(Rect { l: lx, t: ly + (dh - sq) / 2, r: lx + sq, b: ly + (dh - sq) / 2 + sq }, 2.0 * scale, col);
+        }
+    }
     if let Some((used, pct)) = cap {
         let by = y + sc(USAGE);
         let label = format!("{} of {:.0} GB  ({:.0}%)", fmt::bytes(used), a.s.data_cap_gb, pct);
@@ -813,47 +1008,84 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
     }
     y += uh + gap;
 
-    // ---- processes
+    // ---- top processes: one list, CPU / Memory / Disk tabs, bars
     let ph = sc(PROCS);
     card(c, Rect { l: pad, t: y, r: right, b: y + ph }, rad, pal, false);
-    let inner_l = ix;
-    let inner_r = right - sc(14.0);
-    let col_w = (inner_r - inner_l) / 3;
-    type Row = (u32, String, String);
-    let cols: [(&str, Vec<Row>); 3] = [
-        ("TOP CPU", s.top_cpu.iter().map(|p| (p.pid, p.name.clone(), format!("{:.1}%", p.cpu))).collect()),
-        ("TOP MEMORY", s.top_mem.iter().map(|p| (p.pid, p.name.clone(), fmt::bytes(p.mem))).collect()),
-        ("TOP DISK I/O", s.top_io.iter().map(|p| (p.pid, p.name.clone(), fmt::rate(p.io_bps))).collect()),
+    c.text(f.caps, "TOP", ix, y + sc(14.0), pal.dim);
+    let tabs: [(&str, Rgba); 3] = [
+        ("CPU", accent(Metric::Cpu, a.dark)),
+        ("Memory", accent(Metric::Ram, a.dark)),
+        ("Disk", accent(Metric::DiskRead, a.dark)),
     ];
-    for (i, (title, list)) in cols.iter().enumerate() {
-        let x = inner_l + i as i32 * col_w;
-        let xr = x + col_w - sc(12.0);
-        c.text(f.caps, title, x, y + sc(10.0), pal.dim);
-        if list.is_empty() {
-            c.text(f.small, "\u{2013}", x, y + sc(28.0), pal.dim);
-        }
-        for (j, (pid, name, val)) in list.iter().take(5).enumerate() {
-            let ry = y + sc(28.0) + j as i32 * sc(PROC_ROW);
-            let row = Rect { l: x - sc(5.0), t: ry - sc(1.0), r: xr + sc(5.0), b: ry + sc(PROC_ROW) - sc(1.0) };
-            out.hits.push((row, PopupHit::Proc(*pid)));
-            if e.hot(row) {
-                c.fill_round(row, 4.0 * scale, pal.chip);
+    let sel = (a.popup_top as usize).min(2);
+    {
+        let dot = sc(6.0);
+        let widths: Vec<i32> = tabs.iter().map(|(t, _)| c.measure(f.small, t).0 + dot + sc(5.0) + sc(18.0)).collect();
+        let total = widths.iter().sum::<i32>() + sc(4.0);
+        let tr = Rect { l: right - sc(10.0) - total, t: y + sc(8.0), r: right - sc(10.0), b: y + sc(8.0) + chip_h };
+        c.fill_round(tr, chip_h as f32 / 2.0, pal.chip);
+        let mut sx = tr.l + sc(2.0);
+        for (i, ((label, col), w)) in tabs.iter().zip(&widths).enumerate() {
+            let seg = Rect { l: sx, t: tr.t + sc(2.0), r: sx + w, b: tr.b - sc(2.0) };
+            let on = i == sel;
+            if on {
+                c.fill_round(seg, seg.h() as f32 / 2.0, pal.fg.with_a(if a.dark { 46 } else { 34 }));
             }
-            let vw = c.measure(f.small, val).0;
-            let nm = c.ellipsize(f.small, name, xr - x - vw - sc(6.0));
-            c.text(f.small, &nm, x, ry, pal.fg);
-            c.text_right(f.small, val, xr, ry, pal.dim);
+            let (tw, th) = c.measure(f.small, label);
+            let cx = seg.l + (seg.w() - tw - dot - sc(5.0)) / 2;
+            let my = seg.t + seg.h() / 2;
+            c.fill_round(Rect { l: cx, t: my - dot / 2, r: cx + dot, b: my - dot / 2 + dot }, dot as f32 / 2.0, *col);
+            let tc = if on || e.hot(seg) { pal.fg } else { pal.dim };
+            c.text(f.small, label, cx + dot + sc(5.0), seg.t + (seg.h() - th) / 2, tc);
+            out.hits.push((seg, PopupHit::TopTab(i as u8)));
+            sx += w;
         }
     }
-    y += ph + gap;
-
-    // ---- footer
-    let hint = if a.popup_pinned {
-        "Click to close  \u{00B7}  Right-click a process for actions"
-    } else {
-        "Click: pin  \u{00B7}  Double-click: Task Manager  \u{00B7}  Right-click: menu"
-    };
-    c.text_center(f.small, hint, c.w / 2, y + sc(2.0), pal.dim);
+    {
+        // (pid, name, value for the bar, shown text)
+        let rows: Vec<(u32, &str, f64, String)> = match sel {
+            0 => s.top_cpu.iter().map(|p| (p.pid, p.name.as_str(), p.cpu as f64, format!("{:.1}%", p.cpu))).collect(),
+            1 => s.top_mem.iter().map(|p| (p.pid, p.name.as_str(), p.mem as f64, fmt::bytes(p.mem))).collect(),
+            _ => s.top_io.iter().map(|p| (p.pid, p.name.as_str(), p.io_bps, fmt::rate(p.io_bps))).collect(),
+        };
+        let bar_c = tabs[sel].1;
+        let max = rows.iter().map(|r| r.2).fold(0.0f64, f64::max);
+        let inner_r = right - sc(14.0);
+        let av = sc(18.0);
+        let name_x = ix + av + sc(8.0);
+        let name_w = sc(92.0);
+        let val_w = sc(64.0);
+        let (bar_l, bar_r) = (name_x + name_w + sc(8.0), inner_r - val_w - sc(8.0));
+        if rows.is_empty() {
+            c.text(f.small, "\u{2013}", ix, y + sc(40.0), pal.dim);
+        }
+        for (j, (pid, name, v, text)) in rows.iter().take(5).enumerate() {
+            let ry = y + sc(36.0) + j as i32 * sc(PROC_ROW);
+            let row = Rect { l: ix - sc(5.0), t: ry, r: inner_r + sc(5.0), b: ry + sc(PROC_ROW) };
+            out.hits.push((row, PopupHit::Proc(*pid)));
+            if e.hot(row) {
+                c.fill_round(row, 5.0 * scale, pal.chip);
+            }
+            let mid = ry + sc(PROC_ROW) / 2;
+            // Avatar: first letter on a colour picked from the name.
+            let ar = Rect { l: ix, t: mid - av / 2, r: ix + av, b: mid - av / 2 + av };
+            c.fill_round(ar, 5.0 * scale, avatar_col(name));
+            let initial: String = name.chars().next().map_or(String::new(), |ch| ch.to_uppercase().collect());
+            let (_, ih) = c.measure(f.caps, &initial);
+            c.text_center(f.caps, &initial, ar.l + av / 2, mid - ih / 2, Rgba::rgb(20, 20, 20));
+            let (_, nh) = c.measure(f.small, "Ag");
+            let nm = c.ellipsize(f.small, name, name_w);
+            c.text(f.small, &nm, name_x, mid - nh / 2, pal.fg);
+            let bh = sc(6.0);
+            let track = Rect { l: bar_l, t: mid - bh / 2, r: bar_r, b: mid - bh / 2 + bh };
+            c.fill_round(track, bh as f32 / 2.0, pal.track);
+            if max > 0.0 && track.w() > 0 {
+                let fw = ((v / max).clamp(0.0, 1.0) * track.w() as f64).round() as i32;
+                c.fill_round(Rect { r: track.l + fw.max(bh), ..track }, bh as f32 / 2.0, bar_c);
+            }
+            c.text_right(f.small, text, inner_r, mid - nh / 2, pal.dim);
+        }
+    }
 
     if let Some(t) = out.tip.take() {
         draw_tip(c, &e, &t);
@@ -924,7 +1156,7 @@ fn on_set_cursor(hwnd: HWND) -> bool {
     }
     let hand = matches!(
         hit_at(a, pt.x, pt.y, true),
-        Some(PopupHit::Range(_) | PopupHit::TaskMgr | PopupHit::ResMon | PopupHit::NetSettings | PopupHit::UsageReport)
+        Some(PopupHit::Range(_) | PopupHit::TopTab(_) | PopupHit::TaskMgr | PopupHit::ResMon | PopupHit::NetSettings | PopupHit::UsageReport)
     );
     unsafe { SetCursor(LoadCursorW(std::ptr::null_mut(), if hand { IDC_HAND } else { IDC_ARROW })) };
     true
@@ -935,6 +1167,10 @@ fn on_click(hwnd: HWND, l: LPARAM) {
     match hit_at(a, get_x(l), get_y(l), true) {
         Some(PopupHit::Range(secs)) => {
             a.popup_range = secs;
+            unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
+        }
+        Some(PopupHit::TopTab(i)) => {
+            a.popup_top = i;
             unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
         }
         Some(PopupHit::TaskMgr) => {

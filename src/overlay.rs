@@ -2,7 +2,7 @@
 
 use crate::app::{accent, short_label, Model, C_CRIT, C_WARN};
 use crate::render::{create_font, ui_face, Canvas, Rgba};
-use crate::settings::{Metric, Mode};
+use crate::settings::{LabelStyle, Metric, Mode};
 use crate::taskbar::{self, Edge, Taskbar};
 use crate::util::*;
 use windows_sys::Win32::Foundation::*;
@@ -42,6 +42,25 @@ pub struct Overlay {
     pub fullscreen: bool,
     /// Measured start of the clock/tray area on a secondary taskbar.
     pub tray_l: Option<i32>,
+    /// What precedes each value this frame (from settings).
+    style: LabelStyle,
+    /// Gauge fill 0..1 per metric, for metrics that have one (meter styles).
+    meters: [Option<f32>; Metric::ALL.len()],
+}
+
+/// Gauge fill for a metric's meter: percentages as they are, rates on a log
+/// scale from 1 KB/s (empty) to 1 GB/s (full). None = no meter, show text.
+fn meter_frac(m: &Model, r: Metric) -> Option<f32> {
+    let log = |b: f64| ((b.max(1024.0) / 1024.0).log10() / 6.0).clamp(0.0, 1.0) as f32;
+    let s = &m.snap;
+    match r {
+        Metric::Up => Some(log(s.net_up)),
+        Metric::Down => Some(log(s.net_down)),
+        Metric::DiskRead => Some(log(s.disk_read)),
+        Metric::DiskWrite => Some(log(s.disk_write)),
+        Metric::Battery => s.battery.map(|b| b.percent as f32 / 100.0),
+        _ => m.pct_of(r).map(|p| (p / 100.0).clamp(0.0, 1.0)),
+    }
 }
 
 /// Which metrics belong together in one column (e.g. ▲ above ▼).
@@ -147,6 +166,21 @@ pub fn register(hinst: HINSTANCE, wndproc: WNDPROC) {
 }
 
 impl Overlay {
+    /// Meter ring diameter for a line height.
+    fn meter_d(line_h: i32) -> i32 {
+        ((line_h as f32) * 0.74).round().max(8.0) as i32
+    }
+
+    /// Width of what precedes a value: text label, meter, or both.
+    fn lead_w(&self, font: HFONT, line_h: i32, r: Metric) -> i32 {
+        let text = || self.canvas.measure(font, short_label(r)).0;
+        match (self.style, self.meters[r.idx()]) {
+            (LabelStyle::Text, _) | (_, None) => text(),
+            (LabelStyle::Meters, Some(_)) => Self::meter_d(line_h),
+            (LabelStyle::Both, Some(_)) => Self::meter_d(line_h) + (line_h / 4).max(3) + text(),
+        }
+    }
+
     /// `owned`: dock mode. The taskbar becomes the widget's owner window, so
     /// Windows keeps the widget directly above the taskbar in the same z-order
     /// step — clicking the taskbar can't cover it, so no flicker and no
@@ -210,6 +244,8 @@ impl Overlay {
             icons: None,
             fullscreen: false,
             tray_l: None,
+            style: LabelStyle::Text,
+            meters: [None; Metric::ALL.len()],
         })
     }
 
@@ -340,7 +376,7 @@ impl Overlay {
             let val_w = col.iter().map(|&r| vw(r)).max().unwrap_or(0);
             let sp = col.iter().map(|&r| spark_part(r)).max().unwrap_or(0);
             let lw = if labels {
-                col.iter().map(|&r| self.canvas.measure(font, short_label(r)).0).max().unwrap_or(0)
+                col.iter().map(|&r| self.lead_w(font, line_h, r)).max().unwrap_or(0)
             } else {
                 0
             };
@@ -420,6 +456,10 @@ impl Overlay {
         self.ensure_face(1, stack_px, scale, &m.s.font);
         let rows = m.rows();
         let n = rows.len();
+        self.style = m.s.label_style;
+        for r in Metric::ALL {
+            self.meters[r.idx()] = if self.style == LabelStyle::Text { None } else { meter_frac(m, r) };
+        }
 
         let gap = sc(6.0);
         let col_gap = sc(16.0);
@@ -459,7 +499,7 @@ impl Overlay {
             if !m.s.labels {
                 return 0;
             }
-            c.iter().map(|&r| self.canvas.measure(font, short_label(r)).0).max().unwrap_or(0)
+            c.iter().map(|&r| self.lead_w(font, line_h, r)).max().unwrap_or(0)
         };
         let vw = |r: Metric| self.faces[vf].sticky[r.idx()];
 
@@ -554,12 +594,12 @@ impl Overlay {
 
         // ---- draw
         self.canvas.resize(w, h);
-        let fg = if m.dark { Rgba::rgb(245, 245, 245) } else { Rgba::rgb(18, 18, 18) };
+        let fg = if m.dark { Rgba::rgb(245, 245, 245) } else { crate::popup::EGG_FG };
         let opacity = if dock { m.s.bg_opacity } else { m.s.bg_opacity.max(200) };
         // alpha 1 keeps the whole strip hoverable while staying invisible.
         self.canvas.clear(Rgba(0, 0, 0, 1));
         if opacity > 1 {
-            let bg = if m.dark { Rgba(28, 28, 28, opacity) } else { Rgba(248, 248, 248, opacity) };
+            let bg = if m.dark { Rgba(28, 28, 28, opacity) } else { crate::popup::EGG_BG.with_a(opacity) };
             let inset = if dock && horiz { sc(4.0) } else { 0 };
             self.canvas.fill_round(Rect { l: 0, t: inset, r: w, b: h - inset }, sc(6.0) as f32, bg);
         }
@@ -574,8 +614,22 @@ impl Overlay {
             let (v, lvl, _) = &values[i];
             let ac = accent(r, m.dark);
             if with_label {
-                // Lightened accent: keeps the colour cue but reads like text.
-                self.canvas.text(font, short_label(r), x, y, ac.mix(fg, 0.3));
+                let line_h = self.faces[fi].line_h;
+                let mut tx = x;
+                if let (LabelStyle::Meters | LabelStyle::Both, Some(f)) = (self.style, self.meters[r.idx()]) {
+                    // Tiny ring gauge: faint track, heat-coloured fill.
+                    let d = Self::meter_d(line_h);
+                    let (cx, cy) = (x as f32 + d as f32 / 2.0, y as f32 + line_h as f32 / 2.0);
+                    let th = (d as f32 * 0.22).max(2.0 * scale.min(1.5));
+                    let col = m.pct_of(r).map_or(ac, |p| m.heat(ac, p));
+                    self.canvas.ring(cx, cy, d as f32 / 2.0, th, 1.0, fg.with_a(if m.dark { 46 } else { 40 }));
+                    self.canvas.ring(cx, cy, d as f32 / 2.0, th, f, col);
+                    tx += d + (line_h / 4).max(3);
+                }
+                if self.style != LabelStyle::Meters || self.meters[r.idx()].is_none() {
+                    // Lightened accent: keeps the colour cue but reads like text.
+                    self.canvas.text(font, short_label(r), tx, y, ac.mix(fg, 0.3));
+                }
             }
             let pct = m.pct_of(r);
             let vc = match (pct, lvl) {
