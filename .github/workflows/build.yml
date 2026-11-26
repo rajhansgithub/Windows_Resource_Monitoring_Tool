@@ -50,8 +50,6 @@ jobs:
           }
           "@
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-          # TEMP-COIN-DUMP (remove before merge): PNGs as base64 in the log, artifact download is blocked for the cloud session
-          function Dump($f) { $b = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f)); Write-Output "COIN-BEGIN $f"; for ($i=0; $i -lt $b.Length; $i+=4000) { Write-Output ("COIN|" + $b.Substring($i, [Math]::Min(4000, $b.Length-$i))) }; Write-Output "COIN-END" }
           $h = [W]::FindWindowW("ResourceMonitor.Window", [NullString]::Value)
           function Grab($file) {
             $r = New-Object W+R
@@ -61,7 +59,6 @@ jobs:
             $g = [System.Drawing.Graphics]::FromImage($bmp)
             $g.CopyFromScreen($r.L, $r.T, 0, 0, (New-Object System.Drawing.Size $w, $hh))
             $bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)
-            Dump $file
           }
           function Click($x, $y) {
             $r = New-Object W+R
