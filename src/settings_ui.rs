@@ -70,8 +70,11 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-/// Window class of the main window (CI finds the window by it).
-pub const CLASS: &str = "ResourceMonitor.Main";
+/// Window class of the main window (CI finds the window by it). Must differ
+/// from `app::MAIN_CLASS` (the hidden message window): with the same name our
+/// RegisterClassExW fails and CreateWindowExW makes a second app window that
+/// never paints.
+pub const CLASS: &str = "ResourceMonitor.Window";
 const TITLE: &str = "Resource Monitor";
 
 // ------------------------------------------------------------------ layout
@@ -893,6 +896,8 @@ struct Ui {
     /// Last normal (not minimized / maximized) window rectangle, and maximized.
     normal: Rect,
     maximized: bool,
+    /// The first WM_PAINT happened (logged once).
+    painted: bool,
     // ---- Insights
     ins_on: bool,
     panels: Vec<Panel>,
@@ -970,6 +975,7 @@ impl Ui {
             animate: animations_on(),
             normal: Rect { l: 0, t: 0, r: 0, b: 0 },
             maximized: false,
+            painted: false,
             ins_on: false,
             panels: Vec::new(),
             sig: 0,
@@ -3379,7 +3385,9 @@ pub fn register(hinst: HINSTANCE) {
             lpszClassName: cls.as_ptr(),
             ..std::mem::zeroed()
         };
-        RegisterClassExW(&wc);
+        if RegisterClassExW(&wc) == 0 {
+            diag(&format!("main window: RegisterClassExW failed ({})", GetLastError()));
+        }
     }
 }
 
@@ -3645,6 +3653,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             let mut ps: PAINTSTRUCT = std::mem::zeroed();
             let dc = BeginPaint(hwnd, &mut ps);
             if let Some(u) = ui() {
+                if !u.painted {
+                    u.painted = true;
+                    diag(&format!(
+                        "main window: first paint {}x{} mica={} dark={} dpi={} page={}",
+                        u.cw,
+                        u.ch,
+                        u.mica,
+                        u.dark,
+                        u.dpi,
+                        u.page.key()
+                    ));
+                }
                 u.paint(dc);
             }
             EndPaint(hwnd, &ps);
@@ -3785,5 +3805,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             DefWindowProcW(hwnd, msg, w, l)
         }
         _ => DefWindowProcW(hwnd, msg, w, l),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn class_differs_from_the_app_window() {
+        assert_ne!(super::CLASS, crate::app::MAIN_CLASS);
     }
 }
