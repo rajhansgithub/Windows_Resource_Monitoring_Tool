@@ -75,7 +75,8 @@ jobs:
             [void]$ws.AppActivate($p.Id); Start-Sleep -Milliseconds 400
             Grab "target/medal-shots/page.png"
             # units of racks 01 and 02 (window coordinates at the default size, page scrolled to the top)
-            $units = @(@{n="1-watch";x=500;y=272}, @{n="2-heavy";x=500;y=324}, @{n="3-render";x=500;y=376}, @{n="4-mover";x=500;y=428}, @{n="5-bandwidth";x=820;y=272}, @{n="6-down";x=820;y=324}, @{n="7-up";x=820;y=376})
+            # stones first, metals last: on a first start the coin programs take a few seconds to compile (cached after)
+            $units = @(@{n="5-bandwidth";x=820;y=272}, @{n="6-down";x=820;y=324}, @{n="7-up";x=820;y=376}, @{n="1-watch";x=500;y=272}, @{n="2-heavy";x=500;y=324}, @{n="3-render";x=500;y=376}, @{n="4-mover";x=500;y=428})
             foreach ($u in $units) {
               [System.Windows.Forms.SendKeys]::SendWait("{HOME}"); Start-Sleep -Milliseconds 600
               Click $u.x $u.y
