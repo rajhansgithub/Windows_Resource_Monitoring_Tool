@@ -267,24 +267,24 @@ jobs:
           }
           $env:RESMON_INSIGHTS_DEMO = "1"
           $fails = @()
-          # Ctrl+Tab walks the pages in nav order: presses from the previous shot.
-          $pages = @(@{n="1-overview";k=0}, @{n="2-incidents";k=2}, @{n="3-sleep";k=1}, @{n="4-heldback";k=1}, @{n="5-general";k=3}, @{n="6-metrics";k=1})
+          # RESMON_PAGE (demo mode only) opens each page directly.
+          $pages = @("overview", "incidents", "sleep", "heldback", "ghost", "general", "alerts", "metrics")
           foreach ($mode in "default", "maximized") {
-            $p = Start-Process target/release/ResourceMonitor.exe -ArgumentList "--insights" -PassThru
-            Start-Sleep -Seconds 8
-            $h = [W5]::FindWindowW("ResourceMonitor.Window", [NullString]::Value)
-            if ($h -eq [IntPtr]::Zero) { $fails += "$mode : main window did not open" } else {
-              if ($mode -eq "maximized") { [void][W5]::ShowWindow($h, 3); Start-Sleep -Seconds 3 }
-              $ws = New-Object -ComObject WScript.Shell
-              [void]$ws.AppActivate($p.Id); Start-Sleep -Milliseconds 500
-              foreach ($pg in $pages) {
-                for ($i = 0; $i -lt $pg.k; $i++) { [System.Windows.Forms.SendKeys]::SendWait("^{TAB}"); Start-Sleep -Milliseconds 300 }
-                Start-Sleep -Seconds 2
-                Grab $h "target/wide-shots/$mode-$($pg.n).png"
+            $n = 0
+            foreach ($pg in $pages) {
+              $n++
+              $env:RESMON_PAGE = $pg
+              $p = Start-Process target/release/ResourceMonitor.exe -ArgumentList "--insights" -PassThru
+              Start-Sleep -Seconds 6
+              $h = [W5]::FindWindowW("ResourceMonitor.Window", [NullString]::Value)
+              if ($h -eq [IntPtr]::Zero) { $fails += "$mode $pg : main window did not open" } else {
+                if ($mode -eq "maximized") { [void][W5]::ShowWindow($h, 3); Start-Sleep -Seconds 2 }
+                Grab $h "target/wide-shots/$mode-$n-$pg.png"
               }
+              if ($p.HasExited) { $fails += "$mode $pg : app exited early (code $($p.ExitCode))" } else { Stop-Process -Id $p.Id; Start-Sleep -Seconds 2 }
             }
-            if ($p.HasExited) { $fails += "$mode : app exited early (code $($p.ExitCode))" } else { Stop-Process -Id $p.Id; Start-Sleep -Seconds 2 }
           }
+          Remove-Item Env:RESMON_PAGE
           # Put the display back for the steps that follow.
           try { [void][W5]::ChangeDisplaySettingsW([ref]$orig, 0) } catch { Write-Host "display restore skipped: $_" }
           # TEMP-DUMP
