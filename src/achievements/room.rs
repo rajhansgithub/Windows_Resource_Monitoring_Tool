@@ -153,7 +153,7 @@ impl Room {
         let mut v = Vec::new();
         for set in Catalog::sets() {
             v.extend(set.members.iter().map(|m| Unit::Ladder(m)));
-            v.extend(std::iter::repeat(Unit::Blank).take(RACK_UNITS - set.members.len()));
+            v.extend(std::iter::repeat_n(Unit::Blank, RACK_UNITS - set.members.len()));
         }
         v.push(Unit::Ladder("stillhere"));
         v.extend([Category::Start, Category::Mastery, Category::Accident, Category::Secret].map(Unit::Singles));
@@ -177,7 +177,7 @@ impl Room {
 
     /// Pick a unit (pulls it out). Returns true when the selection changed.
     pub fn select(&mut self, i: usize) -> bool {
-        if i == self.sel || self.units.get(i).map_or(true, |u| u.unit == Unit::Blank) {
+        if i == self.sel || self.units.get(i).is_none_or(|u| u.unit == Unit::Blank) {
             return false;
         }
         self.sel = i;
@@ -203,6 +203,7 @@ impl Room {
     }
 
     /// Lay the page out from `s` between `l` and `r`, starting at `y0`. Returns the bottom.
+    #[allow(clippy::too_many_arguments)]
     pub fn layout(&mut self, s: &State, mdc: HDC, f: &Fonts, dpi: u32, l: i32, r: i32, y0: i32) -> i32 {
         self.dpi = dpi;
         let lh = |font| measure_dc(mdc, font, "Ag").1;
@@ -345,8 +346,9 @@ impl Room {
         self.floor.b
     }
 
-    /// Draw. `hover` = unit index under the mouse; `btn` = (hover, pressed) of the medal button.
-    pub fn draw(&self, cv: &mut Canvas, f: &Fonts, col: &Colors, dy: i32, vt: i32, vb: i32, hover: Option<usize>, btn: (bool, bool)) {
+    /// Draw. `hover` = unit index under the mouse. The host draws the "View medal" button (`medal_btn`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw(&self, cv: &mut Canvas, f: &Fonts, col: &Colors, dy: i32, vt: i32, vb: i32, hover: Option<usize>) {
         let sh = |r: Rect| Rect { l: r.l, t: r.t + dy, r: r.r, b: r.b + dy };
         let vis = |r: Rect| r.b + dy >= vt && r.t + dy <= vb;
         let rad = self.sc(6) as f32;
@@ -512,7 +514,7 @@ impl Room {
             for ln in &self.tray_lines {
                 match ln {
                     TrayLine::Text { x, y, s, dim, semi } => {
-                        let font = if *semi { f.semi } else if *dim { f.small } else { f.small };
+                        let font = if *semi { f.semi } else { f.small };
                         let s2 = cv.ellipsize(font, s, t.r - self.sc(16) - x);
                         cv.text(font, &s2, *x, y + dy, if *dim { INK_DIM } else { INK });
                     }
@@ -535,14 +537,6 @@ impl Room {
                         cv.text(f.small, &l2, nx, y + th, INK_DIM);
                     }
                 }
-            }
-            if !self.medal_btn.is_empty() {
-                let b = sh(self.medal_btn);
-                let fill = if btn.1 { col.accent.mix(Rgba(0, 0, 0, 255), 0.2) } else if btn.0 { col.accent.mix(Rgba(255, 255, 255, 255), 0.12) } else { col.accent };
-                cv.fill_round(b, self.sc(4) as f32, fill);
-                let on = if (fill.0 as u32 * 299 + fill.1 as u32 * 587 + fill.2 as u32 * 114) / 1000 > 150 { Rgba(0, 0, 0, 255) } else { Rgba(255, 255, 255, 255) };
-                let (bw, bh) = cv.measure(f.body, "View medal");
-                cv.text(f.body, "View medal", (b.l + b.r) / 2 - bw / 2, (b.t + b.b) / 2 - bh / 2, on);
             }
         }
     }
@@ -590,6 +584,7 @@ pub fn goal_card_h(dpi: u32) -> i32 {
 }
 
 /// Draw the Overview "Next goal" card into `r` (client coordinates).
+#[allow(clippy::too_many_arguments)]
 pub fn draw_goal_card(cv: &mut Canvas, f: &Fonts, col: &Colors, dpi: u32, r: Rect, s: &State, g: &Goal, hover: bool) {
     let sc = |v: i32| (v * dpi as i32 + 48) / 96;
     let rad = sc(6) as f32;
@@ -630,6 +625,7 @@ pub fn chip_h(dpi: u32, labels: bool) -> i32 {
 }
 
 /// Draw the level chip in `r`: a ring with the level, and (with labels) the title, XP and next goal.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_chip(cv: &mut Canvas, f: &Fonts, col: &Colors, dpi: u32, r: Rect, s: &State, labels: bool, hover: bool) {
     let sc = |v: i32| (v * dpi as i32 + 48) / 96;
     let (lv, into, need) = c::level_progress(c::total_xp(s));

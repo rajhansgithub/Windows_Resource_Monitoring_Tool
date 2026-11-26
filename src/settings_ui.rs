@@ -46,6 +46,8 @@
 
 use crate::app::{app, default_accent, effective_dark, Cmd, C_CRIT, C_WARN};
 use crate::fmt::SpeedUnit;
+use crate::achievements::room::{self, Room};
+use crate::achievements::State as AchState;
 use crate::insights::view::{self, View};
 use crate::insights::{unix_ms, Panel};
 use crate::nav::{self, Entry, History, Page, Placement};
@@ -186,6 +188,11 @@ const ID_INS_TOASTS: i32 = 901;
 const ID_BAGGUARD: i32 = 902;
 const ID_ACH_OPEN: i32 = 903;
 const ID_INS_CLEAR: i32 = 904;
+/// Achievements: the Overview goal card, the nav level chip, the tray's medal button, the Server Room units (+ index).
+const ID_GOAL: i32 = 905;
+const ID_CHIP: i32 = 906;
+const ID_ROOM_MEDAL: i32 = 907;
+const ID_ROOM: i32 = 1000;
 
 // Per-display toggles, + index in `Ui::displays`.
 const ID_DSHOW: i32 = 800;
@@ -630,6 +637,12 @@ enum Kind {
     Glyph(char),
     /// Icon button at full icon size (hamburger, back).
     Icon(char),
+    /// A Server Room unit (drawn by `achievements::room`).
+    Unit(u16),
+    /// The Overview "Next goal" card.
+    Goal,
+    /// The nav pane's level chip.
+    Chip,
 }
 
 /// Sub-area of a control under the mouse.
@@ -685,6 +698,10 @@ enum Def {
     Summary(usize),
     /// The full Insights panel `i` (headline, chart, items).
     Panel(usize),
+    /// The Server Room (Achievements page).
+    Room,
+    /// The "Next goal" card (Overview).
+    Goal,
 }
 
 /// Laid-out non-interactive parts of a page (content coordinates).
@@ -904,6 +921,12 @@ struct Ui {
     panel_idx: Option<usize>,
     /// Client x over the chart plot.
     chart_hover: Option<i32>,
+    // ---- Achievements
+    /// The app's achievements (None = achievements are off).
+    ach: Option<AchState>,
+    room: Room,
+    /// The Server Room is laid out on the current page.
+    room_on: bool,
     // ---- settings
     /// The copy being edited.
     draft: Settings,
@@ -977,6 +1000,9 @@ impl Ui {
             pview: View::new(),
             panel_idx: None,
             chart_hover: None,
+            ach: None,
+            room: Room::new(),
+            room_on: false,
             draft,
             adapters,
             adapter_labels: labels,
@@ -1003,6 +1029,15 @@ impl Ui {
         self.target = self.target * dpi as i32 / old as i32;
         self.scroll = self.target as f32;
         self.nav_scroll = self.nav_scroll * dpi as i32 / old as i32;
+    }
+
+    /// Take the app's achievements (None = off). Returns true when something visible may have changed.
+    fn take_ach(&mut self, st: Option<AchState>) -> bool {
+        if st == self.ach {
+            return false;
+        }
+        self.ach = st;
+        true
     }
 
     /// Take fresh Insights data. Returns true when something visible changed.
@@ -1513,7 +1548,10 @@ impl Ui {
     /// Cards at the very top of Overview, above the Insights switch. Empty for
     /// now; the place for a future "next goal" (achievements) card.
     fn overview_top(&self) -> Vec<Def> {
-        Vec::new()
+        match &self.ach {
+            Some(st) if crate::achievements::next_goal(st).is_some() => vec![Def::Goal],
+            _ => Vec::new(),
+        }
     }
 
     fn overview_defs(&self) -> Vec<Def> {
@@ -1536,14 +1574,17 @@ impl Ui {
     /// and a button that opens the Achievements window.
     fn achievements_defs(&self) -> Vec<Def> {
         let on = self.draft.achievements;
-        let mut v = vec![
-            Def::Note("Medals, XP and levels for real use of this PC. Nothing leaves this PC."),
-            card(
-                "Achievements",
-                "Your medals, level and what to aim for next",
-                vec![Cell::Ctl { id: ID_ACH_OPEN, kind: Kind::Button("Open Achievements", true), w: 0, enabled: on }],
-            ),
-        ];
+        let mut v = Vec::new();
+        if on && self.ach.is_some() {
+            v.push(Def::Room);
+            v.push(card(
+                "Medal case",
+                "Every medal in 3D: turn it, flip it, polish off the dust",
+                vec![Cell::Ctl { id: ID_ACH_OPEN, kind: Kind::Button("Open medal case", false), w: 0, enabled: on }],
+            ));
+        } else {
+            v.push(Def::Note("Medals, XP and levels for real use of this PC. Nothing leaves this PC."));
+        }
         if !on {
             v.push(toggle_card("Track achievements", "Achievements are off. Turn them on to earn medals", ID_ACHIEVE));
         }
@@ -1619,7 +1660,11 @@ impl Ui {
     /// Height of the footer slot above About for a level / XP chip (0 = none).
     /// Reserved for the in-window Achievements work; nothing is shown yet.
     fn footer_chip_h(&self) -> i32 {
-        0
+        if self.ach.is_some() && self.draft.achievements {
+            room::chip_h(self.dpi, self.labels()) + self.sc(NAV_GAP)
+        } else {
+            0
+        }
     }
 
     /// Top of the pane footer (About, the chip slot).
@@ -1686,6 +1731,11 @@ impl Ui {
             }
         }
         self.nav_h = y;
+        if self.footer_chip_h() > 0 {
+            let t = self.footer_top();
+            let chip = Rect { l: ins, t, r: pw - ins, b: t + room::chip_h(self.dpi, labels) };
+            controls.push(Control { id: ID_CHIP, kind: Kind::Chip, rect: chip, layer: Layer::Fixed, enabled: true });
+        }
         let mut t = self.footer_top() + self.footer_chip_h();
         for p in nav::FOOTER {
             controls.push(Control { id: nav_id(p), kind: Kind::Nav(p), rect: item(t), layer: Layer::Fixed, enabled: true });
@@ -1707,6 +1757,7 @@ impl Ui {
         let mut y = 0;
         self.panel_idx = None;
         self.pview.clear();
+        let mut room_on = false;
         for (n, d) in self.page_defs(self.page).into_iter().enumerate() {
             match d {
                 Def::Heading(t) => {
@@ -1726,6 +1777,25 @@ impl Ui {
                     let Some(pg) = Page::of_panel(i) else { continue };
                     let rect = Rect { l, t: y, r, b: y + self.sc(SUMMARY_H) };
                     controls.push(Control { id: ID_SUMMARY + i as i32, kind: Kind::Summary(pg), rect, layer: Layer::Page, enabled: true });
+                    y = rect.b + self.sc(ROW_GAP);
+                }
+                Def::Room => {
+                    if let Some(st) = &self.ach {
+                        let f = self.fonts.view();
+                        y = self.room.layout(st, self.mdc, &f, self.dpi, l, r, y);
+                        room_on = true;
+                        for (i, rect) in self.room.hit_rects() {
+                            controls.push(Control { id: ID_ROOM + i as i32, kind: Kind::Unit(i as u16), rect, layer: Layer::Page, enabled: true });
+                        }
+                        if !self.room.medal_btn.is_empty() {
+                            controls.push(Control { id: ID_ROOM_MEDAL, kind: Kind::Button("View medal", true), rect: self.room.medal_btn, layer: Layer::Page, enabled: true });
+                        }
+                        y += self.sc(ROW_GAP);
+                    }
+                }
+                Def::Goal => {
+                    let rect = Rect { l, t: y, r, b: y + room::goal_card_h(self.dpi) };
+                    controls.push(Control { id: ID_GOAL, kind: Kind::Goal, rect, layer: Layer::Page, enabled: true });
                     y = rect.b + self.sc(ROW_GAP);
                 }
                 Def::Panel(i) => {
@@ -1774,6 +1844,7 @@ impl Ui {
         self.content_h = y + self.sc(24);
         self.controls = controls;
         self.blocks = blocks;
+        self.room_on = room_on;
 
         let max = self.max_scroll();
         self.target = self.target.clamp(0, max);
@@ -1831,7 +1902,7 @@ impl Ui {
             let visible = match c.layer {
                 Layer::Page => !pane && y >= vt && y < vb,
                 Layer::Menu => pane && y >= mt && y < mb,
-                Layer::Fixed => pane == matches!(c.kind, Kind::Nav(_) | Kind::Icon(G_HAMBURGER)),
+                Layer::Fixed => pane == matches!(c.kind, Kind::Nav(_) | Kind::Chip | Kind::Icon(G_HAMBURGER)),
             };
             if !visible {
                 continue;
@@ -1922,6 +1993,9 @@ impl Ui {
         if done(self.anim.pane.map(|x| x.2), PANE_ANIM_S) {
             self.anim.pane = None;
         } else {
+            busy = true;
+        }
+        if self.room_on && self.room.tick(0.015, self.animate) {
             busy = true;
         }
         if !busy {
@@ -2211,6 +2285,13 @@ impl Ui {
         if let Some(pn) = self.panel_idx.and_then(|i| self.panels.get(i)) {
             self.pview.draw(cv, pn, &f.view(), &p.view(), dy, vt, vb, self.chart_hover);
         }
+        if self.room_on {
+            let hot = self.hover.and_then(|(id, _)| self.control(id)).and_then(|c| match c.kind {
+                Kind::Unit(i) => Some(i as usize),
+                _ => None,
+            });
+            self.room.draw(cv, &f.view(), &p.view(), dy, vt, vb, hot);
+        }
         for c in self.controls.iter().filter(|c| c.layer == Layer::Page) {
             let r = shift(c.rect, dy);
             if r.b < vt || r.t > vb {
@@ -2466,6 +2547,21 @@ impl Ui {
             }
             Kind::Summary(pg) => {
                 self.draw_summary(cv, r, pg, hover, pressed);
+                ring_r = (r, self.sc(6) as f32);
+            }
+            Kind::Unit(_) => ring_r = (r, self.sc(3) as f32),
+            Kind::Goal => {
+                if let Some(st) = &self.ach {
+                    if let Some(g) = crate::achievements::next_goal(st) {
+                        room::draw_goal_card(cv, &f.view(), &p.view(), self.dpi, r, st, &g, hover);
+                    }
+                }
+                ring_r = (r, self.sc(6) as f32);
+            }
+            Kind::Chip => {
+                if let Some(st) = &self.ach {
+                    room::draw_chip(cv, &f.view(), &p.view(), self.dpi, r, st, self.labels(), hover || pressed);
+                }
                 ring_r = (r, self.sc(6) as f32);
             }
             Kind::Icon(g) => {
@@ -2876,7 +2972,26 @@ fn sync_insights(a: &crate::app::App, force: bool) {
         return;
     }
     let (on, panels) = view::fetch(a, unix_ms());
-    if u.take_panels(on, panels) {
+    let ach = u.take_ach(ach_of(a));
+    if u.take_panels(on, panels) | ach {
+        u.layout();
+        u.refresh_hover();
+        invalidate(u.hwnd);
+    }
+}
+
+/// The app's achievements for this window (None when they are off).
+fn ach_of(a: &crate::app::App) -> Option<AchState> {
+    a.m.s.achievements.then(|| a.ach.state().clone())
+}
+
+/// Achievements changed (a tier, a badge, a level): update the chip, the goal card and the Server Room.
+pub fn ach_changed(a: &crate::app::App) {
+    let Some(u) = ui() else { return };
+    if u.hwnd.is_null() {
+        return;
+    }
+    if u.take_ach(ach_of(a)) {
         u.layout();
         u.refresh_hover();
         invalidate(u.hwnd);
@@ -2900,6 +3015,25 @@ fn activate(hwnd: HWND, id: i32) {
             invalidate(hwnd);
         }
         Kind::Summary(p) => go(p),
+        Kind::Unit(i) => {
+            if u.room.select(i as usize) {
+                u.layout();
+                u.kick();
+                invalidate(hwnd);
+            }
+        }
+        Kind::Goal => {
+            let sel = u.ach.as_ref().and_then(crate::achievements::next_goal).and_then(|g| Room::index_of(g.id));
+            go(Page::Achievements);
+            if let (Some(u), Some(i)) = (ui(), sel) {
+                if u.room.select(i) {
+                    u.layout();
+                    u.kick();
+                }
+                invalidate(hwnd);
+            }
+        }
+        Kind::Chip => go(Page::Achievements),
         Kind::Icon(_) => match id {
             ID_HAMBURGER => u.toggle_pane(),
             ID_BACK => go_back(),
@@ -2947,6 +3081,12 @@ fn activate(hwnd: HWND, id: i32) {
                 flush(hwnd);
                 if let Some(a) = app() {
                     a.open_achievements();
+                }
+            }
+            ID_ROOM_MEDAL => {
+                if let (Some(a), Some(id)) = (app(), u.room.selected_badge()) {
+                    let st = a.ach.state().clone();
+                    crate::achievements::ui::open_at(a.hwnd, &st, a.m.dark, id);
                 }
             }
             ID_INS_CLEAR => {
@@ -3459,6 +3599,7 @@ pub fn open(a: &mut crate::app::App, page: Page) {
         let mut state = Box::new(Ui::new(dpi, a.m.dark, a.m.s.theme, draft, adapters, labels, a.displays(), page));
         let (on, panels) = view::fetch(a, unix_ms());
         state.take_panels(on, panels);
+        state.take_ach(ach_of(a));
         state.normal = rect;
         state.maximized = max;
         free_ui();
@@ -3527,7 +3668,7 @@ pub fn app_changed(dark: bool, a: &crate::app::App) {
 /// and the window repaints only when something visible changed.
 pub fn insights_tick(a: &crate::app::App) {
     let Some(u) = ui() else { return };
-    if u.hwnd.is_null() || !u.page.shows_insights() {
+    if u.hwnd.is_null() || !(u.page.shows_insights() || u.page == Page::Achievements) {
         return;
     }
     sync_insights(a, false);

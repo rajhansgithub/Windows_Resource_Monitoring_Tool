@@ -3507,6 +3507,12 @@ pub fn open(_owner: HWND, state: &State, dark: bool) {
     }
 }
 
+/// Open the medal case on one badge's medal (the Server Room's "View medal").
+pub fn open_at(owner: HWND, state: &State, dark: bool, id: &'static str) {
+    open(owner, state, dark);
+    open_badge(id);
+}
+
 /// Update an open Achievements window with a new state (nothing happens when it is closed).
 pub fn refresh(state: &State) {
     let Some(u) = ui() else { return };

@@ -915,6 +915,7 @@ impl App {
         let st = self.ach.state().clone();
         crate::achievements::ui::refresh(&st);
         crate::achievements::ui::show_moments(self.hwnd, &moments, &st, self.m.dark);
+        crate::settings_ui::ach_changed(self);
     }
 
     /// Alert rules evaluated on the samples we already take (no extra work).
@@ -1024,6 +1025,10 @@ impl App {
         ));
         let today = self.m.usage.get(usage::today());
         t.push_str(&format!("\nToday {}", fmt::bytes(today.total())));
+        if self.m.s.achievements {
+            t.push('\n');
+            t.push_str(&crate::achievements::tip_line(self.ach.state()));
+        }
         self.tray.tip(&t);
     }
 
