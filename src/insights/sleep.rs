@@ -333,7 +333,7 @@ pub fn notice_for(n: &Night) -> Option<Notice> {
     }
     let (tone, text) = verdict(n);
     let title = if tone == Tone::Bad { "Battery drained while asleep" } else { "Sleep verdict" };
-    Some(Notice { title: title.into(), text })
+    Some(Notice { key: "sleep", title: title.into(), text })
 }
 
 /// Field lookup by several candidate names, ignoring case; empty values count as missing.
@@ -892,6 +892,8 @@ impl Sleep {
             max: 0.0,
             unit: "%/h",
             markers: vec![],
+            bars: true,
+            slots: 0,
         });
         let item = |n: &Night| {
             let (tone, title) = verdict(n);

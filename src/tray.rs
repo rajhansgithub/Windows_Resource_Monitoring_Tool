@@ -13,6 +13,8 @@ pub struct Tray {
     icon: HICON,
     added: bool,
     last_tip: String,
+    /// Insights feature of the last notification (for a click on it).
+    source: std::cell::Cell<Option<&'static str>>,
 }
 
 fn copy(dst: &mut [u16], s: &str) {
@@ -34,7 +36,7 @@ impl Tray {
                 icon = LoadIconW(std::ptr::null_mut(), IDI_APPLICATION);
             }
         }
-        Tray { hwnd, icon, added: false, last_tip: String::new() }
+        Tray { hwnd, icon, added: false, last_tip: String::new(), source: std::cell::Cell::new(None) }
     }
 
     fn base(&self) -> NOTIFYICONDATAW {
@@ -76,6 +78,22 @@ impl Tray {
     }
 
     pub fn balloon(&self, title: &str, text: &str) {
+        self.show_balloon(title, text, None);
+    }
+
+    /// A notification from an Insights feature (`key` = its panel key), so a
+    /// click on it can open that page.
+    pub fn balloon_from(&self, title: &str, text: &str, key: &'static str) {
+        self.show_balloon(title, text, Some(key));
+    }
+
+    /// Insights feature of the last notification shown (None = not an Insights one).
+    pub fn balloon_source(&self) -> Option<&'static str> {
+        self.source.get()
+    }
+
+    fn show_balloon(&self, title: &str, text: &str, source: Option<&'static str>) {
+        self.source.set(source);
         let mut d = self.base();
         d.uFlags = NIF_INFO;
         d.dwInfoFlags = NIIF_INFO | NIIF_NOSOUND;

@@ -503,6 +503,8 @@ impl Ghost {
                 max: 0.0,
                 unit: "GB",
                 markers,
+                bars: true,
+                slots: 0,
             });
         }
         p

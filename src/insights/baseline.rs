@@ -1230,6 +1230,8 @@ impl Baseline {
             max: 0.0,
             unit: "GB",
             markers,
+            bars: true,
+            slots: 0,
         })
     }
 }

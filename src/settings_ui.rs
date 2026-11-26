@@ -1,20 +1,40 @@
-//! Settings window in the style of Windows 11 Settings: a navigation pane on
-//! the left, a scrollable page of translucent "setting cards" on the right and
-//! a "Done" footer (changes apply live), all on the Mica backdrop (Windows 11).
+//! The Resource Monitor main window, in the style of Windows 11 Settings and
+//! the Fluent NavigationView: a navigation pane on the left (Overview,
+//! Achievements, the five Insights pages, the settings pages, About pinned in
+//! the footer) and the selected page on the right under a fixed page header,
+//! all on the Mica backdrop (Windows 11). One window: every entry point (tray
+//! menu, `--insights`, a second launch, a click on an Insights notification)
+//! navigates this window instead of opening another one.
+//!
+//! The pane follows WinUI's display modes: expanded (icons + labels) when the
+//! window is at least 1008 epx wide, compact (icons only, with tooltips) below;
+//! in compact mode the hamburger opens the full pane as an overlay over the
+//! content. Back (Alt+Left, the mouse back button, the header arrow) walks a
+//! short history of visited pages. Size, position, maximized state and the
+//! last page are remembered in settings.ini.
 //!
 //! There are no child windows. The whole client area is one surface rendered
 //! into a `render::Canvas` (premultiplied BGRA) and copied to the window in a
 //! single `BitBlt`, so nothing flickers and nothing shows up as white blocks
 //! while scrolling. Every control (toggle switch, drop-down, slider, number
-//! stepper, buttons, colour swatches) is painted and hit-tested here.
+//! stepper, buttons, colour swatches, navigation items) is painted and
+//! hit-tested here; Insights panels are laid out and painted by
+//! `insights::view`.
 //!
 //! With Mica the background is painted with alpha 0 and the frame is extended
 //! into the client area, so DWM shows the backdrop through it; cards and hover
 //! fills are translucent white / black like the system's own. On Windows 10
 //! (or if the backdrop cannot be enabled) opaque fallback colours are used.
 //!
-//! The window edits a *copy* of the settings; each change is merged into
-//! the live settings via `App::apply_new_settings` ~150 ms later (debounced).
+//! The settings pages edit a *copy* of the settings; each change is merged
+//! into the live settings via `App::apply_new_settings` ~150 ms later
+//! (debounced), and anything pending is applied when the window closes.
+//!
+//! Cost rules: nothing runs while the window is idle. Insights data is rebuilt
+//! at most every 2 s, only while an Insights page or Overview is showing, and
+//! the window repaints only when the visible fingerprint changed. The one
+//! animation timer (smooth scroll, page transition, selection indicator, pane
+//! overlay) runs only while something is moving.
 //!
 //! Re-entrancy rules (single UI thread, raw Win32):
 //! * `ui()` borrows are short; none is used after a call that runs a nested
@@ -24,68 +44,95 @@
 //! * The layout (controls and cards of the current page) is rebuilt from the
 //!   draft after every change; it is a few dozen rectangles.
 
-use crate::app::{app, default_accent, effective_dark, Cmd};
+use crate::app::{app, default_accent, effective_dark, Cmd, C_CRIT, C_WARN};
 use crate::fmt::SpeedUnit;
+use crate::insights::view::{self, View};
+use crate::insights::{unix_ms, Panel};
+use crate::nav::{self, Entry, History, Page, Placement};
 use crate::popup::style_window;
 use crate::render::{create_font, measure_dc, ui_face, Canvas, Rgba};
 use crate::settings::{Metric, Mode, Settings, Theme};
 use crate::util::*;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::time::Instant;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Dwm::{DwmExtendFrameIntoClientArea, DwmGetColorizationColor, DwmSetWindowAttribute};
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::UI::Controls::Dialogs::*;
 use windows_sys::Win32::UI::Controls::MARGINS;
-use windows_sys::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForSystem, GetDpiForWindow};
+use windows_sys::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_F4,
-    VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
+    GetKeyState, ReleaseCapture, SetCapture, TrackMouseEvent, TME_HOVER, TME_LEAVE, TRACKMOUSEEVENT, VK_BROWSER_BACK, VK_CONTROL,
+    VK_DOWN, VK_END, VK_ESCAPE, VK_F4, VK_F6, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB,
+    VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-const CLASS: &str = "ResourceMonitor.Settings";
+/// Window class of the main window (CI finds the window by it).
+pub const CLASS: &str = "ResourceMonitor.Main";
+const TITLE: &str = "Resource Monitor";
 
 // ------------------------------------------------------------------ layout
 // All values are device-independent pixels (96 dpi); `Ui::sc` scales them.
 
-const CLIENT_W: i32 = 800;
-const CLIENT_H: i32 = 600;
-const NAV_W: i32 = 220;
-/// Top of the first navigation item (the app title sits above it).
-const NAV_TOP: i32 = 64;
+/// Default and minimum client size.
+const DEF_W: i32 = 1080;
+const DEF_H: i32 = 720;
+const MIN_W: i32 = 720;
+const MIN_H: i32 = 520;
+/// Navigation pane width: expanded (icons + labels) and compact (icons only).
+const PANE_W: i32 = 296;
+const PANE_COMPACT: i32 = 48;
+/// Inset of the pane's items from its edges.
+const NAV_INSET: i32 = 4;
 const NAV_ITEM_H: i32 = 36;
 const NAV_GAP: i32 = 4;
-/// Page title strip above the scrolling cards.
+/// Top of the first menu item (the hamburger button sits above it).
+const MENU_TOP: i32 = 48;
+const NAV_HEAD_H: i32 = 36;
+const NAV_SEP_H: i32 = 9;
+/// Page header (back button + title) above the scrolling content.
 const HEADER_H: i32 = 76;
-const FOOTER_H: i32 = 64;
-const PAGE_PAD_L: i32 = 8;
-/// Right of the cards; the overlay scroll bar lives in this gutter.
-const PAGE_PAD_R: i32 = 24;
+/// Margin of the content from the pane and the window edge; max content width.
+const PAGE_PAD: i32 = 24;
+const CONTENT_MAX: i32 = 1000;
 const CARD_PAD: i32 = 16;
 const ROW_H: i32 = 64;
 const ROW_GAP: i32 = 4;
 const HEAD_TOP: i32 = 24;
 const HEAD_H: i32 = 28;
 const NOTE_H: i32 = 36;
+const SUMMARY_H: i32 = 92;
 const CTL_H: i32 = 32;
 const CELL_GAP: i32 = 8;
 const WHEEL_STEP: i32 = 48;
 const BTN_W: i32 = 112;
 const STEPPER_W: i32 = 132;
 
-const T_SCROLL: usize = 1;
+/// Smooth scroll and every transition; runs only while something moves.
+const T_ANIM: usize = 1;
 const T_REPEAT: usize = 2;
 /// Debounced live apply: changes take effect ~150 ms after the last edit.
 const T_LIVE: usize = 3;
+/// Durations of the transitions (Fluent "fast" ~150 ms, pane ~200 ms).
+const PAGE_ANIM_S: f32 = 0.15;
+const IND_ANIM_S: f32 = 0.15;
+const PANE_ANIM_S: f32 = 0.2;
+/// Page content slides up this far while it fades in.
+const PAGE_SLIDE: i32 = 8;
+/// Rebuild the Insights panels at most this often while they are showing.
+const REBUILD_MS: u64 = 2000;
 
 // ------------------------------------------------------------------ ids
 
-const IDOK: i32 = 1;
-const IDCANCEL: i32 = 2;
-const ID_APPLY: i32 = 3;
-/// + page index.
+const ID_HAMBURGER: i32 = 20;
+const ID_BACK: i32 = 21;
+/// + `Page::index`.
 const ID_NAV: i32 = 40;
+/// + panel index (Overview summary cards).
+const ID_SUMMARY: i32 = 70;
 
 const ID_INTERVAL: i32 = 100;
 const ID_UNIT: i32 = 101;
@@ -133,11 +180,11 @@ const ID_UPDATES: i32 = 651;
 const ID_EDITFILE: i32 = 652;
 const ID_DATADIR: i32 = 653;
 
-// Insights page.
+// Insights (Overview, Alerts, Sleep Verdict) and Achievements.
 const ID_INSIGHTS: i32 = 900;
 const ID_INS_TOASTS: i32 = 901;
 const ID_BAGGUARD: i32 = 902;
-const ID_INS_OPEN: i32 = 903;
+const ID_ACH_OPEN: i32 = 903;
 const ID_INS_CLEAR: i32 = 904;
 
 // Per-display toggles, + index in `Ui::displays`.
@@ -150,15 +197,13 @@ const ID_MTOG: i32 = 700;
 const ID_MUP: i32 = 720;
 const ID_MDN: i32 = 740;
 
-const PAGES: [&str; 7] = ["General", "Metrics", "Colours", "Alerts", "Data", "About", "Insights"];
-/// Segoe Fluent Icons / Segoe MDL2 Assets glyphs of the navigation items.
-const NAV_GLYPHS: [char; 7] = ['\u{E713}', '\u{E9D9}', '\u{E790}', '\u{EA8F}', '\u{E8F1}', '\u{E946}', '\u{E82F}'];
-/// Index of the Insights page in `PAGES` (for `open_page`).
-pub const PAGE_INSIGHTS: usize = 6;
 const G_CHEVRON_DOWN: char = '\u{E70D}';
 const G_CHEVRON_UP: char = '\u{E70E}';
+const G_CHEVRON_RIGHT: char = '\u{E76C}';
 const G_MINUS: char = '\u{E738}';
 const G_PLUS: char = '\u{E710}';
+const G_HAMBURGER: char = '\u{E700}';
+const G_BACK: char = '\u{E72B}';
 
 const INTERVALS: [(&str, u32); 4] = [("0.5 seconds", 500), ("1 second", 1000), ("2 seconds", 2000), ("5 seconds", 5000)];
 const MODES: [(&str, Mode); 2] = [("Dock to taskbar", Mode::Dock), ("Floating (drag anywhere)", Mode::Float)];
@@ -175,11 +220,13 @@ static mut UI: *mut Ui = std::ptr::null_mut();
 
 #[allow(static_mut_refs)]
 fn ui() -> Option<&'static mut Ui> {
+    // SAFETY: single UI thread; the pointer is null or a live `Box<Ui>` owned here.
     unsafe { UI.as_mut() }
 }
 
 #[allow(static_mut_refs)]
 fn free_ui() {
+    // SAFETY: single UI thread; the box is swapped out before it is freed, so once.
     unsafe {
         let p = std::ptr::replace(std::ptr::addr_of_mut!(UI), std::ptr::null_mut());
         if !p.is_null() {
@@ -213,9 +260,13 @@ const fn ka(a: u8) -> Rgba {
 /// so the Mica backdrop shows through; text is always opaque.
 #[derive(Clone, Copy)]
 struct Pal {
+    dark: bool,
     bg: Rgba,
     card: Rgba,
     card_border: Rgba,
+    /// Opaque fills: chart value bubble, tooltip, the overlay pane.
+    bubble: Rgba,
+    pane: Rgba,
     nav_sel: Rgba,
     nav_hover: Rgba,
     nav_press: Rgba,
@@ -231,8 +282,8 @@ struct Pal {
     fg: Rgba,
     dim: Rgba,
     off: Rgba,
-    footer: Rgba,
     line: Rgba,
+    chart_line: Rgba,
     tog_stroke: Rgba,
     tog_fill: Rgba,
     tog_fill_hover: Rgba,
@@ -245,6 +296,8 @@ struct Pal {
     swatch_rim: Rgba,
     sb: Rgba,
     sb_track: Rgba,
+    good: Rgba,
+    learning: Rgba,
     accent: Rgba,
     accent_hover: Rgba,
     accent_press: Rgba,
@@ -259,9 +312,12 @@ impl Pal {
         let (accent_hover, accent_press) = (accent.mix(shade, 0.1), accent.mix(shade, 0.2));
         if dark {
             Pal {
+                dark,
                 bg: if mica { Rgba(0, 0, 0, 0) } else { hx(0x202020) },
                 card: if mica { wa(0x0D) } else { hx(0x2B2B2B) },
                 card_border: if mica { wa(0x0F) } else { ka(0x33) },
+                bubble: hx(0x2C2C2C),
+                pane: hx(0x2C2C2C),
                 nav_sel: wa(0x0F),
                 nav_hover: wa(0x0A),
                 nav_press: wa(0x07),
@@ -275,8 +331,8 @@ impl Pal {
                 fg: hx(0xFFFFFF),
                 dim: hx(0xC5C5C5),
                 off: hx(0x787878),
-                footer: ka(0x20),
                 line: wa(0x0F),
+                chart_line: wa(0x17),
                 tog_stroke: wa(0x9A),
                 tog_fill: ka(0x19),
                 tog_fill_hover: wa(0x0B),
@@ -289,6 +345,8 @@ impl Pal {
                 swatch_rim: wa(0x40),
                 sb: wa(0x8B),
                 sb_track: wa(0x0B),
+                good: hx(0x6CCB5F),
+                learning: hx(0x9D9D9D),
                 accent,
                 accent_hover,
                 accent_press,
@@ -297,9 +355,12 @@ impl Pal {
         } else {
             let f9 = |a: u8| Rgba(0xF9, 0xF9, 0xF9, a);
             Pal {
+                dark,
                 bg: if mica { Rgba(0, 0, 0, 0) } else { hx(0xF3F3F3) },
                 card: if mica { wa(0xB3) } else { hx(0xFBFBFB) },
                 card_border: ka(0x0F),
+                bubble: hx(0xFFFFFF),
+                pane: hx(0xF9F9F9),
                 nav_sel: ka(0x0A),
                 nav_hover: ka(0x06),
                 nav_press: ka(0x04),
@@ -313,8 +374,8 @@ impl Pal {
                 fg: hx(0x1A1A1A),
                 dim: hx(0x5D5D5D),
                 off: hx(0xA0A0A0),
-                footer: wa(0x80),
                 line: ka(0x0F),
+                chart_line: ka(0x14),
                 tog_stroke: ka(0x72),
                 tog_fill: ka(0x06),
                 tog_fill_hover: ka(0x0F),
@@ -327,11 +388,32 @@ impl Pal {
                 swatch_rim: ka(0x30),
                 sb: ka(0x72),
                 sb_track: ka(0x06),
+                good: hx(0x0F7B0F),
+                learning: hx(0x8A8A8A),
                 accent,
                 accent_hover,
                 accent_press,
                 on_accent,
             }
+        }
+    }
+
+    /// The colours `insights::view` paints with.
+    fn view(&self) -> view::Colors {
+        view::Colors {
+            dark: self.dark,
+            card: self.card,
+            card_border: self.card_border,
+            bubble: self.bubble,
+            fg: self.fg,
+            dim: self.dim,
+            off: self.off,
+            line: self.chart_line,
+            good: self.good,
+            learning: self.learning,
+            accent: self.accent,
+            warn: C_WARN,
+            crit: C_CRIT,
         }
     }
 }
@@ -456,17 +538,23 @@ pub fn apply_menu_theme(theme: Theme, owner: HWND) {
     darkmode::allow_window(owner, true);
 }
 
+
 // ------------------------------------------------------------------ fonts
 
 struct Fonts {
     body: HFONT,
     small: HFONT,
+    tiny: HFONT,
     semi: HFONT,
+    /// Navigation section headers.
+    cap: HFONT,
+    /// Insights headlines.
+    head: HFONT,
     title: HFONT,
-    app: HFONT,
     icon: HFONT,
     icon_sm: HFONT,
 }
+
 
 /// `want` if the system has it, else `fallback`.
 pub(crate) fn pick_face(want: &'static str, fallback: &'static str) -> &'static str {
@@ -488,6 +576,7 @@ pub(crate) fn pick_face(want: &'static str, fallback: &'static str) -> &'static 
     }
 }
 
+
 impl Fonts {
     /// Grayscale anti-aliased fonts (the canvas needs a coverage mask).
     fn new(dpi: u32) -> Fonts {
@@ -498,16 +587,22 @@ impl Fonts {
         Fonts {
             body: create_font(sc(14), 400, text, true),
             small: create_font(sc(12), 400, text, true),
+            tiny: create_font(sc(11), 400, text, true),
             semi: create_font(sc(14), 600, text, true),
+            cap: create_font(sc(12), 600, text, true),
+            head: create_font(sc(20), 600, display, true),
             title: create_font(sc(28), 600, display, true),
-            app: create_font(sc(18), 600, display, true),
             icon: create_font(sc(16), 400, icons, true),
             icon_sm: create_font(sc(12), 400, icons, true),
         }
     }
 
+    fn view(&self) -> view::Fonts {
+        view::Fonts { body: self.body, small: self.small, tiny: self.tiny, semi: self.semi, head: self.head }
+    }
+
     fn free(&self) {
-        for f in [self.body, self.small, self.semi, self.title, self.app, self.icon, self.icon_sm] {
+        for f in [self.body, self.small, self.tiny, self.semi, self.cap, self.head, self.title, self.icon, self.icon_sm] {
             unsafe { DeleteObject(f) };
         }
     }
@@ -518,7 +613,10 @@ impl Fonts {
 /// What a control is; drives painting, hit-testing and input.
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
-    Nav(usize),
+    /// Navigation pane item.
+    Nav(Page),
+    /// Overview card that opens an Insights page.
+    Summary(Page),
     Toggle,
     Dropdown,
     Slider,
@@ -530,6 +628,8 @@ enum Kind {
     Swatch(Metric),
     /// Small icon button.
     Glyph(char),
+    /// Icon button at full icon size (hamburger, back).
+    Icon(char),
 }
 
 /// Sub-area of a control under the mouse.
@@ -548,12 +648,22 @@ enum Drag {
     Thumb(i32),
 }
 
+/// Where a control lives (which coordinates its rect is in).
+#[derive(Clone, Copy, PartialEq)]
+enum Layer {
+    /// Page content: x in client, y in content coordinates (scrolls).
+    Page,
+    /// Scrolling part of the navigation pane: y in menu coordinates.
+    Menu,
+    /// Client coordinates (hamburger, footer items, back button).
+    Fixed,
+}
+
 struct Control {
     id: i32,
     kind: Kind,
-    /// Page controls: x in client, y in content coordinates. Others: client.
     rect: Rect,
-    in_page: bool,
+    layer: Layer,
     enabled: bool,
 }
 
@@ -571,6 +681,10 @@ enum Def {
     Heading(&'static str),
     Note(&'static str),
     Card { title: String, desc: &'static str, enabled: bool, cells: Vec<Cell> },
+    /// Overview card summarising panel `i` (opens its page).
+    Summary(usize),
+    /// The full Insights panel `i` (headline, chart, items).
+    Panel(usize),
 }
 
 /// Laid-out non-interactive parts of a page (content coordinates).
@@ -586,6 +700,13 @@ enum Block {
         enabled: bool,
         labels: Vec<(Rect, String)>,
     },
+}
+
+/// A row of the navigation pane, laid out (menu coordinates for the menu).
+#[derive(Clone, Copy)]
+enum NavRow {
+    Header(Rect, &'static str),
+    Separator(Rect),
 }
 
 fn card(title: &str, desc: &'static str, cells: Vec<Cell>) -> Def {
@@ -624,6 +745,25 @@ fn slider_spec(id: i32) -> (i32, i32, i32, i32) {
         ID_SCALE => (70, 200, 5, 5),
         _ => (0, 100, 5, 1), // opacity, in percent
     }
+}
+
+fn nav_id(p: Page) -> i32 {
+    ID_NAV + p.index() as i32
+}
+
+/// Ease-out cubic of a 0..1 progress.
+fn ease(t: f32) -> f32 {
+    let u = 1.0 - t.clamp(0.0, 1.0);
+    1.0 - u * u * u
+}
+
+/// Windows "Animate controls and elements inside windows" (Settings >
+/// Accessibility > Visual effects > Animation effects).
+fn animations_on() -> bool {
+    let mut on: BOOL = 1;
+    // SAFETY: valid out pointer of the documented size.
+    unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &mut on as *mut BOOL as _, 0) };
+    on != 0
 }
 
 // ------------------------------------------------------------------ drawing helpers
@@ -671,10 +811,35 @@ fn cr_to_rgb(cr: COLORREF) -> u32 {
 }
 
 fn invalidate(hwnd: HWND) {
-    unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
+    if !hwnd.is_null() {
+        unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
+    }
+}
+
+/// Make sure the order lists every metric exactly once.
+fn full_order(order: &[Metric]) -> Vec<Metric> {
+    let mut v: Vec<Metric> = Vec::new();
+    for m in order.iter().chain(Metric::ALL.iter()) {
+        if !v.contains(m) {
+            v.push(*m);
+        }
+    }
+    v
 }
 
 // ------------------------------------------------------------------ ui
+
+/// Running transitions (start times); None = not running.
+struct Anim {
+    /// Page content fading / sliding in.
+    page: Option<Instant>,
+    /// Selection indicator sliding from this centre y (menu coordinates).
+    ind: Option<(i32, Instant)>,
+    /// Overlay pane width animating from .0 to .1.
+    pane: Option<(i32, i32, Instant)>,
+    /// The timer is running.
+    timer: bool,
+}
 
 struct Ui {
     hwnd: HWND,
@@ -690,7 +855,18 @@ struct Ui {
     mdc: HDC,
     cw: i32,
     ch: i32,
-    page: usize,
+    page: Page,
+    history: History,
+    /// Pane display mode from the window width.
+    mode: nav::Mode,
+    /// Expanded mode, pane collapsed to icons with the hamburger.
+    pane_closed: bool,
+    /// Compact mode, the full pane is open over the content.
+    overlay: bool,
+    /// Scroll offset of the pane's menu (when it does not fit), px.
+    nav_scroll: i32,
+    nav_h: i32,
+    rows: Vec<NavRow>,
     controls: Vec<Control>,
     blocks: Vec<Block>,
     content_h: i32,
@@ -705,11 +881,30 @@ struct Ui {
     drag: Drag,
     sb_hover: bool,
     tracking: bool,
+    /// Compact pane: tooltip of this item is showing (after the hover time).
+    tip: Option<Page>,
     /// Auto-repeat ticks of the stepper button held down.
     repeat_n: u32,
     /// Drop-down whose menu is open (drawn pressed).
     open_dd: Option<i32>,
     cv: Canvas,
+    anim: Anim,
+    animate: bool,
+    /// Last normal (not minimized / maximized) window rectangle, and maximized.
+    normal: Rect,
+    maximized: bool,
+    // ---- Insights
+    ins_on: bool,
+    panels: Vec<Panel>,
+    sig: u64,
+    /// GetTickCount64 of the last rebuild (0 = stale).
+    built: u64,
+    /// Laid-out panel of the current page, and which one.
+    pview: View,
+    panel_idx: Option<usize>,
+    /// Client x over the chart plot.
+    chart_hover: Option<i32>,
+    // ---- settings
     /// The copy being edited.
     draft: Settings,
     /// Adapter aliases offered in the drop-down (index + 1; 0 = automatic).
@@ -718,13 +913,14 @@ struct Ui {
     /// Taskbars present when the window opened: (settings key, label, primary).
     displays: Vec<(String, String, bool)>,
     autostart: bool,
-    /// Something changed since the last apply (enables Apply).
+    /// Something changed since the last apply.
     dirty: bool,
     /// Custom colours of the colour picker, kept for the session.
     cust: [COLORREF; 16],
 }
 
 impl Ui {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         dpi: u32,
         dark: bool,
@@ -733,6 +929,7 @@ impl Ui {
         adapters: Vec<String>,
         labels: Vec<String>,
         displays: Vec<(String, String, bool)>,
+        page: Page,
     ) -> Ui {
         Ui {
             hwnd: std::ptr::null_mut(),
@@ -745,7 +942,14 @@ impl Ui {
             mdc: unsafe { CreateCompatibleDC(std::ptr::null_mut()) },
             cw: 0,
             ch: 0,
-            page: 0,
+            page,
+            history: History::new(),
+            mode: nav::Mode::Expanded,
+            pane_closed: false,
+            overlay: false,
+            nav_scroll: 0,
+            nav_h: 0,
+            rows: Vec::new(),
             controls: Vec::new(),
             blocks: Vec::new(),
             content_h: 0,
@@ -758,9 +962,21 @@ impl Ui {
             drag: Drag::None,
             sb_hover: false,
             tracking: false,
+            tip: None,
             repeat_n: 0,
             open_dd: None,
             cv: Canvas::new(),
+            anim: Anim { page: None, ind: None, pane: None, timer: false },
+            animate: animations_on(),
+            normal: Rect { l: 0, t: 0, r: 0, b: 0 },
+            maximized: false,
+            ins_on: false,
+            panels: Vec::new(),
+            sig: 0,
+            built: 0,
+            pview: View::new(),
+            panel_idx: None,
+            chart_hover: None,
             draft,
             adapters,
             adapter_labels: labels,
@@ -786,6 +1002,21 @@ impl Ui {
         f.free();
         self.target = self.target * dpi as i32 / old as i32;
         self.scroll = self.target as f32;
+        self.nav_scroll = self.nav_scroll * dpi as i32 / old as i32;
+    }
+
+    /// Take fresh Insights data. Returns true when something visible changed.
+    fn take_panels(&mut self, on: bool, panels: Vec<Panel>) -> bool {
+        // SAFETY: no preconditions.
+        self.built = unsafe { GetTickCount64() }.max(1);
+        let sig = view::signature(on, &panels);
+        if sig == self.sig {
+            return false;
+        }
+        self.sig = sig;
+        self.ins_on = on;
+        self.panels = panels;
+        true
     }
 
     // -------------------------------------------------------------- values
@@ -1108,6 +1339,7 @@ impl Ui {
         (c.0 as u32) << 16 | (c.1 as u32) << 8 | c.2 as u32
     }
 
+
     // -------------------------------------------------------------- pages
 
     fn number_card(&self, title: &str, desc: &'static str, id: i32, unit: &'static str) -> Def {
@@ -1116,10 +1348,11 @@ impl Ui {
         card(title, desc, vec![cell(id, Kind::Stepper, STEPPER_W), Cell::Unit(shown, unit)])
     }
 
-    fn page_defs(&self, page: usize) -> Vec<Def> {
+    /// Cards of a settings page (General .. Data) and About.
+    fn settings_defs(&self, page: Page) -> Vec<Def> {
         let d = &self.draft;
         match page {
-            0 => {
+            Page::General => {
                 let multi = self.displays.len() > 1;
                 let mut v = vec![
                     card("Update interval", "How often the widget refreshes", vec![cell(ID_INTERVAL, Kind::Dropdown, 200)]),
@@ -1181,7 +1414,7 @@ impl Ui {
                 ]);
                 v
             }
-            1 => {
+            Page::Metrics => {
                 let mut v = vec![Def::Note("Choose which metrics appear on the widget, and move them to change their order.")];
                 let n = d.order.len();
                 for (pos, m) in d.order.iter().enumerate() {
@@ -1198,7 +1431,7 @@ impl Ui {
                 }
                 v
             }
-            2 => {
+            Page::Colours => {
                 let mut v = vec![
                     toggle_card(
                         "Use Windows accent colour",
@@ -1225,7 +1458,7 @@ impl Ui {
                 }
                 v
             }
-            3 => {
+            Page::Alerts => {
                 let on = d.alerts;
                 vec![
                     toggle_card("Alert notifications", "Show a tray notification when a limit is crossed", ID_ALERTS),
@@ -1239,9 +1472,11 @@ impl Ui {
                     Def::Heading("Colour thresholds"),
                     self.number_card("Amber from", "Values turn amber from this percentage", ID_WARN, "%"),
                     self.number_card("Red from", "Values turn red from this percentage", ID_CRIT, "%"),
+                    Def::Heading("Insights"),
+                    gated(toggle_card("Insight notifications", "Sleep verdict on wake, crashes and driver resets", ID_INS_TOASTS), d.insights),
                 ]
             }
-            4 => vec![
+            Page::Data => vec![
                 self.number_card("Monthly data cap", "In gigabytes. 0 turns the cap off", ID_CAP, "GB"),
                 card("Billing cycle resets on day", "Data is counted since the last reset day", vec![cell(ID_DAY, Kind::Dropdown, 120)]),
                 card("Network adapter", "Which adapter the data counters follow", vec![cell(ID_ADAPTER, Kind::Dropdown, 250)]),
@@ -1251,27 +1486,6 @@ impl Ui {
                     vec![cell(ID_REPORT, Kind::Button("Open data usage report", false), 0)],
                 ),
             ],
-            6 => {
-                let on = d.insights;
-                vec![
-                    toggle_card("Insights", "Explain spikes, sleep, throttling and memory. Nothing leaves this PC", ID_INSIGHTS),
-                    Def::Heading("Notifications"),
-                    gated(toggle_card("Insight notifications", "Sleep verdict on wake, crashes and driver resets", ID_INS_TOASTS), on),
-                    Def::Heading("Sleep"),
-                    gated(toggle_card("Bag Guard", "Hibernate a lid-shut laptop that keeps draining on battery", ID_BAGGUARD), on),
-                    Def::Heading("History"),
-                    card(
-                        "Insights window",
-                        "Incidents, sleep, limits, changes and memory",
-                        vec![cell(ID_INS_OPEN, Kind::Button("Open Insights", false), 0)],
-                    ),
-                    card(
-                        "Clear history",
-                        "Forget every incident, night and daily baseline",
-                        vec![Cell::Ctl { id: ID_INS_CLEAR, kind: Kind::Button("Clear", false), w: BTN_W, enabled: on }],
-                    ),
-                ]
-            }
             _ => vec![
                 Def::Note(concat!("Resource Monitor v", env!("CARGO_PKG_VERSION"), " by Emulsion Labs.")),
                 card("Emulsion Labs", "Visit the website", vec![cell(ID_WEBSITE, Kind::Button("Open website", false), 0)]),
@@ -1286,11 +1500,111 @@ impl Ui {
         }
     }
 
-    // -------------------------------------------------------------- layout
+
+    fn page_defs(&self, page: Page) -> Vec<Def> {
+        match page {
+            Page::Overview => self.overview_defs(),
+            Page::Achievements => self.achievements_defs(),
+            p if p.panel().is_some() => self.insight_defs(p),
+            p => self.settings_defs(p),
+        }
+    }
+
+    /// Cards at the very top of Overview, above the Insights switch. Empty for
+    /// now; the place for a future "next goal" (achievements) card.
+    fn overview_top(&self) -> Vec<Def> {
+        Vec::new()
+    }
+
+    fn overview_defs(&self) -> Vec<Def> {
+        let mut v = self.overview_top();
+        v.push(toggle_card("Insights", "Explain spikes, sleep, throttling and memory. Nothing leaves this PC", ID_INSIGHTS));
+        v.push(Def::Heading("This PC"));
+        for i in 0..5 {
+            v.push(Def::Summary(i));
+        }
+        v.push(Def::Heading("History"));
+        v.push(card(
+            "Clear history",
+            "Forget every incident, night and daily baseline",
+            vec![Cell::Ctl { id: ID_INS_CLEAR, kind: Kind::Button("Clear", false), w: BTN_W, enabled: self.draft.insights }],
+        ));
+        v
+    }
+
+    /// Placeholder until the Achievements view moves into this window: a line
+    /// and a button that opens the Achievements window.
+    fn achievements_defs(&self) -> Vec<Def> {
+        let on = self.draft.achievements;
+        let mut v = vec![
+            Def::Note("Medals, XP and levels for real use of this PC. Nothing leaves this PC."),
+            card(
+                "Achievements",
+                "Your medals, level and what to aim for next",
+                vec![Cell::Ctl { id: ID_ACH_OPEN, kind: Kind::Button("Open Achievements", true), w: 0, enabled: on }],
+            ),
+        ];
+        if !on {
+            v.push(toggle_card("Track achievements", "Achievements are off. Turn them on to earn medals", ID_ACHIEVE));
+        }
+        v
+    }
+
+    fn insight_defs(&self, page: Page) -> Vec<Def> {
+        let mut v = Vec::new();
+        if page == Page::Sleep {
+            v.push(gated(
+                toggle_card("Bag Guard", "Hibernate a lid-shut laptop that keeps draining on battery", ID_BAGGUARD),
+                self.draft.insights,
+            ));
+        }
+        match page.panel() {
+            Some(i) if self.ins_on && i < self.panels.len() => {
+                if !v.is_empty() {
+                    v.push(Def::Note(""));
+                }
+                v.push(Def::Panel(i));
+            }
+            _ => v.push(toggle_card("Insights is off", "Turn it on to explain spikes, sleep, throttling and memory", ID_INSIGHTS)),
+        }
+        v
+    }
+
+    // -------------------------------------------------------------- geometry
+
+    /// The pane shows labels (expanded, or the compact overlay is open).
+    fn labels(&self) -> bool {
+        (self.mode == nav::Mode::Expanded && !self.pane_closed) || self.overlay
+    }
+
+    /// Width the pane's items are laid out for.
+    fn pane_w(&self) -> i32 {
+        if self.labels() {
+            self.sc(PANE_W)
+        } else {
+            self.sc(PANE_COMPACT)
+        }
+    }
+
+    /// Left edge of the content column (the overlay does not move it).
+    fn content_x(&self) -> i32 {
+        if self.mode == nav::Mode::Expanded && !self.pane_closed {
+            self.sc(PANE_W)
+        } else {
+            self.sc(PANE_COMPACT)
+        }
+    }
+
+    /// Left and right edges of the cards (max width, left-aligned).
+    fn col(&self) -> (i32, i32) {
+        let l = self.content_x() + self.sc(PAGE_PAD);
+        let r = (self.cw - self.sc(PAGE_PAD)).min(l + self.sc(CONTENT_MAX)).max(l + self.sc(240));
+        (l, r)
+    }
 
     fn view(&self) -> (i32, i32) {
         let t = self.sc(HEADER_H);
-        (t, (self.ch - self.sc(FOOTER_H)).max(t + 1))
+        (t, self.ch.max(t + 1))
     }
 
     fn max_scroll(&self) -> i32 {
@@ -1302,9 +1616,27 @@ impl Ui {
         self.scroll.round() as i32
     }
 
-    fn nav_rect(&self, i: usize) -> Rect {
-        let t = self.sc(NAV_TOP) + i as i32 * (self.sc(NAV_ITEM_H) + self.sc(NAV_GAP));
-        Rect { l: self.sc(8), t, r: self.sc(NAV_W - 8), b: t + self.sc(NAV_ITEM_H) }
+    /// Height of the footer slot above About for a level / XP chip (0 = none).
+    /// Reserved for the in-window Achievements work; nothing is shown yet.
+    fn footer_chip_h(&self) -> i32 {
+        0
+    }
+
+    /// Top of the pane footer (About, the chip slot).
+    fn footer_top(&self) -> i32 {
+        let n = nav::FOOTER.len() as i32;
+        self.ch - self.sc(NAV_INSET) - n * self.sc(NAV_ITEM_H) - (n - 1) * self.sc(NAV_GAP) - self.footer_chip_h()
+    }
+
+    /// The scrolling menu band of the pane (client y).
+    fn menu_band(&self) -> (i32, i32) {
+        let t = self.sc(MENU_TOP);
+        (t, (self.footer_top() - self.sc(NAV_SEP_H)).max(t + 1))
+    }
+
+    fn nav_max_scroll(&self) -> i32 {
+        let (t, b) = self.menu_band();
+        (self.nav_h - (b - t)).max(0)
     }
 
     fn ctl_width(&self, kind: Kind, w: i32) -> i32 {
@@ -1319,17 +1651,62 @@ impl Ui {
         }
     }
 
-    /// Rebuild the controls and cards of the current page from the draft.
+    /// Lay out the pane, the header and the current page from the draft.
     fn layout(&mut self) {
         let mut controls = Vec::new();
         let mut blocks = Vec::new();
-        for i in 0..PAGES.len() {
-            controls.push(Control { id: ID_NAV + i as i32, kind: Kind::Nav(i), rect: self.nav_rect(i), in_page: false, enabled: true });
+        let mut rows = Vec::new();
+
+        // Pane: hamburger, menu (headers, separators, items), footer.
+        let pw = self.pane_w();
+        let labels = self.labels();
+        let (ih, gap, ins) = (self.sc(NAV_ITEM_H), self.sc(NAV_GAP), self.sc(NAV_INSET));
+        let item = |t: i32| Rect { l: ins, t, r: pw - ins, b: t + ih };
+        let hb = Rect { l: ins, t: ins, r: ins + self.sc(40), b: ins + ih };
+        controls.push(Control { id: ID_HAMBURGER, kind: Kind::Icon(G_HAMBURGER), rect: hb, layer: Layer::Fixed, enabled: true });
+        let mut y = 0;
+        for e in nav::MENU {
+            match e {
+                Entry::Item(p) => {
+                    controls.push(Control { id: nav_id(p), kind: Kind::Nav(p), rect: item(y), layer: Layer::Menu, enabled: true });
+                    y += ih + gap;
+                }
+                // Headers hide in compact mode; separators stay.
+                Entry::Header(t) if labels => {
+                    let h = self.sc(NAV_HEAD_H);
+                    rows.push(NavRow::Header(Rect { l: ins, t: y, r: pw - ins, b: y + h }, t));
+                    y += h;
+                }
+                Entry::Header(_) => {}
+                Entry::Separator => {
+                    let h = self.sc(NAV_SEP_H);
+                    rows.push(NavRow::Separator(Rect { l: ins + self.sc(8), t: y, r: pw - ins - self.sc(8), b: y + h }));
+                    y += h;
+                }
+            }
         }
-        let l = self.sc(NAV_W + PAGE_PAD_L);
-        let r = (self.cw - self.sc(PAGE_PAD_R)).max(l + self.sc(240));
+        self.nav_h = y;
+        let mut t = self.footer_top() + self.footer_chip_h();
+        for p in nav::FOOTER {
+            controls.push(Control { id: nav_id(p), kind: Kind::Nav(p), rect: item(t), layer: Layer::Fixed, enabled: true });
+            t += ih + gap;
+        }
+        self.rows = rows;
+        self.nav_scroll = self.nav_scroll.clamp(0, self.nav_max_scroll());
+
+        // Header: back button.
+        let (l, r) = self.col();
+        let bs = self.sc(32);
+        let by = (self.sc(HEADER_H) - bs) / 2 + self.sc(2);
+        let back = Rect { l, t: by, r: l + bs, b: by + bs };
+        let can_back = self.history.can_go_back();
+        controls.push(Control { id: ID_BACK, kind: Kind::Icon(G_BACK), rect: back, layer: Layer::Fixed, enabled: can_back });
+
+        // Page.
         let (row_h, ctl_h) = (self.sc(ROW_H), self.sc(CTL_H));
         let mut y = 0;
+        self.panel_idx = None;
+        self.pview.clear();
         for (n, d) in self.page_defs(self.page).into_iter().enumerate() {
             match d {
                 Def::Heading(t) => {
@@ -1341,9 +1718,22 @@ impl Ui {
                     y += h;
                 }
                 Def::Note(t) => {
-                    let h = self.sc(NOTE_H);
+                    let h = if t.is_empty() { self.sc(12) } else { self.sc(NOTE_H) };
                     blocks.push(Block::Note(Rect { l, t: y, r, b: y + h }, t));
                     y += h;
+                }
+                Def::Summary(i) => {
+                    let Some(pg) = Page::of_panel(i) else { continue };
+                    let rect = Rect { l, t: y, r, b: y + self.sc(SUMMARY_H) };
+                    controls.push(Control { id: ID_SUMMARY + i as i32, kind: Kind::Summary(pg), rect, layer: Layer::Page, enabled: true });
+                    y = rect.b + self.sc(ROW_GAP);
+                }
+                Def::Panel(i) => {
+                    if let Some(p) = self.panels.get(i) {
+                        let f = self.fonts.view();
+                        y = self.pview.layout(p, self.mdc, &f, self.dpi, l, r, y, unix_ms());
+                        self.panel_idx = Some(i);
+                    }
                 }
                 Def::Card { title, desc, enabled, cells } => {
                     let rect = Rect { l, t: y, r, b: y + row_h };
@@ -1357,7 +1747,7 @@ impl Ui {
                             Cell::Ctl { id, kind, w, enabled: e } => {
                                 let w = self.ctl_width(*kind, *w);
                                 let rc = Rect { l: x - w, t: ct, r: x, b: cb };
-                                row.push(Control { id: *id, kind: *kind, rect: rc, in_page: true, enabled: enabled && *e });
+                                row.push(Control { id: *id, kind: *kind, rect: rc, layer: Layer::Page, enabled: enabled && *e });
                                 w
                             }
                             Cell::Unit(shown, reserve) => {
@@ -1382,22 +1772,6 @@ impl Ui {
             }
         }
         self.content_h = y + self.sc(24);
-
-        // Footer buttons, right-aligned: OK, Cancel, Apply.
-        let (bw, bh, gap) = (self.sc(BTN_W), self.sc(CTL_H), self.sc(8));
-        let fh = self.sc(FOOTER_H);
-        let by = self.ch - fh + (fh - bh) / 2;
-        let right = self.cw - self.sc(24);
-        // Changes apply live, so the footer only needs "Done" (like Windows Settings).
-        let _ = gap;
-        let x = right - bw;
-        controls.push(Control {
-            id: IDOK,
-            kind: Kind::Button("Done", true),
-            rect: Rect { l: x, t: by, r: x + bw, b: by + bh },
-            in_page: false,
-            enabled: true,
-        });
         self.controls = controls;
         self.blocks = blocks;
 
@@ -1417,10 +1791,10 @@ impl Ui {
 
     /// A control's rectangle in client coordinates.
     fn client_rect(&self, c: &Control) -> Rect {
-        if c.in_page {
-            shift(c.rect, self.view().0 - self.scroll_px())
-        } else {
-            c.rect
+        match c.layer {
+            Layer::Page => shift(c.rect, self.view().0 - self.scroll_px()),
+            Layer::Menu => shift(c.rect, self.menu_band().0 - self.nav_scroll),
+            Layer::Fixed => c.rect,
         }
     }
 
@@ -1441,10 +1815,25 @@ impl Ui {
         (r.l + self.sc(10), r.r - self.sc(10))
     }
 
+    /// The point is over the pane (the full pane while the overlay is open).
+    fn over_pane(&self, x: i32) -> bool {
+        x < if self.overlay { self.pane_w() } else { self.content_x() }
+    }
+
     fn hit(&self, x: i32, y: i32) -> Option<(i32, Part)> {
         let (vt, vb) = self.view();
+        let (mt, mb) = self.menu_band();
+        let pane = self.over_pane(x);
         for c in &self.controls {
-            if !c.enabled || (c.in_page && (y < vt || y >= vb)) {
+            if !c.enabled {
+                continue;
+            }
+            let visible = match c.layer {
+                Layer::Page => !pane && y >= vt && y < vb,
+                Layer::Menu => pane && y >= mt && y < mb,
+                Layer::Fixed => pane == matches!(c.kind, Kind::Nav(_) | Kind::Icon(G_HAMBURGER)),
+            };
+            if !visible {
                 continue;
             }
             let r = self.client_rect(c);
@@ -1468,6 +1857,16 @@ impl Ui {
         None
     }
 
+    /// Client x when (x, y) is over the chart plot of the current panel.
+    fn chart_at(&self, x: i32, y: i32) -> Option<i32> {
+        let (vt, vb) = self.view();
+        if self.panel_idx.is_none() || self.over_pane(x) || y < vt || y >= vb {
+            return None;
+        }
+        let cy = y - (vt - self.scroll_px());
+        self.pview.over_chart(x, cy).then_some(x)
+    }
+
     /// Scroll bar track (hit area) and thumb, if the page scrolls.
     fn scrollbar(&self) -> Option<(Rect, Rect)> {
         let max = self.max_scroll();
@@ -1484,47 +1883,97 @@ impl Ui {
         Some((track, Rect { l: r - w, t: ty, r, b: ty + th }))
     }
 
-    // -------------------------------------------------------------- scrolling
+    // -------------------------------------------------------------- motion
 
-    fn scroll_to(&mut self, target: i32, animate: bool) {
-        self.target = target.clamp(0, self.max_scroll());
-        unsafe {
-            if animate && (self.target as f32 - self.scroll).abs() > 1.0 {
-                SetTimer(self.hwnd, T_SCROLL, 15, None);
-            } else {
-                self.scroll = self.target as f32;
-                KillTimer(self.hwnd, T_SCROLL);
-            }
+    /// Keep the animation timer running while anything moves.
+    fn kick(&mut self) {
+        if !self.anim.timer {
+            self.anim.timer = true;
+            unsafe { SetTimer(self.hwnd, T_ANIM, 15, None) };
         }
-        invalidate(self.hwnd);
     }
 
-    fn scroll_tick(&mut self) {
+    fn stop_timer(&mut self) {
+        self.anim.timer = false;
+        unsafe { KillTimer(self.hwnd, T_ANIM) };
+    }
+
+    /// One animation frame. Stops the timer when nothing moves any more.
+    fn anim_tick(&mut self) {
+        let mut busy = false;
         let d = self.target as f32 - self.scroll;
         if d.abs() < 0.6 {
             self.scroll = self.target as f32;
-            unsafe { KillTimer(self.hwnd, T_SCROLL) };
         } else {
             self.scroll += d * 0.3;
+            busy = true;
+        }
+        let done = |t: Option<Instant>, dur: f32| t.is_none_or(|t| t.elapsed().as_secs_f32() >= dur);
+        if done(self.anim.page, PAGE_ANIM_S) {
+            self.anim.page = None;
+        } else {
+            busy = true;
+        }
+        if done(self.anim.ind.map(|x| x.1), IND_ANIM_S) {
+            self.anim.ind = None;
+        } else {
+            busy = true;
+        }
+        if done(self.anim.pane.map(|x| x.2), PANE_ANIM_S) {
+            self.anim.pane = None;
+        } else {
+            busy = true;
+        }
+        if !busy {
+            self.stop_timer();
         }
         self.refresh_hover();
         invalidate(self.hwnd);
     }
 
-    /// Scroll so a page control (plus a margin) is fully visible.
+    fn progress(t: Instant, dur: f32) -> f32 {
+        ease(t.elapsed().as_secs_f32() / dur)
+    }
+
+    // -------------------------------------------------------------- scrolling
+
+    fn scroll_to(&mut self, target: i32, animate: bool) {
+        self.target = target.clamp(0, self.max_scroll());
+        if animate && self.animate && (self.target as f32 - self.scroll).abs() > 1.0 {
+            self.kick();
+        } else {
+            self.scroll = self.target as f32;
+        }
+        invalidate(self.hwnd);
+    }
+
+    /// Scroll so a control (plus a margin) is fully visible: the page for
+    /// page controls, the pane's menu for menu items.
     fn ensure_visible(&mut self, id: i32) {
         let Some(c) = self.control(id) else { return };
-        if !c.in_page {
-            return;
-        }
-        let (vt, vb) = self.view();
         let m = self.sc(16);
-        let (t, b) = (c.rect.t - m, c.rect.b + m);
-        let s = self.target;
-        if t < s {
-            self.scroll_to(t, true);
-        } else if b > s + (vb - vt) {
-            self.scroll_to(b - (vb - vt), true);
+        match c.layer {
+            Layer::Page => {
+                let (vt, vb) = self.view();
+                let (t, b) = (c.rect.t - m, c.rect.b + m);
+                let s = self.target;
+                if t < s {
+                    self.scroll_to(t, true);
+                } else if b > s + (vb - vt) {
+                    self.scroll_to(b - (vb - vt), true);
+                }
+            }
+            Layer::Menu => {
+                let (mt, mb) = self.menu_band();
+                let (t, b) = (c.rect.t - self.sc(4), c.rect.b + self.sc(4));
+                if t < self.nav_scroll {
+                    self.nav_scroll = t.max(0);
+                } else if b > self.nav_scroll + (mb - mt) {
+                    self.nav_scroll = (b - (mb - mt)).min(self.nav_max_scroll());
+                }
+                invalidate(self.hwnd);
+            }
+            Layer::Fixed => {}
         }
     }
 
@@ -1536,55 +1985,147 @@ impl Ui {
             ScreenToClient(self.hwnd, &mut pt);
         }
         let inside = pt.x >= 0 && pt.y >= 0 && pt.x < self.cw && pt.y < self.ch;
-        self.hover = if inside && self.drag == Drag::None { self.hit(pt.x, pt.y) } else { None };
+        let free = inside && self.drag == Drag::None;
+        self.hover = if free { self.hit(pt.x, pt.y) } else { None };
+        self.chart_hover = if free { self.chart_at(pt.x, pt.y) } else { None };
     }
 
-    fn show_page(&mut self, p: usize) {
-        if p >= PAGES.len() {
-            return;
-        }
-        if p != self.page {
-            self.page = p;
-            self.scroll = 0.0;
-            self.target = 0;
-            unsafe { KillTimer(self.hwnd, T_SCROLL) };
-            if let Some(f) = self.focus {
-                if self.control(f).is_some_and(|c| c.in_page || matches!(c.kind, Kind::Nav(_))) {
-                    self.focus = None;
-                }
-            }
+    // -------------------------------------------------------------- navigation
+
+    /// Client y of the centre of `p`'s navigation item, if it is on screen.
+    fn indicator_y(&self, p: Page) -> Option<i32> {
+        let c = self.control(nav_id(p))?;
+        let r = self.client_rect(c);
+        let (mt, mb) = self.menu_band();
+        let cy = (r.t + r.b) / 2;
+        (c.layer != Layer::Menu || (cy >= mt && cy < mb)).then_some(cy)
+    }
+
+    /// Show page `p`. `record` = remember the current page for Back.
+    /// Insights data is loaded by the caller (it needs the `App`).
+    fn navigate(&mut self, p: Page, record: bool) -> bool {
+        self.overlay = false;
+        self.tip = None;
+        if p == self.page {
             self.layout();
-            self.refresh_hover();
+            invalidate(self.hwnd);
+            return false;
         }
+        let from = self.indicator_y(self.page);
+        if record {
+            self.history.push(self.page);
+        }
+        self.page = p;
+        self.scroll = 0.0;
+        self.target = 0;
+        self.chart_hover = None;
+        if let Some(f) = self.focus {
+            if self.control(f).is_some_and(|c| c.layer == Layer::Page) {
+                self.focus = None;
+            }
+        }
+        self.layout();
+        self.refresh_hover();
+        if self.animate && !self.hwnd.is_null() {
+            let now = Instant::now();
+            self.anim.page = Some(now);
+            self.anim.ind = from.map(|y| (y, now));
+            self.kick();
+        }
+        invalidate(self.hwnd);
+        true
+    }
+
+    fn back(&mut self) -> bool {
+        match self.history.pop() {
+            Some(p) => self.navigate(p, false),
+            None => false,
+        }
+    }
+
+    /// Hamburger: collapse / expand the pane (expanded mode) or open / close
+    /// the overlay pane (compact mode).
+    fn toggle_pane(&mut self) {
+        self.tip = None;
+        if self.mode == nav::Mode::Expanded {
+            self.pane_closed = !self.pane_closed;
+        } else {
+            self.overlay = !self.overlay;
+            if self.overlay && self.animate {
+                self.anim.pane = Some((self.sc(PANE_COMPACT), self.sc(PANE_W), Instant::now()));
+                self.kick();
+            }
+        }
+        self.layout();
+        self.refresh_hover();
         invalidate(self.hwnd);
     }
 
-    /// Controls in keyboard order: the selected navigation item, the page,
-    /// the footer.
+    /// New client size: pick the pane mode for the width.
+    fn resized(&mut self, w: i32, h: i32) {
+        self.cw = w;
+        self.ch = h;
+        let epx = w * 96 / self.dpi.max(1) as i32;
+        let mode = nav::mode_for(epx);
+        if mode != self.mode {
+            self.mode = mode;
+            self.overlay = false;
+            self.pane_closed = false;
+        }
+        self.layout();
+    }
+
+    /// Ids a keyboard user walks with Up / Down in the pane.
+    fn nav_ids(&self) -> Vec<i32> {
+        std::iter::once(ID_HAMBURGER).chain(nav::nav_order().map(nav_id)).collect()
+    }
+
+    fn in_nav(&self, id: i32) -> bool {
+        id == ID_HAMBURGER || self.control(id).is_some_and(|c| matches!(c.kind, Kind::Nav(_)))
+    }
+
+    /// Controls in Tab order: hamburger, the selected navigation item, back,
+    /// the page.
     fn focus_order(&self) -> Vec<i32> {
-        self.controls
-            .iter()
-            .filter(|c| c.enabled && !matches!(c.kind, Kind::Nav(i) if i != self.page))
-            .map(|c| c.id)
-            .collect()
+        let sel = nav_id(self.page);
+        let mut v = vec![ID_HAMBURGER, sel];
+        if self.control(ID_BACK).is_some_and(|c| c.enabled) {
+            v.push(ID_BACK);
+        }
+        v.extend(self.controls.iter().filter(|c| c.enabled && c.layer == Layer::Page).map(|c| c.id));
+        v
+    }
+
+    fn set_focus(&mut self, id: Option<i32>) {
+        self.focus = id;
+        self.focus_visible = true;
+        if let Some(id) = id {
+            self.ensure_visible(id);
+        }
+        invalidate(self.hwnd);
     }
 
     fn move_focus(&mut self, dir: i32) {
         let order = self.focus_order();
-        if order.is_empty() {
-            return;
-        }
         let n = order.len() as i32;
-        let next = match self.focus.and_then(|f| order.iter().position(|x| *x == f)) {
+        // A non-selected pane item (reached with the arrows) counts as the selected one.
+        let cur = self.focus.map(|f| if self.in_nav(f) && f != ID_HAMBURGER { nav_id(self.page) } else { f });
+        let next = match cur.and_then(|f| order.iter().position(|x| *x == f)) {
             Some(i) => (i as i32 + dir).rem_euclid(n),
             None if dir > 0 => 0,
             None => n - 1,
         };
-        let id = order[next as usize];
-        self.focus = Some(id);
-        self.focus_visible = true;
-        self.ensure_visible(id);
-        invalidate(self.hwnd);
+        self.set_focus(Some(order[next as usize]));
+    }
+
+    /// F6: between the pane and the content.
+    fn switch_region(&mut self) {
+        if self.focus.is_some_and(|f| self.in_nav(f)) {
+            let first = self.controls.iter().find(|c| c.enabled && c.layer == Layer::Page).map(|c| c.id);
+            self.set_focus(first.or(self.control(ID_BACK).filter(|c| c.enabled).map(|c| c.id)));
+        } else {
+            self.set_focus(Some(nav_id(self.page)));
+        }
     }
 
     // -------------------------------------------------------------- painting
@@ -1593,6 +2134,7 @@ impl Ui {
         let mut cv = std::mem::replace(&mut self.cv, Canvas::new());
         cv.resize(self.cw, self.ch);
         self.draw(&mut cv);
+        cv.set_clip(None);
         cv.blit(dc, 0, 0);
         self.cv = cv;
     }
@@ -1608,11 +2150,16 @@ impl Ui {
         let f = &self.fonts;
         cv.clear(p.bg);
         let (vt, vb) = self.view();
-        let dy = vt - self.scroll_px();
+        let cx0 = self.content_x();
+        let (_, col_r) = self.col();
         let rad = self.sc(6) as f32;
+        // Page transition: content slides up `PAGE_SLIDE` while it fades in.
+        let fade = self.anim.page.map(|t| Self::progress(t, PAGE_ANIM_S));
+        let slide = fade.map_or(0, |e| ((1.0 - e) * self.sc(PAGE_SLIDE) as f32).round() as i32);
+        let dy = vt - self.scroll_px() + slide;
 
-        // Page content (scrolled), clipped afterwards by repainting the
-        // header and footer strips.
+        // Page content, clipped to the band under the header.
+        cv.set_clip(Some(Rect { l: cx0, t: vt, r: self.cw, b: vb }));
         for b in &self.blocks {
             match b {
                 Block::Heading(r, t) => {
@@ -1625,7 +2172,7 @@ impl Ui {
                 }
                 Block::Note(r, t) => {
                     let r = shift(*r, dy);
-                    if r.b < vt || r.t > vb {
+                    if t.is_empty() || r.b < vt || r.t > vb {
                         continue;
                     }
                     let s = cv.ellipsize(f.body, t, r.w() - self.sc(4));
@@ -1661,37 +2208,32 @@ impl Ui {
                 }
             }
         }
-        for c in self.controls.iter().filter(|c| c.in_page) {
-            let r = self.client_rect(c);
+        if let Some(pn) = self.panel_idx.and_then(|i| self.panels.get(i)) {
+            self.pview.draw(cv, pn, &f.view(), &p.view(), dy, vt, vb, self.chart_hover);
+        }
+        for c in self.controls.iter().filter(|c| c.layer == Layer::Page) {
+            let r = shift(c.rect, dy);
             if r.b < vt || r.t > vb {
                 continue;
             }
             self.draw_control(cv, c, r);
         }
-        let px = self.sc(NAV_W);
-        cv.clear_rect(Rect { l: px, t: 0, r: cv.w, b: vt }, p.bg);
-        cv.clear_rect(Rect { l: px, t: vb, r: cv.w, b: cv.h }, p.bg);
 
-        // Page title.
-        let name = PAGES[self.page];
-        let th = cv.measure(f.title, name).1;
-        cv.text(f.title, name, self.sc(NAV_W + PAGE_PAD_L + 2), (vt - th) / 2 + self.sc(2), p.fg);
-
-        // Footer.
-        cv.fill_rect(Rect { l: px, t: vb, r: cv.w, b: cv.h }, p.footer);
-        cv.fill_rect(Rect { l: px, t: vb, r: cv.w, b: vb + 1 }, p.line);
-
-        // Hint left of "Done".
-        {
-            let hint = "Changes are applied as you make them";
-            let (_, th) = cv.measure(f.small, hint);
-            cv.text(f.small, hint, px + self.sc(PAGE_PAD_L), vb + (cv.h - vb - th) / 2, p.dim);
+        // Page header: back button and title.
+        cv.set_clip(Some(Rect { l: cx0, t: 0, r: self.cw, b: vt }));
+        let mut tx = self.col().0;
+        let mut tcy = vt / 2 + slide;
+        if let Some(c) = self.control(ID_BACK) {
+            let r = shift(c.rect, slide);
+            self.draw_control(cv, c, r);
+            tx = r.r + self.sc(12);
+            tcy = (r.t + r.b) / 2;
         }
-
-        // App title, navigation, footer buttons.
-        cv.text(f.app, "Settings", self.sc(20), self.sc(18), p.fg);
-        for c in self.controls.iter().filter(|c| !c.in_page) {
-            self.draw_control(cv, c, c.rect);
+        let title = cv.ellipsize(f.title, self.page.title(), col_r - tx);
+        text_mid(cv, f.title, &title, tx, tcy - self.sc(2), p.fg);
+        cv.set_clip(None);
+        if let Some(e) = fade {
+            cv.fade_rect(Rect { l: cx0, t: 0, r: self.cw, b: self.ch }, e, p.bg);
         }
 
         // Overlay scroll bar.
@@ -1703,6 +2245,198 @@ impl Ui {
             }
             cv.fill_round(thumb, thumb.w() as f32 / 2.0, p.sb);
         }
+
+        self.draw_pane(cv);
+        self.draw_tip(cv);
+    }
+
+    /// The navigation pane: hamburger, menu, selection indicator, footer.
+    fn draw_pane(&self, cv: &mut Canvas) {
+        let p = self.pal;
+        let f = &self.fonts;
+        let mut pw = self.pane_w();
+        if self.overlay {
+            // Light-dismiss overlay over the content: opaque, with an edge and a soft shadow.
+            if let Some((a, b, t)) = self.anim.pane {
+                pw = a + ((b - a) as f32 * Self::progress(t, PANE_ANIM_S)).round() as i32;
+            }
+            for i in 0..self.sc(8) {
+                let al = (0x28 * (self.sc(8) - i) / self.sc(8)) as u8;
+                cv.fill_rect(Rect { l: pw + i, t: 0, r: pw + i + 1, b: self.ch }, ka(if p.dark { al * 2 } else { al }));
+            }
+            cv.fill_rect(Rect { l: 0, t: 0, r: pw, b: self.ch }, p.pane);
+            cv.fill_rect(Rect { l: pw - 1, t: 0, r: pw, b: self.ch }, p.card_border);
+        }
+        let clip_r = pw;
+        let (mt, mb) = self.menu_band();
+        let my = mt - self.nav_scroll;
+
+        // Menu rows and items, clipped to the menu band.
+        cv.set_clip(Some(Rect { l: 0, t: mt, r: clip_r, b: mb }));
+        for row in &self.rows {
+            match *row {
+                NavRow::Header(r, t) => {
+                    let r = shift(r, my);
+                    let th = cv.measure(f.cap, t).1;
+                    cv.text(f.cap, t, r.l + self.sc(12), r.b - th - self.sc(8), p.dim);
+                }
+                NavRow::Separator(r) => {
+                    let r = shift(r, my);
+                    let y = (r.t + r.b) / 2;
+                    cv.fill_rect(Rect { l: r.l, t: y, r: r.r, b: y + 1 }, p.line);
+                }
+            }
+        }
+        for c in self.controls.iter().filter(|c| c.layer == Layer::Menu) {
+            let r = self.client_rect(c);
+            if r.b < mt || r.t > mb {
+                continue;
+            }
+            self.draw_control(cv, c, r);
+        }
+        self.draw_indicator(cv, Some((mt, mb)), true);
+
+        // Hamburger and footer.
+        cv.set_clip(Some(Rect { l: 0, t: 0, r: clip_r, b: self.ch }));
+        if self.nav_max_scroll() > 0 || self.footer_chip_h() > 0 {
+            let y = self.footer_top() - self.sc(NAV_SEP_H) / 2 - 1;
+            let ins = self.sc(NAV_INSET + 8);
+            cv.fill_rect(Rect { l: ins, t: y, r: self.pane_w() - ins, b: y + 1 }, p.line);
+        }
+        for c in self.controls.iter().filter(|c| c.layer == Layer::Fixed && c.id != ID_BACK) {
+            self.draw_control(cv, c, c.rect);
+        }
+        self.draw_indicator(cv, None, false);
+        cv.set_clip(None);
+    }
+
+    /// The accent pill left of the selected item, sliding between items.
+    fn draw_indicator(&self, cv: &mut Canvas, band: Option<(i32, i32)>, menu: bool) {
+        let Some(c) = self.control(nav_id(self.page)) else { return };
+        if (c.layer == Layer::Menu) != menu {
+            return;
+        }
+        let r = self.client_rect(c);
+        let mut cy = (r.t + r.b) / 2;
+        if let Some((from, t)) = self.anim.ind {
+            cy = from + ((cy - from) as f32 * Self::progress(t, IND_ANIM_S)).round() as i32;
+        }
+        if let Some((t, b)) = band {
+            if cy < t || cy >= b {
+                return;
+            }
+        }
+        let (pw, ph) = (self.sc(3), self.sc(16));
+        let t = cy - ph / 2;
+        cv.fill_round(Rect { l: r.l, t, r: r.l + pw, b: t + ph }, pw as f32 / 2.0, self.pal.accent);
+    }
+
+    /// Tone of an Insights page (for its dot), when Insights is on.
+    fn page_tone(&self, pg: Page) -> Option<crate::insights::Tone> {
+        let i = pg.panel()?;
+        self.ins_on.then(|| self.panels.get(i).map(|x| x.tone)).flatten()
+    }
+
+    fn draw_nav_item(&self, cv: &mut Canvas, _c: &Control, r: Rect, pg: Page, hover: bool, pressed: bool) {
+        let p = self.pal;
+        let f = &self.fonts;
+        let cy = (r.t + r.b) / 2;
+        let rad4 = self.sc(4) as f32;
+        let sel = pg == self.page;
+        let fill = if pressed {
+            Some(p.nav_press)
+        } else if sel {
+            Some(p.nav_sel)
+        } else if hover {
+            Some(p.nav_hover)
+        } else {
+            None
+        };
+        if let Some(fl) = fill {
+            cv.fill_round(r, rad4, fl);
+        }
+        let gx = r.l + self.sc(20);
+        glyph(cv, f.icon, pg.glyph(), gx, cy, p.fg);
+        let tone = self.page_tone(pg).map(|t| p.view().tone(t));
+        if self.labels() {
+            let dot = self.sc(8);
+            let dx = r.r - self.sc(14);
+            let right = if tone.is_some() { dx - dot - self.sc(8) } else { r.r - self.sc(8) };
+            let label = cv.ellipsize(f.body, pg.title(), right - (r.l + self.sc(44)));
+            text_mid(cv, f.body, &label, r.l + self.sc(44), cy, p.fg);
+            if let Some(tc) = tone {
+                pill(cv, dx, cy, dot, dot, tc);
+            }
+        } else if let Some(tc) = tone {
+            // Compact: a small badge on the icon's corner.
+            let d = self.sc(7);
+            let (bx, by) = (gx + self.sc(8), cy - self.sc(7));
+            if !self.mica {
+                pill(cv, bx, by, d + 2, d + 2, p.bg);
+            }
+            pill(cv, bx, by, d, d, tc);
+        }
+    }
+
+    /// Overview card for an Insights page: glyph, title, tone pill, headline, one fact.
+    fn draw_summary(&self, cv: &mut Canvas, r: Rect, pg: Page, hover: bool, pressed: bool) {
+        let p = self.pal;
+        let f = &self.fonts;
+        let rad = self.sc(6) as f32;
+        cv.fill_round(r, rad, p.card);
+        if pressed {
+            cv.fill_round(r, rad, p.subtle_press);
+        } else if hover {
+            cv.fill_round(r, rad, p.subtle_hover);
+        }
+        cv.stroke_round(r, rad, p.card_border);
+        let panel = pg.panel().filter(|_| self.ins_on).and_then(|i| self.panels.get(i));
+        let (c_main, c_dim, c_icon) = if panel.is_some() { (p.fg, p.dim, p.accent) } else { (p.off, p.off, p.off) };
+        let pad = self.sc(CARD_PAD);
+        let cy = (r.t + r.b) / 2;
+        glyph(cv, f.icon, pg.glyph(), r.l + pad + self.sc(12), r.t + pad + self.sc(10), c_icon);
+        glyph(cv, f.icon_sm, G_CHEVRON_RIGHT, r.r - self.sc(24), cy, c_dim);
+        let tx = r.l + pad + self.sc(36);
+        let right = r.r - self.sc(48);
+        let sh = cv.measure(f.semi, "Ag").1;
+        let ty = r.t + pad - self.sc(2);
+        let mut title_r = right;
+        if let Some(pn) = panel {
+            let (tw, _) = cv.measure(f.small, view::tone_label(pn.tone));
+            let pw = self.sc(10 + 8 + 6 + 12) + tw;
+            let px = right - pw;
+            view::draw_pill(cv, &f.view(), &p.view(), self.dpi, px, ty + (sh - self.sc(24)) / 2, pn.tone);
+            title_r = px - self.sc(12);
+        }
+        let t = cv.ellipsize(f.semi, panel.map_or(pg.title(), |pn| pn.title), title_r - tx);
+        cv.text(f.semi, &t, tx, ty, c_main);
+        let (headline, fact) = match panel {
+            Some(pn) => (pn.headline.as_str(), pn.lines.first().map_or("", |s| s.as_str())),
+            None => ("Insights is off", "Turn on Insights above to see this."),
+        };
+        let bh = cv.measure(f.body, "Ag").1;
+        let hy = ty + sh + self.sc(6);
+        let h = cv.ellipsize(f.body, headline, right - tx);
+        cv.text(f.body, &h, tx, hy, c_main);
+        let s = cv.ellipsize(f.small, fact, right - tx);
+        cv.text(f.small, &s, tx, hy + bh + self.sc(2), c_dim);
+    }
+
+    /// Compact pane: the hovered item's name, beside it.
+    fn draw_tip(&self, cv: &mut Canvas) {
+        let Some(pg) = self.tip.filter(|_| !self.labels()) else { return };
+        let Some(c) = self.control(nav_id(pg)) else { return };
+        let r = self.client_rect(c);
+        let p = self.pal;
+        let f = &self.fonts;
+        let (tw, th) = cv.measure(f.body, pg.title());
+        let (bw, bh) = (tw + self.sc(16), th + self.sc(10));
+        let l = r.r + self.sc(8);
+        let t = ((r.t + r.b) / 2 - bh / 2).clamp(0, (self.ch - bh).max(0));
+        let br = Rect { l, t, r: l + bw, b: t + bh };
+        cv.fill_round(br, self.sc(4) as f32, p.bubble);
+        cv.stroke_round(br, self.sc(4) as f32, p.ctl_border);
+        cv.text(f.body, pg.title(), l + self.sc(8), t + self.sc(5), p.fg);
     }
 
     fn draw_control(&self, cv: &mut Canvas, c: &Control, r: Rect) {
@@ -1726,27 +2460,21 @@ impl Ui {
         let text_c = if en { p.fg } else { p.off };
         let mut ring_r = (inflate(r, self.sc(3)), rad4 + self.sc(3) as f32);
         match c.kind {
-            Kind::Nav(i) => {
-                let sel = i == self.page;
-                let fill = if pressed {
-                    Some(p.nav_press)
-                } else if sel {
-                    Some(p.nav_sel)
-                } else if hover {
-                    Some(p.nav_hover)
-                } else {
-                    None
-                };
-                if let Some(fl) = fill {
-                    cv.fill_round(r, rad4, fl);
+            Kind::Nav(pg) => {
+                self.draw_nav_item(cv, c, r, pg, hover, pressed);
+                ring_r = (r, rad4);
+            }
+            Kind::Summary(pg) => {
+                self.draw_summary(cv, r, pg, hover, pressed);
+                ring_r = (r, self.sc(6) as f32);
+            }
+            Kind::Icon(g) => {
+                if en && pressed {
+                    cv.fill_round(r, rad4, p.subtle_press);
+                } else if en && hover {
+                    cv.fill_round(r, rad4, p.subtle_hover);
                 }
-                if sel {
-                    let (pw, ph) = (self.sc(3), self.sc(16));
-                    let t = cy - ph / 2;
-                    cv.fill_round(Rect { l: r.l, t, r: r.l + pw, b: t + ph }, pw as f32 / 2.0, p.accent);
-                }
-                glyph(cv, f.icon, NAV_GLYPHS[i], r.l + self.sc(24), cy, p.fg);
-                text_mid(cv, f.body, PAGES[i], r.l + self.sc(48), cy, p.fg);
+                glyph(cv, f.icon, g, (r.l + r.r) / 2, cy, text_c);
                 ring_r = (r, rad4);
             }
             Kind::Toggle => {
@@ -1925,7 +2653,7 @@ fn changed(hwnd: HWND) {
     }
 }
 
-/// Apply anything still pending (closing the window, pressing Done).
+/// Apply anything still pending (closing the window, editing the file).
 fn flush(hwnd: HWND) {
     unsafe { KillTimer(hwnd, T_LIVE) };
     if ui().is_some_and(|u| u.dirty) {
@@ -2001,9 +2729,6 @@ fn commit(hwnd: HWND) -> bool {
     // Re-fetch: applying may have pumped messages.
     if let Some(u) = ui() {
         u.dirty = false;
-        if u.focus == Some(ID_APPLY) {
-            u.focus = Some(IDOK);
-        }
         if u.dark != dark || u.theme != theme {
             u.dark = dark;
             u.theme = theme;
@@ -2015,10 +2740,6 @@ fn commit(hwnd: HWND) -> bool {
     true
 }
 
-fn ok(hwnd: HWND) {
-    flush(hwnd);
-    unsafe { DestroyWindow(hwnd) };
-}
 
 fn pick_colour(hwnd: HWND, m: Metric) {
     let Some((cur, mut cust)) = ui().map(|u| (u.swatch_rgb(m), u.cust)) else { return };
@@ -2122,19 +2843,68 @@ fn run(cmd: Cmd) {
     }
 }
 
+
+/// Navigate to `p` (recording it for Back) and load its Insights data.
+fn go(p: Page) {
+    let Some(u) = ui() else { return };
+    if u.navigate(p, true) && p.shows_insights() {
+        if let Some(a) = app() {
+            sync_insights(a, false);
+        }
+    }
+}
+
+fn go_back() {
+    let Some(u) = ui() else { return };
+    if u.back() && u.page.shows_insights() {
+        if let Some(a) = app() {
+            sync_insights(a, false);
+        }
+    }
+}
+
+/// Rebuild the Insights panels from the app (at most every 2 s unless
+/// `force`); relayout and repaint only if something visible changed.
+fn sync_insights(a: &crate::app::App, force: bool) {
+    let Some(u) = ui() else { return };
+    if u.hwnd.is_null() {
+        return;
+    }
+    // SAFETY: no preconditions.
+    let now = unsafe { GetTickCount64() };
+    if !force && now.saturating_sub(u.built) < REBUILD_MS {
+        return;
+    }
+    let (on, panels) = view::fetch(a, unix_ms());
+    if u.take_panels(on, panels) {
+        u.layout();
+        u.refresh_hover();
+        invalidate(u.hwnd);
+    }
+}
+
 /// Click / Space / Enter on a control.
 fn activate(hwnd: HWND, id: i32) {
     let Some(u) = ui() else { return };
     let Some(kind) = u.control(id).filter(|c| c.enabled).map(|c| c.kind) else { return };
     let metrics = Metric::ALL.len() as i32;
     match kind {
-        Kind::Nav(i) => {
-            u.show_page(i);
-            if u.focus.is_some() || u.focus_visible {
-                u.focus = Some(ID_NAV + i as i32);
+        Kind::Nav(p) => {
+            let keep = u.focus.is_some() || u.focus_visible;
+            go(p);
+            if keep {
+                if let Some(u) = ui() {
+                    u.focus = Some(nav_id(p));
+                }
             }
             invalidate(hwnd);
         }
+        Kind::Summary(p) => go(p),
+        Kind::Icon(_) => match id {
+            ID_HAMBURGER => u.toggle_pane(),
+            ID_BACK => go_back(),
+            _ => {}
+        },
         Kind::Toggle => {
             if u.toggle(id) {
                 changed(hwnd);
@@ -2157,13 +2927,6 @@ fn activate(hwnd: HWND, id: i32) {
             }
         }
         Kind::Button(..) => match id {
-            IDOK => ok(hwnd),
-            IDCANCEL => unsafe {
-                DestroyWindow(hwnd);
-            },
-            ID_APPLY => {
-                commit(hwnd);
-            }
             ID_RESETALL => {
                 u.draft.colors.clear();
                 changed(hwnd);
@@ -2179,17 +2942,17 @@ fn activate(hwnd: HWND, id: i32) {
                 run(Cmd::EditSettings);
             }
             ID_DATADIR => run(Cmd::DataFolder),
-            ID_INS_OPEN => {
-                // Apply a pending on/off first so the window shows the right state.
+            ID_ACH_OPEN => {
+                // Apply a pending on/off first so the window opens in the right state.
                 flush(hwnd);
                 if let Some(a) = app() {
-                    crate::insights::ui::open(a);
+                    a.open_achievements();
                 }
             }
             ID_INS_CLEAR => {
                 if let Some(a) = app() {
                     a.ins.clear();
-                    crate::insights::ui::reload(a);
+                    sync_insights(a, true);
                 }
             }
             _ => {}
@@ -2262,33 +3025,45 @@ fn adjust(hwnd: HWND, id: i32, kind: Kind, dir: i32, big: bool, edge: bool) {
     }
 }
 
+
 fn on_key(hwnd: HWND, key: u16) {
     let ctrl = unsafe { GetKeyState(VK_CONTROL as i32) } < 0;
     let shift = unsafe { GetKeyState(VK_SHIFT as i32) } < 0;
     let Some(u) = ui() else { return };
     let focus = u.focus.and_then(|f| u.control(f).filter(|c| c.enabled).map(|c| (c.id, c.kind)));
+    let in_nav = u.focus.is_some_and(|f| u.in_nav(f));
     match key {
         VK_TAB if ctrl => {
-            let n = PAGES.len();
-            let p = if shift { (u.page + n - 1) % n } else { (u.page + 1) % n };
-            let nav = matches!(focus, Some((_, Kind::Nav(_))));
-            u.show_page(p);
-            if nav {
-                u.focus = Some(ID_NAV + p as i32);
+            let p = u.page.step(if shift { -1 } else { 1 });
+            go(p);
+            if in_nav {
+                if let Some(u) = ui() {
+                    u.focus = Some(nav_id(p));
+                }
             }
         }
         VK_TAB => u.move_focus(if shift { -1 } else { 1 }),
+        VK_F6 => u.switch_region(),
+        VK_BROWSER_BACK => go_back(),
+        // Esc only dismisses: the overlay pane, a tooltip. It never closes the window.
         VK_ESCAPE => {
-            flush(hwnd);
-            unsafe { DestroyWindow(hwnd) };
-        }
-        VK_RETURN => match focus {
-            Some((id, Kind::Button(..) | Kind::Link(_) | Kind::Swatch(_) | Kind::Glyph(_) | Kind::Dropdown)) => {
-                u.focus_visible = true;
-                activate(hwnd, id);
+            if u.overlay {
+                u.overlay = false;
+                u.layout();
+                if in_nav && u.focus != Some(ID_HAMBURGER) {
+                    u.focus = Some(ID_HAMBURGER);
+                }
             }
-            _ => ok(hwnd),
-        },
+            u.tip = None;
+        }
+        VK_RETURN => {
+            if let Some((id, kind)) = focus {
+                if !matches!(kind, Kind::Slider | Kind::Stepper | Kind::Toggle) {
+                    u.focus_visible = true;
+                    activate(hwnd, id);
+                }
+            }
+        }
         VK_SPACE => {
             if let Some((id, kind)) = focus {
                 if !matches!(kind, Kind::Slider | Kind::Stepper) {
@@ -2312,17 +3087,18 @@ fn on_key(hwnd: HWND, key: u16) {
                     u.focus_visible = true;
                     adjust(hwnd, id, kind, dir, big, edge);
                 }
-                Some((_, Kind::Nav(cur))) => {
-                    let n = PAGES.len();
+                // Pane: the arrows move the focus, Enter / Space opens the page.
+                Some((id, _)) if in_nav => {
+                    let ids = u.nav_ids();
+                    let cur = ids.iter().position(|x| *x == id).unwrap_or(0);
                     let next = match key {
                         VK_UP | VK_LEFT => cur.saturating_sub(1),
-                        VK_DOWN | VK_RIGHT => (cur + 1).min(n - 1),
-                        VK_HOME | VK_PRIOR => 0,
-                        _ => n - 1,
+                        VK_DOWN | VK_RIGHT => (cur + 1).min(ids.len() - 1),
+                        VK_HOME => 0,
+                        VK_END => ids.len() - 1,
+                        _ => cur,
                     };
-                    u.focus_visible = true;
-                    u.show_page(next);
-                    u.focus = Some(ID_NAV + next as i32);
+                    u.set_focus(Some(ids[next]));
                 }
                 Some((id, Kind::Dropdown)) if matches!(key, VK_UP | VK_DOWN) => {
                     let (opts, cur) = u.dd_options(id);
@@ -2358,6 +3134,17 @@ fn on_wheel(hwnd: HWND, delta: i32, sx: i32, sy: i32) {
     let Some(u) = ui() else { return };
     let mut pt = POINT { x: sx, y: sy };
     unsafe { ScreenToClient(hwnd, &mut pt) };
+    // Over the pane: scroll its menu when it does not fit.
+    if u.over_pane(pt.x) {
+        let max = u.nav_max_scroll();
+        if max > 0 {
+            u.nav_scroll = (u.nav_scroll - delta * u.sc(WHEEL_STEP) / 120).clamp(0, max);
+            u.tip = None;
+            u.refresh_hover();
+            invalidate(hwnd);
+        }
+        return;
+    }
     // A focused slider / stepper under the mouse takes the wheel.
     if let Some((id, _)) = u.hit(pt.x, pt.y) {
         if u.focus == Some(id) {
@@ -2371,11 +3158,16 @@ fn on_wheel(hwnd: HWND, delta: i32, sx: i32, sy: i32) {
     u.scroll_to(t, true);
 }
 
+fn track_mouse(hwnd: HWND, hover: bool) -> bool {
+    let flags = if hover { TME_LEAVE | TME_HOVER } else { TME_LEAVE };
+    let mut t = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: flags, hwndTrack: hwnd, dwHoverTime: u32::MAX /* HOVER_DEFAULT */ };
+    unsafe { TrackMouseEvent(&mut t) != 0 }
+}
+
 fn on_mouse_move(hwnd: HWND, x: i32, y: i32) {
     let Some(u) = ui() else { return };
     if !u.tracking {
-        let mut t = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
-        u.tracking = unsafe { TrackMouseEvent(&mut t) } != 0;
+        u.tracking = track_mouse(hwnd, false);
     }
     match u.drag {
         Drag::Slider(id) => {
@@ -2394,10 +3186,32 @@ fn on_mouse_move(hwnd: HWND, x: i32, y: i32) {
         Drag::None => {}
     }
     let hover = u.hit(x, y);
-    let sb = u.scrollbar().is_some_and(|(t, _)| t.contains(x, y));
-    if hover != u.hover || sb != u.sb_hover {
+    let sb = !u.over_pane(x) && u.scrollbar().is_some_and(|(t, _)| t.contains(x, y));
+    let chart = u.chart_at(x, y);
+    if hover != u.hover || sb != u.sb_hover || chart != u.chart_hover {
+        if hover != u.hover {
+            u.tip = None;
+            // Compact pane: ask for WM_MOUSEHOVER to show the item's name.
+            let nav = hover.and_then(|(id, _)| u.control(id)).is_some_and(|c| matches!(c.kind, Kind::Nav(_)));
+            if nav && !u.labels() {
+                track_mouse(hwnd, true);
+            }
+        }
         u.hover = hover;
         u.sb_hover = sb;
+        u.chart_hover = chart;
+        invalidate(hwnd);
+    }
+}
+
+fn on_mouse_hover(hwnd: HWND) {
+    let Some(u) = ui() else { return };
+    let pg = u.hover.and_then(|(id, _)| u.control(id)).and_then(|c| match c.kind {
+        Kind::Nav(p) => Some(p),
+        _ => None,
+    });
+    if pg.is_some() && !u.labels() && u.tip != pg {
+        u.tip = pg;
         invalidate(hwnd);
     }
 }
@@ -2405,8 +3219,17 @@ fn on_mouse_move(hwnd: HWND, x: i32, y: i32) {
 fn on_button_down(hwnd: HWND, x: i32, y: i32) {
     let Some(u) = ui() else { return };
     u.focus_visible = false;
+    u.tip = None;
+    // A click outside the overlay pane closes it (and does nothing else).
+    if u.overlay && x >= u.pane_w() {
+        u.overlay = false;
+        u.layout();
+        u.refresh_hover();
+        invalidate(hwnd);
+        return;
+    }
     // Scroll bar first: it overlays the right edge of the page.
-    if let Some((track, thumb)) = u.scrollbar() {
+    if let Some((track, thumb)) = u.scrollbar().filter(|_| !u.over_pane(x)) {
         if track.contains(x, y) {
             if y >= thumb.t && y < thumb.b {
                 u.drag = Drag::Thumb(y - thumb.t);
@@ -2463,7 +3286,7 @@ fn on_button_up(hwnd: HWND, x: i32, y: i32) {
     let Some(u) = ui() else { return };
     let hit = u.hit(x, y);
     u.hover = hit;
-    u.sb_hover = u.scrollbar().is_some_and(|(t, _)| t.contains(x, y));
+    u.sb_hover = !u.over_pane(x) && u.scrollbar().is_some_and(|(t, _)| t.contains(x, y));
     invalidate(hwnd);
     if dragged {
         return;
@@ -2541,6 +3364,7 @@ fn apply_theme(hwnd: HWND) {
     unsafe { RedrawWindow(hwnd, std::ptr::null(), std::ptr::null_mut(), RDW_INVALIDATE | RDW_FRAME) };
 }
 
+
 // ------------------------------------------------------------------ window
 
 pub fn register(hinst: HINSTANCE) {
@@ -2559,30 +3383,51 @@ pub fn register(hinst: HINSTANCE) {
     }
 }
 
-const STYLE: u32 = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
+const STYLE: u32 = WS_OVERLAPPEDWINDOW;
 
-/// Size the window for `dpi` (never larger than the work area) and centre it.
-fn fit(hwnd: HWND, dpi: u32) {
+/// Work area of the monitor nearest to `r`.
+fn work_area_near(r: Rect) -> Option<Rect> {
     unsafe {
-        let sc = |v: i32| (v * dpi as i32 + 48) / 96;
-        let mut rc = RECT { left: 0, top: 0, right: sc(CLIENT_W), bottom: sc(CLIENT_H) };
-        AdjustWindowRectExForDpi(&mut rc, STYLE, 0, 0, dpi);
-        let mut work: RECT = std::mem::zeroed();
-        SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut work as *mut _ as _, 0);
-        let (ww, wh) = (work.right - work.left, work.bottom - work.top);
-        let (w, h) = ((rc.right - rc.left).min(ww), (rc.bottom - rc.top).min(wh));
-        let x = work.left + (ww - w) / 2;
-        let y = work.top + ((wh - h) / 2).max(0);
-        SetWindowPos(hwnd, std::ptr::null_mut(), x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+        let rc = RECT { left: r.l, top: r.t, right: r.r, bottom: r.b };
+        let mon = MonitorFromRect(&rc, MONITOR_DEFAULTTONEAREST);
+        let mut mi: MONITORINFO = std::mem::zeroed();
+        mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        (GetMonitorInfoW(mon, &mut mi) != 0).then(|| {
+            let w = mi.rcWork;
+            Rect { l: w.left, t: w.top, r: w.right, b: w.bottom }
+        })
     }
 }
 
-/// Open the Settings window, or bring the existing one to the front.
-pub fn open(a: &mut crate::app::App) {
+/// Where the window opens: the saved placement (kept on a visible monitor),
+/// else the default size centred on the main taskbar's work area.
+fn initial_rect(a: &crate::app::App, dpi: u32) -> (Rect, bool) {
+    if let Some(p) = a.m.s.window {
+        let r = p.rect();
+        if let Some(work) = work_area_near(r) {
+            return (nav::clamp_rect(r, work), p.max);
+        }
+    }
+    let tb = a.primary_taskbar();
+    let work = tb.map(|t| t.work).unwrap_or(Rect { l: 0, t: 0, r: 1280, b: 720 });
+    let sc = |v: i32| (v * dpi as i32 + 48) / 96;
+    let mut rc = RECT { left: 0, top: 0, right: sc(DEF_W), bottom: sc(DEF_H) };
+    unsafe { AdjustWindowRectExForDpi(&mut rc, STYLE, 0, 0, dpi) };
+    (nav::centre_in(rc.right - rc.left, rc.bottom - rc.top, work), false)
+}
+
+/// Open the main window on `page`, or bring the existing one to the front
+/// (restored if minimised) and navigate it there.
+pub fn open(a: &mut crate::app::App, page: Page) {
     unsafe {
-        if !a.settings_win.is_null() {
-            ShowWindow(a.settings_win, SW_RESTORE);
-            SetForegroundWindow(a.settings_win);
+        if let Some(u) = ui().filter(|u| !u.hwnd.is_null()) {
+            let hwnd = u.hwnd;
+            if IsIconic(hwnd) != 0 {
+                ShowWindow(hwnd, SW_RESTORE);
+            }
+            u.navigate(page, true);
+            sync_insights(a, true);
+            SetForegroundWindow(hwnd);
             return;
         }
         let hinst = GetModuleHandleW(std::ptr::null());
@@ -2590,14 +3435,7 @@ pub fn open(a: &mut crate::app::App) {
         darkmode::set_app_mode(a.m.s.theme);
 
         let mut draft = a.m.s.clone();
-        // Make sure the order lists every metric exactly once.
-        let mut order: Vec<Metric> = Vec::new();
-        for m in draft.order.iter().chain(Metric::ALL.iter()) {
-            if !order.contains(m) {
-                order.push(*m);
-            }
-        }
-        draft.order = order;
+        draft.order = full_order(&draft.order);
 
         // Adapters present now, plus the configured one if it is not.
         let mut adapters: Vec<String> = Vec::new();
@@ -2616,22 +3454,27 @@ pub fn open(a: &mut crate::app::App) {
             labels.push(format!("{} (not available)", draft.adapter));
         }
 
-        let dpi = GetDpiForSystem().max(96);
-        let state = Box::new(Ui::new(dpi, a.m.dark, a.m.s.theme, draft, adapters, labels, a.displays()));
+        let dpi = a.primary_taskbar().map_or(96, |t| t.dpi).max(96);
+        let (rect, max) = initial_rect(a, dpi);
+        let mut state = Box::new(Ui::new(dpi, a.m.dark, a.m.s.theme, draft, adapters, labels, a.displays(), page));
+        let (on, panels) = view::fetch(a, unix_ms());
+        state.take_panels(on, panels);
+        state.normal = rect;
+        state.maximized = max;
         free_ui();
         UI = Box::into_raw(state);
 
         let cls = wide(CLASS);
-        let title = wide("Resource Monitor Settings");
+        let title = wide(TITLE);
         let hwnd = CreateWindowExW(
             0,
             cls.as_ptr(),
             title.as_ptr(),
             STYLE,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            100,
-            100,
+            rect.l,
+            rect.t,
+            rect.w(),
+            rect.h(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             hinst,
@@ -2642,18 +3485,87 @@ pub fn open(a: &mut crate::app::App) {
             return;
         }
         a.settings_win = hwnd;
-        fit(hwnd, ui().map_or(96, |u| u.dpi));
-        ShowWindow(hwnd, SW_SHOWNORMAL);
+        ShowWindow(hwnd, if max { SW_SHOWMAXIMIZED } else { SW_SHOWNORMAL });
         SetForegroundWindow(hwnd);
     }
 }
 
-/// Open Settings (or bring it to the front) on page `page` (e.g. `PAGE_INSIGHTS`).
-pub fn open_page(a: &mut crate::app::App, page: usize) {
-    open(a);
+/// Tray "Settings…": the settings page used last, else General.
+pub fn open_settings(a: &mut crate::app::App) {
+    let last = ui().map_or_else(|| Page::from_key(&a.m.s.window_page), |u| Some(u.page));
+    open(a, last.filter(|p| p.is_settings()).unwrap_or(Page::General));
+}
+
+/// The app's settings or theme changed (any source: this window, the file,
+/// the tray, Windows): follow the theme, pick up Insights on/off, and take
+/// settings changed elsewhere into the draft when nothing is pending here.
+pub fn app_changed(dark: bool, a: &crate::app::App) {
+    let Some(u) = ui() else { return };
+    if u.hwnd.is_null() {
+        return;
+    }
+    if !u.dirty {
+        merge(&mut u.draft, &a.m.s);
+        u.draft.order = full_order(&u.draft.order);
+        u.draft.mode = a.m.s.mode;
+        u.autostart = crate::autostart::enabled();
+    }
+    if u.dark != dark || u.theme != a.m.s.theme {
+        u.dark = dark;
+        u.theme = a.m.s.theme;
+        apply_theme(u.hwnd);
+    }
+    if let Some(u) = ui() {
+        u.layout();
+        invalidate(u.hwnd);
+    }
+    sync_insights(a, true);
+}
+
+/// Called on every app tick. Nearly free unless the window is open on an
+/// Insights page or Overview; then the panels are rebuilt at most every 2 s
+/// and the window repaints only when something visible changed.
+pub fn insights_tick(a: &crate::app::App) {
+    let Some(u) = ui() else { return };
+    if u.hwnd.is_null() || !u.page.shows_insights() {
+        return;
+    }
+    sync_insights(a, false);
+}
+
+/// Close the window if it is open (app exit): applies pending edits and
+/// saves the placement.
+pub fn close() {
     if let Some(u) = ui() {
         if !u.hwnd.is_null() {
-            u.show_page(page);
+            unsafe { SendMessageW(u.hwnd, WM_CLOSE, 0, 0) };
+        }
+    }
+}
+
+/// Remember size, position, maximized and the page for next time.
+fn save_placement(hwnd: HWND) {
+    let Some(u) = ui() else { return };
+    let max = unsafe { IsZoomed(hwnd) != 0 } || (unsafe { IsIconic(hwnd) != 0 } && u.maximized);
+    let n = u.normal;
+    let place = (n.w() > 0 && n.h() > 0).then_some(Placement { x: n.l, y: n.t, w: n.w(), h: n.h(), max });
+    let page = u.page.key();
+    let Some(a) = app() else { return };
+    if a.m.s.window != place || a.m.s.window_page != page {
+        a.m.s.window = place.or(a.m.s.window);
+        a.m.s.window_page = page.to_string();
+        a.save_settings();
+    }
+}
+
+/// Track the normal (restored) rectangle for `save_placement`.
+fn note_rect(hwnd: HWND) {
+    unsafe {
+        if IsIconic(hwnd) != 0 || IsZoomed(hwnd) != 0 {
+            return;
+        }
+        if let (Some(u), Some(r)) = (ui(), window_rect(hwnd)) {
+            u.normal = r;
         }
     }
 }
@@ -2675,8 +3587,11 @@ unsafe fn setting_name(l: LPARAM) -> String {
     String::from_utf16_lossy(&v)
 }
 
+
 const WM_DWMCOLORIZATIONCOLORCHANGED: u32 = 0x0320;
 const WM_MOUSELEAVE: u32 = 0x02A3;
+const WM_MOUSEHOVER: u32 = 0x02A1;
+const XBUTTON1: u16 = 1;
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match msg {
@@ -2692,20 +3607,37 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             if let Some(u) = ui() {
                 let mut rc: RECT = std::mem::zeroed();
                 GetClientRect(hwnd, &mut rc);
-                u.cw = rc.right;
-                u.ch = rc.bottom;
-                u.layout();
+                u.resized(rc.right, rc.bottom);
             }
             READY.store(true, Relaxed);
             0
         }
         WM_SIZE => {
             if let Some(u) = ui() {
-                u.cw = (l & 0xFFFF) as i32;
-                u.ch = ((l >> 16) & 0xFFFF) as i32;
-                u.layout();
+                match w as u32 {
+                    SIZE_MAXIMIZED => u.maximized = true,
+                    SIZE_RESTORED => u.maximized = false,
+                    _ => {}
+                }
+                if w as u32 != SIZE_MINIMIZED {
+                    u.resized((l & 0xFFFF) as i32, ((l >> 16) & 0xFFFF) as i32);
+                }
             }
+            note_rect(hwnd);
             invalidate(hwnd);
+            0
+        }
+        WM_MOVE => {
+            note_rect(hwnd);
+            0
+        }
+        WM_GETMINMAXINFO => {
+            let dpi = GetDpiForWindow(hwnd).max(96);
+            let sc = |v: i32| (v * dpi as i32 + 48) / 96;
+            let mut rc = RECT { left: 0, top: 0, right: sc(MIN_W), bottom: sc(MIN_H) };
+            AdjustWindowRectExForDpi(&mut rc, STYLE, 0, 0, dpi);
+            let mm = &mut *(l as *mut MINMAXINFO);
+            mm.ptMinTrackSize = POINT { x: rc.right - rc.left, y: rc.bottom - rc.top };
             0
         }
         WM_ERASEBKGND => 1,
@@ -2722,12 +3654,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             on_mouse_move(hwnd, get_x(l), get_y(l));
             0
         }
+        WM_MOUSEHOVER => {
+            on_mouse_hover(hwnd);
+            0
+        }
         WM_MOUSELEAVE => {
             if let Some(u) = ui() {
                 u.tracking = false;
-                if u.drag == Drag::None && (u.hover.is_some() || u.sb_hover) {
+                if u.drag == Drag::None && (u.hover.is_some() || u.sb_hover || u.chart_hover.is_some() || u.tip.is_some()) {
                     u.hover = None;
                     u.sb_hover = false;
+                    u.chart_hover = None;
+                    u.tip = None;
                     invalidate(hwnd);
                 }
             }
@@ -2740,6 +3678,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         WM_LBUTTONUP => {
             on_button_up(hwnd, get_x(l), get_y(l));
             0
+        }
+        WM_XBUTTONUP => {
+            // Mouse back button.
+            if ((w >> 16) & 0xFFFF) as u16 == XBUTTON1 {
+                go_back();
+            }
+            1
         }
         WM_CAPTURECHANGED => {
             // Lost the mouse (Alt+Tab, a menu, ...): end any press or drag.
@@ -2762,11 +3707,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             on_key(hwnd, w as u16);
             0
         }
+        WM_SYSKEYDOWN => {
+            // Alt+Left: back. Everything else (Alt+F4, Alt+Space) is the system's.
+            if w as u16 == VK_LEFT {
+                go_back();
+                return 0;
+            }
+            DefWindowProcW(hwnd, msg, w, l)
+        }
         WM_TIMER => {
             match w {
-                T_SCROLL => {
+                T_ANIM => {
                     if let Some(u) = ui() {
-                        u.scroll_tick();
+                        u.anim_tick();
                     }
                 }
                 T_REPEAT => on_repeat(hwnd),
@@ -2779,6 +3732,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             0
         }
         WM_SETTINGCHANGE => {
+            if let Some(u) = ui() {
+                u.animate = animations_on();
+            }
             // The user switched Windows dark/light mode or accent colour.
             if setting_name(l) == "ImmersiveColorSet" {
                 if let Some(u) = ui() {
@@ -2801,20 +3757,23 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             // WM_SIZE re-lays out with the new fonts.
             SetWindowPos(hwnd, std::ptr::null_mut(), r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
             if let Some(u) = ui() {
-                u.layout();
+                let mut rc: RECT = std::mem::zeroed();
+                GetClientRect(hwnd, &mut rc);
+                u.resized(rc.right, rc.bottom);
             }
             invalidate(hwnd);
             0
         }
         WM_CLOSE => {
-            // Title-bar X / Alt+F4: apply anything pending, then close.
+            // Title-bar X / Alt+F4: apply anything pending, remember where we were, close.
             flush(hwnd);
+            save_placement(hwnd);
             DestroyWindow(hwnd);
             0
         }
         WM_DESTROY => {
             KillTimer(hwnd, T_LIVE);
-            KillTimer(hwnd, T_SCROLL);
+            KillTimer(hwnd, T_ANIM);
             KillTimer(hwnd, T_REPEAT);
             if let Some(a) = app() {
                 a.settings_win = std::ptr::null_mut();

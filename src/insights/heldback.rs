@@ -334,7 +334,7 @@ impl HeldBack {
         }
         if c.display_on && (now.saturating_sub(self.fg_last_ms) >= FG_EVERY_MS || now < self.fg_last_ms) {
             self.fg_last_ms = now;
-            // Our own window in front (e.g. the Insights window) says nothing; keep the last app.
+            // Our own window in front (e.g. the main window) says nothing; keep the last app.
             if let Some(fg) = foreground_app() {
                 self.fg = Some(fg);
             }
@@ -488,6 +488,9 @@ impl HeldBack {
                 max: 100.0,
                 unit: "%",
                 markers: Vec::new(),
+                bars: false,
+                // The full hour stays on the x axis while it fills up.
+                slots: CHART_POINTS,
             });
         }
         let keep_from = now_ms.saturating_sub(EPISODE_KEEP_MS);
