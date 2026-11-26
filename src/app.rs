@@ -394,6 +394,8 @@ pub struct App {
     pub popup_hover: Option<(i32, i32)>,
     /// Panel uses the native acrylic backdrop (Windows 11).
     pub popup_acrylic: bool,
+    /// Theme the panel's backdrop was styled for (restyled when it changes).
+    pub popup_dark: bool,
     /// A WM_MOUSELEAVE for the details panel is pending.
     pub popup_tracking: bool,
 }
@@ -508,6 +510,7 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
             popup_top: 0,
             popup_hover: None,
             popup_acrylic: false,
+            popup_dark: true,
             popup_tracking: false,
             icons: None,
             alerts: AlertState::default(),

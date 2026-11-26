@@ -346,6 +346,7 @@ pub fn show(a: &mut App, pinned: bool) {
     }
     a.popup_pinned = pinned;
     a.popup_acrylic = style_popup(a.popup, a.dark);
+    a.popup_dark = a.dark;
     reposition(a);
     unsafe { ShowWindow(a.popup, SW_SHOWNOACTIVATE) };
 }
@@ -573,6 +574,11 @@ fn paint(a: &mut App, hwnd: HWND) {
             reposition(a);
         }
     }
+    // Theme switched while open: restyle the backdrop (acrylic tint, frame).
+    if a.popup_dark != a.dark {
+        a.popup_acrylic = style_popup(hwnd, a.dark);
+        a.popup_dark = a.dark;
+    }
     let scale = scale(a);
     let mut ps: PAINTSTRUCT = unsafe { std::mem::zeroed() };
     let dc = unsafe { BeginPaint(hwnd, &mut ps) };
@@ -646,7 +652,7 @@ fn value_row(c: &mut Canvas, f: &Fonts, x: i32, y: i32, mark: &str, text: &str, 
     let (_, nh) = c.measure(font, &n);
     let (_, mh) = c.measure(f.caps, mark);
     c.text(f.caps, mark, x, y + nh - mh - sc(1.0), col);
-    let nx = x + sc(12.0);
+    let nx = x + sc(12.0).max(c.measure(f.caps, mark).0 + sc(4.0));
     let nw = c.measure(font, &n).0;
     c.text(font, &n, nx, y, col);
     let (_, uh) = c.measure(f.small, &u);
