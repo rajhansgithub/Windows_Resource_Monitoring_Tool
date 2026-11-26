@@ -1052,7 +1052,7 @@ impl Draw<'_> {
         self.text_c(cv, self.f.semi, &format!("{:.0}%", cp), dcx as i32, dcy as i32 - self.s(4), self.heat_text(cp));
         self.text_c(cv, self.f.tiny, "commit", dcx as i32, dcy as i32 + self.s(12), self.col.dim);
         let facts = [
-            ("COMMITTED", format!("{} / {}", fmt::bytes(d.commit), fmt::bytes(d.commit_limit))),
+            ("COMMITTED", of(&fmt::bytes(d.commit), &fmt::bytes(d.commit_limit))),
             ("CACHED", fmt::bytes(d.cached.max(standby + modified))),
             ("AVAILABLE", fmt::bytes(s.ram_total.saturating_sub(s.ram_used))),
             ("PAGED POOL", fmt::bytes(d.paged)),
@@ -1485,6 +1485,14 @@ fn engine_label(t: &str) -> String {
     out
 }
 
+/// "2.7 GB" of "18.9 GB" -> "2.7 / 18.9 GB" (one unit when both share it).
+fn of(a: &str, b: &str) -> String {
+    match (a.rsplit_once(' '), b.rsplit_once(' ')) {
+        (Some((an, au)), Some((_, bu))) if au == bu => format!("{an} / {b}"),
+        _ => format!("{a} / {b}"),
+    }
+}
+
 /// "1 Gbps" style link speed.
 fn link(bps: u64) -> String {
     let b = bps as f64;
@@ -1529,6 +1537,8 @@ mod tests {
         assert_eq!(link(1_000_000_000), "1 Gbps");
         assert_eq!(link(2_500_000_000), "2.5 Gbps");
         assert_eq!(link(866_700_000), "867 Mbps");
+        assert_eq!(of("2.70 GB", "18.9 GB"), "2.70 / 18.9 GB");
+        assert_eq!(of("900 MB", "18.9 GB"), "900 MB / 18.9 GB");
     }
 
     #[test]
