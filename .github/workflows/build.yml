@@ -396,13 +396,6 @@ jobs:
             Grab $h "target/monitor-shots/light.png"
             Scroll $h "light" 2 -1800
             Stop-Job $job -ErrorAction SilentlyContinue
-            # TEMP (drop before merge): print the shots so a cloud session can read them from the log.
-            foreach ($f in Get-ChildItem target/monitor-shots/*.png) {
-              $b = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f.FullName))
-              Write-Output "MON-BEGIN $($f.Name)"
-              for ($i = 0; $i -lt $b.Length; $i += 4000) { Write-Output ("MON|" + $b.Substring($i, [Math]::Min(4000, $b.Length - $i))) }
-              Write-Output "MON-END"
-            }
           }
           $log = "$dir/diagnostics.log"
           if (Test-Path $log) { Get-Content $log -Tail 30 }
