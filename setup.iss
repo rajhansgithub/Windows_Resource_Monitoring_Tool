@@ -1,6 +1,6 @@
 ; Inno Setup script. Build the exe first: cargo build --release
 #define MyAppName "Resource Monitor"
-#define MyAppVersion "2.15.0"
+#define MyAppVersion "2.15.1"
 #define MyAppPublisher "Emulsion Labs"
 #define MyAppURL "https://github.com/rajhansgithub/Windows_Resource_Monitoring_Tool"
 #define MyAppExeName "ResourceMonitor.exe"
