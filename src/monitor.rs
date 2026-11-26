@@ -428,8 +428,9 @@ impl Monitor {
                 head + n * s(84) + if v > 0 { s(24) + v * s(24) } else { 0 } + foot
             }
             Sec::Net => {
-                let n = self.det.adapters.len().max(1) as i32;
-                head + n * s(84) + s(24 + 70) + foot
+                let on = self.det.adapters.iter().filter(|a| a.connected).count();
+                let off = if on < self.det.adapters.len() { s(26) } else { 0 };
+                head + on.max(1) as i32 * s(84) + off + s(24 + 70) + foot
             }
             Sec::Procs => head + s(28) + TOPN as i32 * s(30) + s(8 + 24) + foot,
         }
@@ -1222,7 +1223,14 @@ impl Draw<'_> {
         } else {
             dial(cv, cx, cy, self.sf(30.0), self.sf(6.0), frac, c, self.track);
         }
-        self.text_c(cv, self.f.cap, center, cx as i32, cy as i32 - self.s(2), self.col.fg);
+        if net {
+            // Down and up marks in their ring colours.
+            let ty = cy as i32 - self.s(1);
+            self.text_c(cv, self.f.tiny, vals[0].0, cx as i32 - self.s(5), ty, vals[0].2);
+            self.text_c(cv, self.f.tiny, vals[1].0, cx as i32 + self.s(5), ty, vals[1].2);
+        } else {
+            self.text_c(cv, self.f.cap, center, cx as i32, cy as i32 - self.s(2), self.col.fg);
+        }
         self.text_c(cv, self.f.tiny, cap, cx as i32, cy as i32 + self.s(26), self.col.dim);
         let vx = l + self.s(84);
         let vw = self.s(132);
@@ -1254,7 +1262,8 @@ impl Draw<'_> {
         let mut y = self.header(cv, r, "Network", &sub, 0);
         let (l, rr) = (r.l + self.s(16), r.r - self.s(16));
         let (dn, up) = (self.acc(Metric::Down), self.acc(Metric::Up));
-        for (i, x) in d.adapters.iter().enumerate() {
+        // Connected adapters come first; the rest collapse to one line.
+        for (i, x) in d.adapters.iter().enumerate().filter(|(_, x)| x.connected) {
             if i > 0 {
                 cv.fill_rect(Rect { l, t: y - self.s(6), r: rr, b: y - self.s(5) }, self.col.card_border);
             }
@@ -1262,27 +1271,32 @@ impl Draw<'_> {
             let a: Vec<f32> = h.map_or(Vec::new(), |s| s.a.iter().copied().collect());
             let b: Vec<f32> = h.map_or(Vec::new(), |s| s.b.iter().copied().collect());
             let mut sub = Vec::new();
-            if !x.connected {
-                sub.push("Disconnected".to_string());
-            } else {
-                if !x.description.is_empty() {
-                    sub.push(x.description.clone());
-                }
-                if x.link_bps > 0 {
-                    sub.push(link(x.link_bps));
-                }
-                if !x.ipv4.is_empty() {
-                    sub.push(x.ipv4.clone());
-                }
+            if !x.description.is_empty() {
+                sub.push(x.description.clone());
             }
-            let (dc, uc) = if x.connected { (dn, up) } else { (self.col.off, self.col.off) };
+            if x.link_bps > 0 {
+                sub.push(link(x.link_bps));
+            }
+            if !x.ipv4.is_empty() {
+                sub.push(x.ipv4.clone());
+            }
             let cap = if x.wifi { "WI-FI" } else { "" };
-                        self.device_row(cv, l, rr, y, 0.0, dc, "\u{21C5}", cap, &x.alias, [("\u{25BC}", x.down, dc), ("\u{25B2}", x.up, uc)], &sub.join(" \u{00B7} "), &a, &b, true);
+            self.device_row(cv, l, rr, y, 0.0, dn, "", cap, &x.alias, [("\u{25BC}", x.down, dn), ("\u{25B2}", x.up, up)], &sub.join(" \u{00B7} "), &a, &b, true);
             y += self.s(84);
         }
-        if d.adapters.is_empty() {
-            self.text_c(cv, self.f.small, "Collecting\u{2026}", (l + rr) / 2, y + self.s(36), self.col.dim);
+        let off: Vec<&str> = d.adapters.iter().filter(|a| !a.connected).map(|a| a.alias.as_str()).collect();
+        if first.is_none() {
+            let msg = if d.adapters.is_empty() { "Collecting\u{2026}" } else { "No network connected" };
+            self.text_c(cv, self.f.small, msg, (l + rr) / 2, y + self.s(36), self.col.dim);
             y += self.s(84);
+        }
+        if !off.is_empty() {
+            let dot = self.s(4);
+            cv.fill_round(Rect { l, t: y + self.s(5), r: l + dot * 2, b: y + self.s(5) + dot * 2 }, dot as f32, self.col.off);
+            let line = format!("{} disconnected \u{00B7} {}", off.len(), off.join(", "));
+            let t = cv.ellipsize(self.f.small, &line, rr - l - self.s(16));
+            cv.text(self.f.small, &t, l + self.s(16), y, self.col.dim);
+            y += self.s(26);
         }
         y += self.s(6);
         cv.fill_rect(Rect { l, t: y, r: rr, b: y + 1 }, self.col.card_border);
@@ -1292,7 +1306,7 @@ impl Draw<'_> {
         self.cap(cv, "TODAY", l, y);
         cv.text(self.f.head, &fmt::bytes(today_r + today_s), l, y + self.s(14), self.col.fg);
         self.cap(cv, "MONTH", l + self.s(120), y);
-        cv.text(self.f.cap, &fmt::bytes(m.month), l + self.s(120), y + self.s(20), self.col.fg);
+        cv.text(self.f.head, &fmt::bytes(m.month), l + self.s(120), y + self.s(14), self.col.fg);
         let br = Rect { l: l + self.s(230), t: y, r: rr, b: y + self.s(58) };
         if br.w() > self.s(80) && !m.days.is_empty() {
             let n = m.days.len() as i32;
@@ -1458,7 +1472,7 @@ fn range_label(secs: usize) -> &'static str {
 /// "VideoDecode" -> "Video Decode", "Compute_0" -> "Compute 0".
 fn engine_label(t: &str) -> String {
     let mut out = String::new();
-    for (i, c) in t.chars().enumerate() {
+    for (i, c) in t.char_indices() {
         if c == '_' {
             out.push(' ');
             continue;
