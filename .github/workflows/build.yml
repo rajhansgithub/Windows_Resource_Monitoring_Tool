@@ -127,8 +127,6 @@ jobs:
           }
           "@
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-          # TEMP-BIG-DUMP (remove before merge): PNGs as base64 in the log, artifact download is blocked for the cloud session
-          function Dump($f) { $b = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f)); Write-Output "BIG-BEGIN $f"; for ($i=0; $i -lt $b.Length; $i+=4000) { Write-Output ("BIG|" + $b.Substring($i, [Math]::Min(4000, $b.Length-$i))) }; Write-Output "BIG-END" }
           function Grab($h, $file) {
             $r = New-Object WB+R
             [void][WB]::GetWindowRect($h, [ref]$r)
@@ -137,7 +135,6 @@ jobs:
             $g = [System.Drawing.Graphics]::FromImage($bmp)
             $g.CopyFromScreen($r.L, $r.T, 0, 0, (New-Object System.Drawing.Size $w, $hh))
             $bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)
-            Dump $file
           }
           $fails = @()
           foreach ($mode in "racks", "big") {
