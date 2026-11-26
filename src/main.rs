@@ -7,6 +7,7 @@ mod autostart;
 mod fmt;
 mod icons;
 mod insights;
+mod nav;
 mod overlay;
 mod popup;
 mod render;
