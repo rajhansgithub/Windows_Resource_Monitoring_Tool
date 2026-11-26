@@ -16,6 +16,7 @@ fn main() {
     let rc = format!(
         r#"#pragma code_page(65001)
 1 ICON "{icon}"
+2 ICON "{icon_light}"
 1 24 "{manifest}"
 1 VERSIONINFO
 FILEVERSION {ma},{mi},{pa},0
@@ -45,6 +46,7 @@ BEGIN
 END
 "#,
         icon = res("app.ico"),
+        icon_light = res("app_light.ico"),
         manifest = res("resmon.manifest"),
     );
     let path = format!("{out}/resmon.rc");
@@ -53,4 +55,5 @@ END
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=res/resmon.manifest");
     println!("cargo:rerun-if-changed=res/app.ico");
+    println!("cargo:rerun-if-changed=res/app_light.ico");
 }

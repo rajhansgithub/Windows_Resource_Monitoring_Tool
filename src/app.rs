@@ -1809,6 +1809,7 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             crate::achievements::ui::set_dark(a.m.dark);
             crate::settings_ui::app_changed(a.m.dark, a);
             crate::settings_ui::apply_menu_theme(a.m.s.theme, hwnd);
+            a.tray.follow_taskbar();
             a.update_timer();
             a.need_locate = true;
             a.refresh(true);

@@ -1,6 +1,6 @@
 ; Inno Setup script. Build the exe first: cargo build --release
 #define MyAppName "Resource Monitor"
-#define MyAppVersion "2.17.2"
+#define MyAppVersion "2.18.0"
 #define MyAppPublisher "Emulsion Labs"
 #define MyAppURL "https://github.com/rajhansgithub/Windows_Resource_Monitoring_Tool"
 #define MyAppExeName "ResourceMonitor.exe"
@@ -36,6 +36,9 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 SetupIconFile=res\app.ico
+; Pulse Line logo: side panel and corner art (100% and 200%), from tools/icon/make.js.
+WizardImageFile=res\wizard.bmp,res\wizard@2x.bmp
+WizardSmallImageFile=res\wizard-small.bmp,res\wizard-small@2x.bmp
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
 CloseApplications=yes

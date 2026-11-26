@@ -110,6 +110,10 @@ const ROW_GAP: i32 = 4;
 const HEAD_TOP: i32 = 24;
 const HEAD_H: i32 = 28;
 const NOTE_H: i32 = 36;
+/// The About card: height, logo square and inner padding.
+const BRAND_H: i32 = 148;
+const BRAND_LOGO: i32 = 96;
+const BRAND_PAD: i32 = 26;
 const SUMMARY_H: i32 = 92;
 const CTL_H: i32 = 32;
 const CELL_GAP: i32 = 8;
@@ -732,12 +736,16 @@ enum Def {
     Room,
     /// The "Next goal" card (Overview).
     Goal,
+    /// About: the live logo, name, version, publisher and website button.
+    Brand,
     /// The Monitor page (all of it).
     Monitor,
 }
 
 /// Laid-out non-interactive parts of a page (content coordinates).
 enum Block {
+    /// The About card (`Def::Brand`); its website button is a control.
+    Brand(Rect),
     Heading(Rect, &'static str),
     Note(Rect, &'static str),
     Card {
@@ -963,6 +971,10 @@ struct Ui {
     room: Room,
     /// The Server Room is laid out on the current page.
     room_on: bool,
+    /// The About card is laid out: its logo animates.
+    brand_on: bool,
+    /// Clock for the About logo's trace.
+    brand_t0: Instant,
     // ---- Monitor
     mon: Monitor,
     /// The Monitor page is laid out on the current page.
@@ -1045,6 +1057,8 @@ impl Ui {
             ach: None,
             room: Room::new(),
             room_on: false,
+            brand_on: false,
+            brand_t0: Instant::now(),
             mon: Monitor::new(),
             mon_on: false,
             draft,
@@ -1583,8 +1597,7 @@ impl Ui {
                 ),
             ],
             _ => vec![
-                Def::Note(concat!("Resource Monitor v", env!("CARGO_PKG_VERSION"), " by Emulsion Labs.")),
-                card("Emulsion Labs", "Visit the website", vec![cell(ID_WEBSITE, Kind::Button("Open website", false), 0)]),
+                Def::Brand,
                 card(
                     "Updates",
                     concat!("Version ", env!("CARGO_PKG_VERSION"), ". Look for a newer one now"),
@@ -1849,6 +1862,7 @@ impl Ui {
         self.panel_idx = None;
         self.pview.clear();
         let mut room_on = false;
+        let mut brand_on = false;
         let mut mon_on = false;
         let mut mon_anim = false;
         for (n, d) in defs.into_iter().enumerate() {
@@ -1882,6 +1896,18 @@ impl Ui {
                     let h = if t.is_empty() { self.sc(12) } else { self.sc(NOTE_H) };
                     blocks.push(Block::Note(Rect { l, t: y, r, b: y + h }, t));
                     y += h;
+                }
+                Def::Brand => {
+                    let h = self.sc(BRAND_H);
+                    let rect = Rect { l, t: y, r, b: y + h };
+                    let kind = Kind::Button("Visit emulsionlabs.in", false);
+                    let (bw, ch) = (self.ctl_width(kind, 0), self.sc(CTL_H));
+                    let tx = l + self.sc(BRAND_PAD) + self.sc(BRAND_LOGO) + self.sc(BRAND_PAD);
+                    let btn = Rect { l: tx, t: rect.b - self.sc(BRAND_PAD) - ch, r: tx + bw, b: rect.b - self.sc(BRAND_PAD) };
+                    controls.push(Control { id: ID_WEBSITE, kind, rect: btn, layer: Layer::Page, enabled: true });
+                    blocks.push(Block::Brand(rect));
+                    brand_on = true;
+                    y += h + self.sc(ROW_GAP);
                 }
                 Def::Room => {
                     if let Some(st) = &self.ach {
@@ -1957,6 +1983,10 @@ impl Ui {
         self.controls = controls;
         self.blocks = blocks;
         self.room_on = room_on;
+        self.brand_on = brand_on;
+        if brand_on && self.animate && !self.hwnd.is_null() {
+            self.kick();
+        }
         self.mon_on = mon_on;
         if mon_anim && !self.hwnd.is_null() {
             self.kick();
@@ -2184,6 +2214,9 @@ impl Ui {
         if done(self.anim.pane.map(|x| x.2), PANE_ANIM_S) {
             self.anim.pane = None;
         } else {
+            busy = true;
+        }
+        if self.brand_on && self.animate {
             busy = true;
         }
         if self.mon_on && self.mon.animating() {
@@ -2441,6 +2474,25 @@ impl Ui {
                     }
                     let th = cv.measure(f.semi, t).1;
                     cv.text(f.semi, t, r.l + self.sc(2), r.b - th - self.sc(6), p.fg);
+                }
+                Block::Brand(rect) => {
+                    let r = shift(*rect, dy);
+                    if r.b < vt || r.t > vb {
+                        continue;
+                    }
+                    cv.fill_round(r, rad, p.card);
+                    cv.stroke_round(r, rad, p.card_border);
+                    let s = self.sc(BRAND_LOGO);
+                    let (lx, ly) = (r.l + self.sc(BRAND_PAD), r.t + (r.h() - s) / 2);
+                    let t = self.animate.then(|| self.brand_t0.elapsed().as_secs_f32());
+                    crate::logo::draw(cv, lx, ly, s, self.dark, t);
+                    let tx = lx + s + self.sc(BRAND_PAD);
+                    let ty = r.t + self.sc(BRAND_PAD) - self.sc(4);
+                    let th = cv.measure(f.title, "Resource Monitor").1;
+                    cv.text(f.title, "Resource Monitor", tx, ty, p.fg);
+                    let line = concat!("Version ", env!("CARGO_PKG_VERSION"), " \u{00B7} by Emulsion Labs");
+                    let line = cv.ellipsize(f.body, line, r.r - tx - self.sc(12));
+                    cv.text(f.body, &line, tx, ty + th, p.dim);
                 }
                 Block::Note(r, t) => {
                     let r = shift(*r, dy);
@@ -3804,6 +3856,8 @@ fn apply_theme(hwnd: HWND) {
     darkmode::set_app_mode(u.theme);
     darkmode::allow_window(hwnd, u.dark);
     style_window(hwnd, u.dark);
+    // Title bar / taskbar / Alt+Tab icon: the dark or eggshell tile.
+    crate::logo::set_window_icon(hwnd, u.dark);
     unsafe { RedrawWindow(hwnd, std::ptr::null(), std::ptr::null_mut(), RDW_INVALIDATE | RDW_FRAME) };
 }
 

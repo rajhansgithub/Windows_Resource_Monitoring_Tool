@@ -8,6 +8,7 @@ mod fmt;
 mod grid;
 mod icons;
 mod insights;
+mod logo;
 mod monitor;
 mod nav;
 mod overlay;

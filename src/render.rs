@@ -528,6 +528,69 @@ impl Canvas {
         }
     }
 
+    /// Anti-aliased polyline with round joins and caps. `shade(x, along)` gives the
+    /// colour for a pixel centred at `x`, whose nearest point on the line lies `along`
+    /// (0..1) of the way from the first point; its alpha is applied too.
+    pub fn stroke_poly(&mut self, pts: &[(f32, f32)], thick: f32, shade: impl Fn(f32, f32) -> Rgba) {
+        if pts.len() < 2 {
+            return;
+        }
+        let half = thick / 2.0;
+        let mut acc = vec![0.0f32; pts.len()];
+        for i in 1..pts.len() {
+            let (dx, dy) = (pts[i].0 - pts[i - 1].0, pts[i].1 - pts[i - 1].1);
+            acc[i] = acc[i - 1] + (dx * dx + dy * dy).sqrt();
+        }
+        let total = acc[pts.len() - 1].max(1e-3);
+        let ext = half + 1.0;
+        let lo_x = pts.iter().map(|p| p.0).fold(f32::MAX, f32::min) - ext;
+        let hi_x = pts.iter().map(|p| p.0).fold(f32::MIN, f32::max) + ext;
+        let lo_y = pts.iter().map(|p| p.1).fold(f32::MAX, f32::min) - ext;
+        let hi_y = pts.iter().map(|p| p.1).fold(f32::MIN, f32::max) + ext;
+        let w = self.w;
+        let (x0, y0, x1, y1) = self.bounds(lo_x.floor() as i32, lo_y.floor() as i32, hi_x.ceil() as i32 + 1, hi_y.ceil() as i32 + 1);
+        let buf = self.buf();
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                let (mut best, mut along) = (f32::MAX, 0.0f32);
+                for i in 1..pts.len() {
+                    let (ax, ay) = pts[i - 1];
+                    let (dx, dy) = (pts[i].0 - ax, pts[i].1 - ay);
+                    let len2 = (dx * dx + dy * dy).max(1e-6);
+                    let t = (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0);
+                    let (qx, qy) = (ax + dx * t - px, ay + dy * t - py);
+                    let d = (qx * qx + qy * qy).sqrt();
+                    if d < best {
+                        best = d;
+                        along = (acc[i - 1] + t * (acc[i] - acc[i - 1])) / total;
+                    }
+                }
+                let cov = (half - best + 0.5).clamp(0.0, 1.0);
+                if cov > 0.0 {
+                    Self::blend_px(&mut buf[(y * w + x) as usize], shade(px, along), (cov * 255.0) as u32);
+                }
+            }
+        }
+    }
+
+    /// Anti-aliased filled circle.
+    pub fn fill_disc(&mut self, cx: f32, cy: f32, r: f32, c: Rgba) {
+        let w = self.w;
+        let (x0, y0, x1, y1) =
+            self.bounds((cx - r - 1.0).floor() as i32, (cy - r - 1.0).floor() as i32, (cx + r + 1.0).ceil() as i32 + 1, (cy + r + 1.0).ceil() as i32 + 1);
+        let buf = self.buf();
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let d = ((x as f32 + 0.5 - cx).powi(2) + (y as f32 + 0.5 - cy).powi(2)).sqrt();
+                let cov = (r - d + 0.5).clamp(0.0, 1.0);
+                if cov > 0.0 {
+                    Self::blend_px(&mut buf[(y * w + x) as usize], c, (cov * 255.0) as u32);
+                }
+            }
+        }
+    }
+
     pub fn text_center(&mut self, font: HFONT, s: &str, cx: i32, y: i32, c: Rgba) {
         let (tw, _) = self.measure(font, s);
         self.text(font, s, cx - tw / 2, y, c);

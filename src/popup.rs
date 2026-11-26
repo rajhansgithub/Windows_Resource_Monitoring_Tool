@@ -282,7 +282,8 @@ fn fit(v: i32, lo: i32, hi: i32) -> i32 {
 const PAD: f32 = 12.0;
 const GAP: f32 = 8.0;
 const W: f32 = 392.0;
-const HEADER: f32 = 28.0;
+/// Header row: the logo square, two lines of name beside it, chips on the right.
+const HEADER: f32 = 32.0;
 const RINGS: f32 = 146.0;
 /// Network and disk cards: dial, two values, mirror chart.
 const DIAL_CARD: f32 = 92.0;
@@ -677,12 +678,22 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
     let rad = 10.0 * scale;
     c.clear(pal.bg);
 
-    // ---- header: title, range control, uptime (clock icon), battery
-    let mut y = pad;
-    c.text(f.mid, "System", pad, y + sc(2.0), pal.fg);
-    let min_x = pad + c.measure(f.mid, "System").0 + sc(14.0);
-    out.hits.push((Rect { l: pad, t: y, r: min_x - sc(4.0), b: y + sc(HEADER) }, PopupHit::Monitor));
+    // ---- header: logo + name, range control, uptime (clock icon), battery
+    // Two lines beside the logo: "Resource Monitor" over "by Emulsion Labs".
     let chip_h = sc(22.0);
+    let logo = sc(HEADER);
+    crate::logo::draw(c, pad, pad, logo, a.dark, None);
+    let name_x = pad + logo + sc(9.0);
+    let (name_w, name_h) = c.measure(f.bold, "Resource Monitor");
+    let (by_w, by_h) = c.measure(f.small, "by Emulsion Labs");
+    let top = pad + (logo - name_h - by_h) / 2;
+    c.text(f.bold, "Resource Monitor", name_x, top, pal.fg);
+    c.text(f.small, "by Emulsion Labs", name_x, top + name_h, pal.dim);
+    let min_x = name_x + name_w.max(by_w) + sc(14.0);
+    // A click on the logo and name opens the Monitor page.
+    out.hits.push((Rect { l: pad, t: pad, r: min_x - sc(4.0), b: pad + logo }, PopupHit::Monitor));
+    // The chips sit on the logo's centre line.
+    let mut y = pad + (logo - chip_h) / 2;
     let mut x = right;
     {
         // Segmented time-range control.
@@ -734,7 +745,7 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
         }
         chip(c, f.small, &t, &mut x, min_x, y, chip_h, sc(6.0), pal);
     }
-    y += sc(HEADER) + gap;
+    y = pad + sc(HEADER) + gap;
 
     // ---- ring gauges: ring, label, one short line, sparkline
     struct Gauge {
