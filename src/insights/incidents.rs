@@ -830,7 +830,7 @@ impl Incidents {
                 detail: c.detail.clone(),
             })
             .collect();
-        Panel { key: "incidents", title: "Incident Cards", tone, headline, lines, chart: self.chart(now_ms), items }
+        Panel { key: "incidents", title: "Incident Cards", tone, headline, lines, visual: None, chart: self.chart(now_ms), items }
     }
 
     /// CPU % over the last hour, one slot per minute (peak), with incident markers.
@@ -860,7 +860,17 @@ impl Incidents {
                 (first..=now_m).contains(&m).then(|| ((m - first) as usize, c.kind.short().to_string()))
             })
             .collect();
-        Some(Chart { label: "CPU, last hour".into(), points, max: 100.0, unit: "%", markers, bars: false, slots: 60 })
+        Some(Chart {
+            label: "CPU, last hour".into(),
+            points,
+            max: 100.0,
+            unit: "%",
+            markers,
+            bars: false,
+            slots: 60,
+            x_labels: super::last_hour(),
+            tones: Vec::new(),
+        })
     }
 }
 

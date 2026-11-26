@@ -161,6 +161,11 @@ impl Canvas {
         self.clip = r;
     }
 
+    /// The current clip rectangle (to restore it after a nested clip).
+    pub fn clip(&self) -> Option<Rect> {
+        self.clip
+    }
+
     /// `l, t, r, b` limited to the canvas and the clip rectangle.
     fn bounds(&self, l: i32, t: i32, r: i32, b: i32) -> (i32, i32, i32, i32) {
         let (mut l, mut t, mut r, mut b) = (l.max(0), t.max(0), r.min(self.w), b.min(self.h));
@@ -460,6 +465,48 @@ impl Canvas {
                         let cd = ((px - qx).powi(2) + (py - qy).powi(2)).sqrt();
                         cov = cov.max((half - cd + 0.5).clamp(0.0, 1.0));
                     }
+                }
+                if cov > 0.0 {
+                    Self::blend_px(&mut buf[(y * w + x) as usize], c, (cov * 255.0) as u32);
+                }
+            }
+        }
+    }
+
+    /// Anti-aliased arc of a circle (stroke centred on radius `r`, `thick` wide, round
+    /// caps) from angle `a0` to `a1`, radians clockwise from 3 o'clock (y points down),
+    /// `a1 >= a0`, at most a full turn. Respects the clip rectangle.
+    #[allow(clippy::too_many_arguments)]
+    pub fn stroke_arc(&mut self, cx: f32, cy: f32, r: f32, thick: f32, a0: f32, a1: f32, c: Rgba) {
+        let tau = std::f32::consts::TAU;
+        let span = (a1 - a0).clamp(0.0, tau);
+        let half = thick / 2.0;
+        let caps = [(cx + r * a0.cos(), cy + r * a0.sin()), (cx + r * (a0 + span).cos(), cy + r * (a0 + span).sin())];
+        let ext = r + half + 1.0;
+        let w = self.w;
+        let (x0, y0, x1, y1) = self.bounds(
+            (cx - ext).floor() as i32,
+            (cy - ext).floor() as i32,
+            (cx + ext).ceil() as i32 + 1,
+            (cy + ext).ceil() as i32 + 1,
+        );
+        let buf = self.buf();
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                let (dx, dy) = (px - cx, py - cy);
+                let d = (dx * dx + dy * dy).sqrt();
+                let radial = (half - (d - r).abs() + 0.5).clamp(0.0, 1.0);
+                let mut cov = 0.0f32;
+                if radial > 0.0 {
+                    let t = (dy.atan2(dx) - a0).rem_euclid(tau);
+                    if t <= span || span >= tau - 1e-4 {
+                        cov = radial;
+                    }
+                }
+                for (qx, qy) in caps {
+                    let cd = ((px - qx).powi(2) + (py - qy).powi(2)).sqrt();
+                    cov = cov.max((half - cd + 0.5).clamp(0.0, 1.0));
                 }
                 if cov > 0.0 {
                     Self::blend_px(&mut buf[(y * w + x) as usize], c, (cov * 255.0) as u32);
