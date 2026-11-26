@@ -27,7 +27,7 @@ use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerf
 use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
 use windows_sys::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_INFORMATION};
 use windows_sys::Win32::UI::Controls::MARGINS;
-use windows_sys::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForSystem, GetDpiForWindow};
+use windows_sys::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT,
     VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
@@ -825,7 +825,7 @@ fn wear_of_code(c: u16) -> [f32; 3] {
     [f(0), f(4), f(8)]
 }
 
-fn wear_words(w: &Wear) -> String {
+pub fn wear_words(w: &Wear) -> String {
     if w.clean {
         return "Spotless. It shines like the day you earned it.".to_string();
     }
@@ -1319,8 +1319,6 @@ fn pips(cv: &mut Canvas, x: i32, cy: i32, size: i32, gap: i32, filled: u8, col: 
 
 // ------------------------------------------------------------------ model of the tab
 
-const CLIENT_W: i32 = 880;
-const CLIENT_H: i32 = 640;
 const WHEEL_STEP: i32 = 48;
 const FIRST_LADDERS: usize = 5;
 const T_SCROLL: usize = 1;
@@ -1550,51 +1548,6 @@ fn free_ui() {
 }
 
 impl Ui {
-    fn new(dpi: u32, dark: bool, state: State) -> Ui {
-        Ui {
-            hwnd: std::ptr::null_mut(),
-            dpi,
-            mica: false,
-            col: make_colors(dark, false),
-            f: Fonts::gray(dpi as f32 / 96.0),
-            x: Extra::new(dpi),
-            mdc: unsafe { CreateCompatibleDC(std::ptr::null_mut()) },
-            cw: 0,
-            ch: 0,
-            state,
-            tz: tz_offset_min(),
-            expanded: false,
-            content_h: 0,
-            head: Rect::default(),
-            heads: Vec::new(),
-            racks: Vec::new(),
-            gate: Rect::default(),
-            gate_sub: Vec::new(),
-            gate_top_h: 0,
-            cond_h: 0,
-            cats: Vec::new(),
-            rows: Vec::new(),
-            focus_order: Vec::new(),
-            scroll: 0.0,
-            target: 0,
-            hover: None,
-            focus: None,
-            focus_visible: false,
-            drag: Drag::None,
-            sb_hover: false,
-            tracking: false,
-            cv: Canvas::new(),
-            surf: None,
-            ov: None,
-            snap: Vec::new(),
-            snap_ok: false,
-            coin_poll: false,
-            medals: Medals::default(),
-            fv: None,
-            polish_r: std::cell::Cell::new(Rect::default()),
-        }
-    }
-
     fn sc(&self, v: i32) -> i32 {
         sc_dpi(v, self.dpi)
     }
@@ -3249,24 +3202,6 @@ fn apply_theme(hwnd: HWND) {
     unsafe { RedrawWindow(hwnd, std::ptr::null(), std::ptr::null_mut(), RDW_INVALIDATE | RDW_FRAME) };
 }
 
-const STYLE: u32 = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
-
-/// Size the window for `dpi` (never larger than the work area) and centre it.
-fn fit(hwnd: HWND, dpi: u32) {
-    unsafe {
-        let sc = |v: i32| sc_dpi(v, dpi);
-        let mut rc = RECT { left: 0, top: 0, right: sc(CLIENT_W), bottom: sc(CLIENT_H) };
-        AdjustWindowRectExForDpi(&mut rc, STYLE, 0, 0, dpi);
-        let mut work: RECT = std::mem::zeroed();
-        SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut work as *mut _ as _, 0);
-        let (ww, wh) = (work.right - work.left, work.bottom - work.top);
-        let (w, h) = ((rc.right - rc.left).min(ww), (rc.bottom - rc.top).min(wh));
-        let x = work.left + (ww - w) / 2;
-        let y = work.top + ((wh - h) / 2).max(0);
-        SetWindowPos(hwnd, std::ptr::null_mut(), x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
-    }
-}
-
 unsafe fn setting_name(l: LPARAM) -> String {
     let p = l as *const u16;
     if p.is_null() {
@@ -3469,48 +3404,6 @@ pub fn register(hinst: HINSTANCE) {
         };
         RegisterClassExW(&wc);
     }
-}
-
-/// Open the Achievements window, or focus the open one (it keeps its own copy of the state).
-pub fn open(_owner: HWND, state: &State, dark: bool) {
-    unsafe {
-        let state = &merge(state, &store::load()); // polishing is saved by this window; the app's copy may lag
-        if let Some(u) = ui() {
-            let hwnd = u.hwnd;
-            u.state = state.clone();
-            u.layout();
-            u.snap_ok = false;
-            let changed_theme = u.col.dark != dark;
-            if changed_theme {
-                u.col = make_colors(dark, u.mica);
-                style_window(hwnd, dark);
-            }
-            invalidate(hwnd);
-            ShowWindow(hwnd, SW_RESTORE);
-            SetForegroundWindow(hwnd);
-            return;
-        }
-        let hinst = GetModuleHandleW(std::ptr::null());
-        let dpi = GetDpiForSystem().max(96);
-        free_ui();
-        MAIN = Box::into_raw(Box::new(Ui::new(dpi, dark, state.clone())));
-        let cls = wide(CLASS_MAIN);
-        let title = wide("Achievements");
-        let hwnd = CreateWindowExW(0, cls.as_ptr(), title.as_ptr(), STYLE, CW_USEDEFAULT, CW_USEDEFAULT, 100, 100, std::ptr::null_mut(), std::ptr::null_mut(), hinst, std::ptr::null());
-        if hwnd.is_null() {
-            free_ui();
-            return;
-        }
-        fit(hwnd, ui().map_or(96, |u| u.dpi));
-        ShowWindow(hwnd, SW_SHOWNORMAL);
-        SetForegroundWindow(hwnd);
-    }
-}
-
-/// Open the medal case on one badge's medal (the Server Room's "View medal").
-pub fn open_at(owner: HWND, state: &State, dark: bool, id: &'static str) {
-    open(owner, state, dark);
-    open_badge(id);
 }
 
 /// Update an open Achievements window with a new state (nothing happens when it is closed).
@@ -4036,6 +3929,236 @@ pub fn close_all() {
             let h = p.hwnd;
             DestroyWindow(h);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The live coin on the main window's Achievements page (Server Room tray)
+
+/// How long a medal sways after it is shown or let go, before it rests (no frames while it rests).
+const STAGE_SWAY_S: f64 = 6.0;
+
+/// One live 3D coin, drawn into the main window: drag turns it, a click turns it over, it sways a few seconds after a
+/// change and then rests. Frames are rendered off screen (`gpu::render_batch`) and put on the canvas.
+pub struct Stage {
+    medals: Medals,
+    cur: Option<(&'static str, u8)>,
+    yaw: f32,
+    pitch: f32,
+    vy: f32,
+    flip: f32,
+    flip_t: f32,
+    /// Dragging: last pointer position and how far it has moved in all (a short one is a click).
+    grab: Option<(i32, i32, i32)>,
+    t0: f64,
+    last: f64,
+    woke: f64,
+    frame: Vec<u32>,
+    n: u32,
+    dirty: bool,
+    ss: u8,
+    cost: f32,
+    failed: bool,
+}
+
+impl Default for Stage {
+    fn default() -> Self {
+        Stage::new()
+    }
+}
+
+impl Stage {
+    pub fn new() -> Stage {
+        Stage {
+            medals: Medals::default(),
+            cur: None,
+            yaw: COIN_YAW,
+            pitch: COIN_PITCH,
+            vy: 0.0,
+            flip: 0.0,
+            flip_t: 0.0,
+            grab: None,
+            t0: 0.0,
+            last: 0.0,
+            woke: 0.0,
+            frame: Vec::new(),
+            n: 0,
+            dirty: true,
+            ss: if gpu::is_hardware() { 4 } else { 1 },
+            cost: 5.0,
+            failed: false,
+        }
+    }
+
+    /// True when live coins can be drawn (GPU path up and the coin programs compiled).
+    pub fn ready(&self) -> bool {
+        !self.failed && gpu::available() && gpu::coins_ready()
+    }
+
+    /// Show medal `id` at `tier` (1..=7). A different medal starts at the front.
+    pub fn show(&mut self, id: &'static str, tier: u8) {
+        if self.cur == Some((id, tier)) {
+            return;
+        }
+        self.cur = Some((id, tier));
+        self.yaw = COIN_YAW;
+        self.pitch = COIN_PITCH;
+        self.vy = 0.0;
+        self.flip = 0.0;
+        self.flip_t = 0.0;
+        self.grab = None;
+        self.frame.clear();
+        self.wake();
+    }
+
+    /// No medal (a unit that has none).
+    pub fn hide(&mut self) {
+        self.cur = None;
+        self.grab = None;
+        self.frame.clear();
+    }
+
+    /// The age changed (polished): draw again.
+    pub fn redraw(&mut self) {
+        self.dirty = true;
+        self.wake();
+    }
+
+    fn wake(&mut self) {
+        let now = now_s();
+        if self.t0 == 0.0 {
+            self.t0 = now;
+        }
+        self.woke = now;
+        self.last = now;
+        self.dirty = true;
+    }
+
+    fn moving(&self, now: f64, reduced: bool) -> bool {
+        self.grab.is_some() || self.vy != 0.0 || self.flip != self.flip_t || (!reduced && now - self.woke < STAGE_SWAY_S)
+    }
+
+    /// One step: move the pose and render a frame `n` px square when anything changed. True while it still moves.
+    pub fn tick(&mut self, s: &State, n: u32) -> bool {
+        let Some((id, tier)) = self.cur else { return false };
+        if !self.ready() || n < 16 {
+            return false;
+        }
+        let now = now_s();
+        let reduced = reduced_motion();
+        let dt = ((now - self.last) as f32).clamp(0.0, 0.05);
+        self.last = now;
+        if self.grab.is_none() && self.vy != 0.0 {
+            let f = dt * 60.0; // the spin after a throw runs down (preview: .94 a frame)
+            self.yaw = (self.yaw + self.vy * f).rem_euclid(360.0);
+            self.vy *= 0.94f32.powf(f);
+            if self.vy.abs() < 0.01 || reduced {
+                self.vy = 0.0;
+            }
+        }
+        self.flip += (self.flip_t - self.flip) * (1.0 - (-dt * 6.5).exp());
+        if reduced || (self.flip_t - self.flip).abs() < 0.004 {
+            self.flip = self.flip_t;
+        }
+        let moving = self.moving(now, reduced);
+        if !moving && !self.dirty && self.n == n && !self.frame.is_empty() {
+            return false;
+        }
+        // a slow idle sway that fades out before the medal rests, so it stops without a jump
+        let age = (now - self.woke) as f32;
+        let fade = 1.0 - ((age - (STAGE_SWAY_S as f32 - 2.0)) / 2.0).clamp(0.0, 1.0);
+        let sw = if reduced || self.grab.is_some() { 0.0 } else { 5.0 * fade };
+        let st = (now - self.t0) as f32;
+        let ease = self.flip * self.flip * (3.0 - 2.0 * self.flip);
+        let yaw = self.yaw + sw * (st * 0.4).sin() + 180.0 * ease;
+        let pitch = self.pitch + sw * 0.4 * (st * 0.29).sin();
+        let t = if reduced { gpu::still_time(material_of(tier)) } else { st };
+        let w = if tier >= 7 { Wear { condition: 100, clean: true, ..Wear::default() } } else { s.wear(id, super::observer::unix_ms()) };
+        let wear = if tier >= 7 { [0.0; 3] } else { [w.dust, w.scratch, w.web] };
+        if !matches!(&self.medals.back, Some((i, tr, _)) if *i == id && *tr == tier) {
+            if let Some(b) = Catalog::get(id) {
+                let first = s.u.get(id).copied().unwrap_or(0);
+                let day = if b.is_ladder() { s.kd.get(id).and_then(|v| v.get(tier as usize - 1).copied()).filter(|&d| d > 0).unwrap_or(first) } else { first };
+                let sub = format!("{} \u{b7} {}", TIER_NAMES[(tier.clamp(1, 7) - 1) as usize], fmt_date(day, tz_offset_min()));
+                self.medals.ensure_back(id, tier, b.name, &sub);
+            }
+        }
+        let ss = if reduced && gpu::is_hardware() { 4 } else { self.ss };
+        let c0 = std::time::Instant::now();
+        match self.medals.coin_frame(id, tier, n, n, ss, t, yaw, pitch, (0.0, 0.0), wear) {
+            Some(f) => {
+                self.frame = f;
+                self.n = n;
+                self.dirty = false;
+            }
+            None => {
+                self.failed = true; // the coin path failed: the flat medal from now on
+                self.frame.clear();
+                return false;
+            }
+        }
+        if moving && !reduced {
+            let ms = c0.elapsed().as_secs_f32() * 1000.0;
+            self.cost = self.cost * 0.8 + ms * 0.2;
+            if self.cost > 12.0 && self.ss > 1 {
+                self.ss /= 2; // samples go first: half the cost
+                self.cost = 8.0;
+            } else if self.cost < 5.0 && self.ss < 4 && gpu::is_hardware() {
+                self.ss *= 2;
+                self.cost = 8.0;
+            }
+        }
+        moving
+    }
+
+    /// Put the last frame on `cv`, centred on (`cx`, `cy`), only in rows `vt..vb`. False when there is none (the host
+    /// draws the flat medal instead).
+    pub fn draw(&self, cv: &mut Canvas, cx: i32, cy: i32, vt: i32, vb: i32) -> bool {
+        if self.cur.is_none() || self.frame.is_empty() || self.failed {
+            return false;
+        }
+        let (w, h) = (cv.w, cv.h);
+        let n = self.n as i32;
+        draw_tile(cv.pixels_mut(), w, h, &self.frame, n, cx as f32, cy as f32, 1.0, 1.0, 1.0, (vt.max(0), vb.min(h)));
+        true
+    }
+
+    /// Mouse down on the coin.
+    pub fn press(&mut self, x: i32, y: i32) {
+        self.grab = Some((x, y, 0));
+        self.vy = 0.0;
+        self.wake();
+    }
+
+    /// Mouse moved while held: turn the coin (preview: .5 degree a pixel across, .4 up and down). `k` = 96 / dpi.
+    pub fn drag(&mut self, x: i32, y: i32, k: f32) {
+        if let Some((lx, ly, moved)) = self.grab {
+            let (dx, dy) = (x - lx, y - ly);
+            self.yaw = (self.yaw + dx as f32 * 0.5 * k).rem_euclid(360.0);
+            self.pitch = (self.pitch + dy as f32 * 0.4 * k).clamp(-70.0, 70.0);
+            self.vy = dx as f32 * 0.5 * k;
+            self.grab = Some((x, y, moved + dx.abs() + dy.abs()));
+            self.woke = now_s();
+            self.dirty = true;
+        }
+    }
+
+    /// Mouse up: a short press turns the coin over; a drag lets it spin down.
+    pub fn release(&mut self) {
+        if let Some((_, _, moved)) = self.grab.take() {
+            if moved < 4 {
+                self.vy = 0.0;
+                self.flip_over();
+            } else {
+                self.woke = now_s();
+            }
+        }
+    }
+
+    /// Turn the coin over (front, back).
+    pub fn flip_over(&mut self) {
+        self.flip_t = 1.0 - self.flip_t;
+        self.wake();
     }
 }
 

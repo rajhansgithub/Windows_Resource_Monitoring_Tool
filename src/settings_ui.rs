@@ -189,13 +189,15 @@ const ID_DATADIR: i32 = 653;
 const ID_INSIGHTS: i32 = 900;
 const ID_INS_TOASTS: i32 = 901;
 const ID_BAGGUARD: i32 = 902;
-const ID_ACH_OPEN: i32 = 903;
 const ID_INS_CLEAR: i32 = 904;
-/// Achievements: the Overview goal card, the nav level chip, the tray's medal button, the Server Room units (+ index).
+/// Achievements: the Overview goal card, the nav level chip, the tray's Polish button and live coin, the Server Room
+/// units (+ index) and the tray's earned singles (+ index).
 const ID_GOAL: i32 = 905;
 const ID_CHIP: i32 = 906;
-const ID_ROOM_MEDAL: i32 = 907;
+const ID_POLISH: i32 = 907;
+const ID_COIN: i32 = 908;
 const ID_ROOM: i32 = 1000;
+const ID_SINGLE: i32 = 1100;
 
 // Per-display toggles, + index in `Ui::displays`.
 const ID_DSHOW: i32 = 800;
@@ -646,6 +648,10 @@ enum Kind {
     Goal,
     /// The nav pane's level chip.
     Chip,
+    /// The Server Room tray's live coin: drag turns it, a click (Space, Enter) turns it over.
+    Coin,
+    /// An earned single in the Server Room tray (index into `Room::single_rects`): shows its coin.
+    Single(u16),
 }
 
 /// Sub-area of a control under the mouse.
@@ -662,6 +668,8 @@ enum Drag {
     Slider(i32),
     /// Scroll bar thumb; offset of the grab point from the thumb top.
     Thumb(i32),
+    /// Turning the Server Room coin.
+    Coin,
 }
 
 /// Where a control lives (which coordinates its rect is in).
@@ -1576,18 +1584,12 @@ impl Ui {
         v
     }
 
-    /// Placeholder until the Achievements view moves into this window: a line
-    /// and a button that opens the Achievements window.
+    /// The Achievements page: the Server Room, all of it in this window (racks, tray, live coin).
     fn achievements_defs(&self) -> Vec<Def> {
         let on = self.draft.achievements;
         let mut v = Vec::new();
         if on && self.ach.is_some() {
             v.push(Def::Room);
-            v.push(card(
-                "Medal case",
-                "Every medal in 3D: turn it, flip it, polish off the dust",
-                vec![Cell::Ctl { id: ID_ACH_OPEN, kind: Kind::Button("Open medal case", false), w: 0, enabled: on }],
-            ));
         } else {
             v.push(Def::Note("Medals, XP and levels for real use of this PC. Nothing leaves this PC."));
         }
@@ -1793,8 +1795,14 @@ impl Ui {
                         for (i, rect) in self.room.hit_rects() {
                             controls.push(Control { id: ID_ROOM + i as i32, kind: Kind::Unit(i as u16), rect, layer: Layer::Page, enabled: true });
                         }
-                        if !self.room.medal_btn.is_empty() {
-                            controls.push(Control { id: ID_ROOM_MEDAL, kind: Kind::Button("View medal", true), rect: self.room.medal_btn, layer: Layer::Page, enabled: true });
+                        if !self.room.coin_rect.is_empty() {
+                            controls.push(Control { id: ID_COIN, kind: Kind::Coin, rect: self.room.coin_rect, layer: Layer::Page, enabled: true });
+                        }
+                        for (i, (_, rect)) in self.room.single_rects.iter().enumerate() {
+                            controls.push(Control { id: ID_SINGLE + i as i32, kind: Kind::Single(i as u16), rect: *rect, layer: Layer::Page, enabled: true });
+                        }
+                        if !self.room.polish_btn.is_empty() {
+                            controls.push(Control { id: ID_POLISH, kind: Kind::Button("Polish", false), rect: self.room.polish_btn, layer: Layer::Page, enabled: true });
                         }
                         y += self.sc(ROW_GAP);
                     }
@@ -2001,8 +2009,12 @@ impl Ui {
         } else {
             busy = true;
         }
-        if self.room_on && self.room.tick(0.015, self.animate) {
-            busy = true;
+        if self.room_on {
+            if let Some(st) = &self.ach {
+                if self.room.tick(0.015, self.animate, st) {
+                    busy = true;
+                }
+            }
         }
         if !busy {
             self.stop_timer();
@@ -2556,6 +2568,13 @@ impl Ui {
                 ring_r = (r, self.sc(6) as f32);
             }
             Kind::Unit(_) => ring_r = (r, self.sc(3) as f32),
+            Kind::Coin => ring_r = (r, r.w() as f32 / 2.0),
+            Kind::Single(_) => {
+                if hover || pressed {
+                    cv.fill_round(r, rad4, Rgba(255, 255, 255, if pressed { 22 } else { 12 }));
+                }
+                ring_r = (r, rad4);
+            }
             Kind::Goal => {
                 if let Some(st) = &self.ach {
                     if let Some(g) = crate::achievements::next_goal(st) {
@@ -3040,6 +3059,20 @@ fn activate(hwnd: HWND, id: i32) {
             }
         }
         Kind::Chip => go(Page::Achievements),
+        Kind::Coin => {
+            u.room.coin.flip_over();
+            u.kick();
+            invalidate(hwnd);
+        }
+        Kind::Single(i) => {
+            if let Some(&(sid, _)) = u.room.single_rects.get(i as usize) {
+                if u.room.pick_single(sid) {
+                    u.layout();
+                    u.kick();
+                    invalidate(hwnd);
+                }
+            }
+        }
         Kind::Icon(_) => match id {
             ID_HAMBURGER => u.toggle_pane(),
             ID_BACK => go_back(),
@@ -3082,17 +3115,17 @@ fn activate(hwnd: HWND, id: i32) {
                 run(Cmd::EditSettings);
             }
             ID_DATADIR => run(Cmd::DataFolder),
-            ID_ACH_OPEN => {
-                // Apply a pending on/off first so the window opens in the right state.
-                flush(hwnd);
-                if let Some(a) = app() {
-                    a.open_achievements();
+            ID_POLISH => {
+                if let (Some(a), Some(id)) = (app(), u.room.shown) {
+                    if a.ach.polish(id) > 0 {
+                        crate::achievements::ui::refresh(a.ach.state());
+                        ach_changed(a);
+                    }
                 }
-            }
-            ID_ROOM_MEDAL => {
-                if let (Some(a), Some(id)) = (app(), u.room.selected_badge()) {
-                    let st = a.ach.state().clone();
-                    crate::achievements::ui::open_at(a.hwnd, &st, a.m.dark, id);
+                if let Some(u) = ui() {
+                    u.room.coin.redraw();
+                    u.kick();
+                    invalidate(hwnd);
                 }
             }
             ID_INS_CLEAR => {
@@ -3329,6 +3362,12 @@ fn on_mouse_move(hwnd: HWND, x: i32, y: i32) {
             }
             return;
         }
+        Drag::Coin => {
+            let k = 96.0 / u.dpi.max(96) as f32;
+            u.room.coin.drag(x, y, k);
+            u.kick();
+            return;
+        }
         Drag::None => {}
     }
     let hover = u.hit(x, y);
@@ -3406,6 +3445,11 @@ fn on_button_down(hwnd: HWND, x: i32, y: i32) {
             u.drag = Drag::Slider(id);
             slider_from_x(hwnd, id, x);
         }
+        (Some(Kind::Coin), _) => {
+            u.drag = Drag::Coin;
+            u.room.coin.press(x, y);
+            u.kick();
+        }
         (Some(Kind::Stepper), Part::Minus | Part::Plus) => {
             u.repeat_n = 0;
             let dir = if part == Part::Plus { 1 } else { -1 };
@@ -3422,6 +3466,11 @@ fn on_button_down(hwnd: HWND, x: i32, y: i32) {
 fn on_button_up(hwnd: HWND, x: i32, y: i32) {
     let Some(u) = ui() else { return };
     let was = u.pressed.take();
+    if u.drag == Drag::Coin {
+        // a short press turns the coin over, a drag lets it spin down (not a click on the control)
+        u.room.coin.release();
+        u.kick();
+    }
     let dragged = u.drag != Drag::None;
     u.drag = Drag::None;
     unsafe {

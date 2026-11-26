@@ -26,10 +26,10 @@ jobs:
         run: cargo test --release -- --show-output
       - name: Build
         run: cargo build --release
-      - name: Run app, screenshot Achievements window
+      - name: Run app, screenshot the live coin on the Achievements page, one per tier
         shell: pwsh
         run: |
-          # CI-only state: one badge at every tier, Bronze to Emulsion, so every medal shader shows in the window
+          # CI-only state: one badge at every tier, Bronze to Emulsion, so every coin shader shows in the tray
           $dir = "$env:LOCALAPPDATA/ResourceMonitor"
           New-Item -ItemType Directory -Force $dir, target/medal-shots | Out-Null
           Set-Content "$dir/achievements.json" '{"v":1,"g":1,"k":{"watch":1,"heavy":2,"render":3,"mover":4,"bandwidth":5,"down":6,"up":7}}'
@@ -41,28 +41,50 @@ jobs:
             [StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Rt, B; }
             [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string c, string t);
             [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r);
+            [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+            [DllImport("user32.dll")] public static extern void mouse_event(uint f, int x, int y, uint d, UIntPtr e);
           }
           "@
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-          function Shot($x, $y, $w, $h, $file) {
-            $bmp = New-Object System.Drawing.Bitmap $w, $h
-            $g = [System.Drawing.Graphics]::FromImage($bmp)
-            $g.CopyFromScreen($x, $y, 0, 0, (New-Object System.Drawing.Size $w, $h))
-            $bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)
-          }
-          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-          Shot $b.X $b.Y $b.Width $b.Height "target/medal-shots/app-screen.png"
-          $h = [W]::FindWindowW([NullString]::Value, "Achievements")  # $null would pass ""
-          if ($h -ne [IntPtr]::Zero) {
+          # TEMP-COIN-DUMP (remove before merge): PNGs as base64 in the log, artifact download is blocked for the cloud session
+          function Dump($f) { $b = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f)); Write-Output "COIN-BEGIN $f"; for ($i=0; $i -lt $b.Length; $i+=4000) { Write-Output ("COIN|" + $b.Substring($i, [Math]::Min(4000, $b.Length-$i))) }; Write-Output "COIN-END" }
+          $h = [W]::FindWindowW("ResourceMonitor.Window", [NullString]::Value)
+          function Grab($file) {
             $r = New-Object W+R
             [void][W]::GetWindowRect($h, [ref]$r)
-            Shot $r.L $r.T ($r.Rt - $r.L) ($r.B - $r.T) "target/medal-shots/app-achievements.png"
+            $w = $r.Rt - $r.L; $hh = $r.B - $r.T
+            $bmp = New-Object System.Drawing.Bitmap $w, $hh
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($r.L, $r.T, 0, 0, (New-Object System.Drawing.Size $w, $hh))
+            $bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)
+            Dump $file
+          }
+          function Click($x, $y) {
+            $r = New-Object W+R
+            [void][W]::GetWindowRect($h, [ref]$r)
+            [void][W]::SetCursorPos($r.L + $x, $r.T + $y); Start-Sleep -Milliseconds 150
+            [W]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 60
+            [W]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 300
+          }
+          if ($h -ne [IntPtr]::Zero) {
+            $ws = New-Object -ComObject WScript.Shell
+            [void]$ws.AppActivate($p.Id); Start-Sleep -Milliseconds 400
+            Grab "target/medal-shots/page.png"
+            # units of racks 01 and 02 (window coordinates at the default size, page scrolled to the top)
+            $units = @(@{n="1-watch";x=500;y=272}, @{n="2-heavy";x=500;y=324}, @{n="3-render";x=500;y=376}, @{n="4-mover";x=500;y=428}, @{n="5-bandwidth";x=820;y=272}, @{n="6-down";x=820;y=324}, @{n="7-up";x=820;y=376})
+            foreach ($u in $units) {
+              [System.Windows.Forms.SendKeys]::SendWait("{HOME}"); Start-Sleep -Milliseconds 600
+              Click $u.x $u.y
+              [System.Windows.Forms.SendKeys]::SendWait("{END}"); Start-Sleep -Seconds 3
+              Grab "target/medal-shots/coin-$($u.n).png"
+            }
           }
           $log = "$dir/diagnostics.log"
           if (Test-Path $log) { Copy-Item $log target/medal-shots/; Get-Content $log }
           if ($p.HasExited) { Write-Error "app exited early (code $($p.ExitCode))"; exit 1 }
           Stop-Process -Id $p.Id
-          if ($h -eq [IntPtr]::Zero) { Write-Error "Achievements window did not open"; exit 1 }
+          if ($h -eq [IntPtr]::Zero) { Write-Error "Main window did not open"; exit 1 }
+          if ([W]::FindWindowW("ResourceMonitor.Achievements", [NullString]::Value) -ne [IntPtr]::Zero) { Write-Error "a separate Achievements window opened"; exit 1 }
           if ((Test-Path $log) -and (Select-String -Path $log -Pattern "achievements gpu" -Quiet)) {
             Write-Error "GPU badge path failed in the app, see diagnostics.log"; exit 1
           }

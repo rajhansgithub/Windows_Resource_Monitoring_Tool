@@ -1,11 +1,13 @@
 //! The Server Room: the Achievements page of the main window, drawn in software
-//! onto the window's `Canvas` (no GPU here; the 3D medals stay in the medal case).
+//! onto the window's `Canvas`. The tray's medal is the live 3D coin (`ui::Stage`,
+//! rendered off screen on the GPU), or a flat disc when there is no GPU.
 //!
 //! Every badge is a 1U unit in a rack. A unit shows seven tier LEDs, how far the
 //! next tier is, and a thin progress bar. A rack is certified at a tier when all
 //! of its units reach it; its placard names the units that still hold it back.
 //! Rack 04 · Records holds Still Here and the singles, one unit per category.
-//! Clicking a unit pulls it out and opens the tray below the racks.
+//! Clicking a unit pulls it out and opens the tray below the racks: its coin (drag
+//! to turn, click to flip, Polish when it gathered dust) and what the next tier needs.
 //!
 //! Also here: the Overview "Next goal" card and the level chip of the nav pane.
 //! Layout is in content coordinates; drawing takes the scroll offset `dy`.
@@ -14,6 +16,7 @@ use super::core::{self as c, Category, Catalog, Goal, State};
 use crate::insights::view::{Colors, Fonts};
 use crate::render::{measure_dc, Canvas, Rgba};
 use crate::util::Rect;
+use super::ui::{wear_words, Stage};
 use windows_sys::Win32::Graphics::Gdi::HDC;
 
 const fn hx(v: u32) -> Rgba {
@@ -118,8 +121,17 @@ pub struct Room {
     tray_lines: Vec<TrayLine>,
     /// The tray's medal disc: centre, radius, tier, progress to the next tier.
     disc: Option<(i32, i32, i32, u8, f32, u8)>,
-    /// The tray's "View medal" button (empty when there is none).
-    pub medal_btn: Rect,
+    /// The tray's "Polish" button (empty when the medal is clean or there is none).
+    pub polish_btn: Rect,
+    /// The live coin, where it sits (content coordinates, square) and its side in px.
+    pub coin: Stage,
+    pub coin_rect: Rect,
+    coin_n: u32,
+    /// The badge the tray's coin shows (ladder, or the picked single).
+    pub shown: Option<&'static str>,
+    /// Singles tray: the picked single, and the earned rows that take clicks (id, rect).
+    single: Option<&'static str>,
+    pub single_rects: Vec<(&'static str, Rect)>,
     /// Selected unit (index into the units) and how far it is pulled out (0..1, animated).
     pub sel: usize,
     pull: f32,
@@ -138,7 +150,13 @@ impl Room {
             tray: Rect::default(),
             tray_lines: Vec::new(),
             disc: None,
-            medal_btn: Rect::default(),
+            polish_btn: Rect::default(),
+            coin: Stage::new(),
+            coin_rect: Rect::default(),
+            coin_n: 0,
+            shown: None,
+            single: None,
+            single_rects: Vec::new(),
             sel: usize::MAX,
             pull: 0.0,
         }
@@ -182,21 +200,24 @@ impl Room {
         }
         self.sel = i;
         self.pull = 0.0;
+        self.single = None;
         true
     }
 
-    /// The badge id the tray shows a medal for (ladders, and singles never: they open their category).
-    pub fn selected_badge(&self) -> Option<&'static str> {
-        match self.units.get(self.sel)?.unit {
-            Unit::Ladder(id) => Some(id),
-            _ => None,
+    /// Pick an earned single in the tray (its coin shows). True when it changed.
+    pub fn pick_single(&mut self, id: &'static str) -> bool {
+        if self.single == Some(id) {
+            return false;
         }
+        self.single = Some(id);
+        true
     }
 
-    /// One animation step (`dt` seconds). True while the pull-out still moves.
-    pub fn tick(&mut self, dt: f32, animate: bool) -> bool {
+    /// One animation step (`dt` seconds): the pull-out and the coin. True while anything still moves.
+    pub fn tick(&mut self, dt: f32, animate: bool, s: &State) -> bool {
+        let coin = self.coin.tick(s, self.coin_n);
         if self.pull >= 1.0 {
-            return false;
+            return coin;
         }
         self.pull = if animate { (self.pull + dt / 0.22).min(1.0) } else { 1.0 };
         true
@@ -282,16 +303,25 @@ impl Room {
         let tr = r - pad;
         self.tray_lines.clear();
         self.disc = None;
-        self.medal_btn = Rect::default();
+        self.polish_btn = Rect::default();
+        self.coin_rect = Rect::default();
+        self.single_rects.clear();
+        self.shown = None;
         let mut y = tt + self.sc(16);
+        let side = self.sc(148);
+        let now = super::observer::unix_ms();
         match self.units[self.sel].unit {
             Unit::Ladder(id) => {
                 let b = Catalog::get(id).unwrap();
                 let k = s.tier(id);
                 let goal = c::goal_of(s, id);
-                let rad = self.sc(44);
-                let dcx = tl + self.sc(18) + rad;
+                let rad = side / 2;
+                let dcx = tl + self.sc(14) + rad;
                 self.disc = Some((dcx, y + rad, rad, k, goal.map_or(1.0, |g| g.frac()), goal.map_or(k, |g| g.tier)));
+                if k > 0 {
+                    self.coin_rect = Rect { l: dcx - rad, t: y, r: dcx + rad, b: y + side };
+                    self.shown = Some(id);
+                }
                 let x = dcx + rad + self.sc(22);
                 let title = if k > 0 { format!("{} \u{00B7} {}", b.name, c::TIER_NAMES[(k - 1) as usize]) } else { format!("{} \u{00B7} not started", b.name) };
                 self.tray_lines.push(TrayLine::Text { x, y, s: title, dim: false, semi: true });
@@ -308,25 +338,38 @@ impl Room {
                 self.tray_lines.push(TrayLine::Text { x, y, s: kv, dim: false, semi: false });
                 y += lh(f.small) + self.sc(12);
                 if k > 0 {
-                    let bw = measure_dc(mdc, f.body, "View medal").0 + self.sc(32);
-                    self.medal_btn = Rect { l: x, t: y, r: x + bw, b: y + self.sc(32) };
-                    y = self.medal_btn.b;
+                    y = self.wear_lines(s, id, now, mdc, f, x, y);
                 }
-                y = y.max(tt + self.sc(16) + 2 * rad) + self.sc(16);
+                y = y.max(tt + self.sc(16) + side) + self.sc(16);
             }
             Unit::Singles(cat) => {
                 let all: Vec<_> = Catalog::all().iter().filter(|b| b.category == cat).collect();
                 let got = all.iter().filter(|b| s.earned(b.id)).count();
-                let x = tl + self.sc(18);
+                // the coin of the picked single (first earned one by default), left of the list
+                if self.single.is_none_or(|id| !all.iter().any(|b| b.id == id && s.earned(id))) {
+                    self.single = all.iter().find(|b| s.earned(b.id)).map(|b| b.id);
+                }
+                let top = y;
+                let mut x = tl + self.sc(18);
+                if let Some(id) = self.single {
+                    self.coin_rect = Rect { l: tl + self.sc(14), t: y, r: tl + self.sc(14) + side, b: y + side };
+                    let k = single_tier(cat);
+                    self.disc = Some(((self.coin_rect.l + self.coin_rect.r) / 2, y + side / 2, side / 2, k, 1.0, k));
+                    self.shown = Some(id);
+                    x = self.coin_rect.r + self.sc(22);
+                }
                 self.tray_lines.push(TrayLine::Text { x, y, s: format!("{} \u{00B7} {} of {}", cat_name(cat), got, all.len()), dim: false, semi: true });
                 y += lh(f.semi) + self.sc(10);
-                let cols2 = if tr - tl >= self.sc(560) { 2 } else { 1 };
-                let cw = (tr - tl - self.sc(36) - self.sc(16) * (cols2 - 1)) / cols2;
+                let cols2 = if tr - x >= self.sc(520) { 2 } else { 1 };
+                let cw = (tr - x - self.sc(18) - self.sc(16) * (cols2 - 1)) / cols2;
                 let row_h = lh(f.body) + lh(f.small) + self.sc(10);
                 for (i, b) in all.iter().enumerate() {
                     let (cx, cy) = (x + (i as i32 % cols2) * (cw + self.sc(16)), y + (i as i32 / cols2) * row_h);
                     let e = s.earned(b.id);
                     let hidden = cat == Category::Secret && !e;
+                    if e {
+                        self.single_rects.push((b.id, Rect { l: cx - self.sc(6), t: cy - self.sc(3), r: cx + cw + self.sc(6), b: cy + row_h - self.sc(5) }));
+                    }
                     self.tray_lines.push(TrayLine::Single {
                         x: cx,
                         y: cy,
@@ -338,15 +381,41 @@ impl Room {
                     });
                 }
                 y += ((all.len() as i32 + cols2 - 1) / cols2) * row_h + self.sc(8);
+                if let Some(id) = self.single {
+                    y = self.wear_lines(s, id, now, mdc, f, x, y + self.sc(4));
+                    y = y.max(top + side) + self.sc(16);
+                }
             }
             Unit::Blank => {}
+        }
+        match self.shown {
+            Some(id) => {
+                let tier = Catalog::get(id).map_or(1, |b| if b.is_ladder() { s.tier(id) } else { single_tier(b.category) });
+                self.coin.show(id, tier.clamp(1, 7));
+                self.coin_n = self.coin_rect.w().max(0) as u32;
+            }
+            None => self.coin.hide(),
         }
         self.tray = Rect { l: tl, t: tt, r: tr, b: y };
         self.floor = Rect { l, t: floor_t, r, b: self.tray.b + pad };
         self.floor.b
     }
 
-    /// Draw. `hover` = unit index under the mouse. The host draws the "View medal" button (`medal_btn`).
+    /// The medal's age (dust, cobwebs) and, when it is not clean, the Polish button. Returns the bottom.
+    #[allow(clippy::too_many_arguments)]
+    fn wear_lines(&mut self, s: &State, id: &'static str, now: u64, mdc: HDC, f: &Fonts, x: i32, mut y: i32) -> i32 {
+        let w = s.wear(id, now);
+        self.tray_lines.push(TrayLine::Text { x, y, s: wear_words(&w), dim: true, semi: false });
+        y += measure_dc(mdc, f.small, "Ag").1 + self.sc(10);
+        if !w.clean {
+            let bw = measure_dc(mdc, f.body, "Polish").0 + self.sc(32);
+            self.polish_btn = Rect { l: x, t: y, r: x + bw, b: y + self.sc(32) };
+            y = self.polish_btn.b;
+        }
+        y
+    }
+
+    /// Draw. `hover` = unit index under the mouse. The host draws the "Polish" button (`polish_btn`).
     #[allow(clippy::too_many_arguments)]
     pub fn draw(&self, cv: &mut Canvas, f: &Fonts, col: &Colors, dy: i32, vt: i32, vb: i32, hover: Option<usize>) {
         let sh = |r: Rect| Rect { l: r.l, t: r.t + dy, r: r.r, b: r.b + dy };
@@ -497,7 +566,17 @@ impl Room {
             let a = (ease(self.pull) * 255.0) as u8;
             cv.fill_round(t, rad, hx(0x14171c));
             cv.fill_rect(Rect { l: t.l + self.sc(6), t: t.t, r: t.r - self.sc(6), b: t.t + self.sc(2) }, COLD.with_a(a));
-            if let Some((cx, cy, r0, k, frac, next)) = self.disc {
+            let live = !self.coin_rect.is_empty() && {
+                let cr = sh(self.coin_rect);
+                if let Some((_, _, r0, _, frac, next)) = self.disc {
+                    // the way to the next tier, round the coin
+                    let (cx, cy) = ((cr.l + cr.r) as f32 / 2.0, (cr.t + cr.b) as f32 / 2.0);
+                    cv.ring(cx, cy, r0 as f32, self.sc(3) as f32, 1.0, hx(0x23272e));
+                    cv.ring(cx, cy, r0 as f32, self.sc(3) as f32, frac * (a as f32 / 255.0), tier_col(next.max(1)));
+                }
+                self.coin.draw(cv, (cr.l + cr.r) / 2, (cr.t + cr.b) / 2, vt, vb)
+            };
+            if let (false, Some((cx, cy, r0, k, frac, next))) = (live, self.disc) {
                 let (cx, cy, r0) = (cx as f32, (cy + dy) as f32, r0 as f32);
                 // the medal: a disc in its metal, a dark well, the tier initial; the ring is the way to the next tier
                 let metal = if k > 0 { tier_col(k) } else { hx(0x3a3f48) };
