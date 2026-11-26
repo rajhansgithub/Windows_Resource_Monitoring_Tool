@@ -101,6 +101,17 @@ pub enum Theme {
     Light,
 }
 
+/// What sits before each value on the widget (when `labels` is on).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LabelStyle {
+    /// Short name ("CPU").
+    Text,
+    /// A tiny ring gauge.
+    Meters,
+    /// Ring, then the name.
+    Both,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     /// Docked next to the system tray, follows the taskbar.
@@ -115,6 +126,7 @@ pub struct Settings {
     pub visible: bool,
     pub sparklines: bool,
     pub labels: bool,
+    pub label_style: LabelStyle,
     /// Two (or three) metrics per column; off = one line, each metric its own column.
     pub stacked: bool,
     /// Per-display override of `stacked`, keyed by display ("DISPLAY2").
@@ -195,6 +207,7 @@ impl Default for Settings {
             visible: true,
             sparklines: true,
             labels: true,
+            label_style: LabelStyle::Text,
             stacked: true,
             stacked_on: Vec::new(),
             auto_stack: false,
@@ -212,7 +225,7 @@ impl Default for Settings {
             hide_fullscreen: true,
             click_through: false,
             text_scale: 100,
-            theme: Theme::Auto,
+            theme: Theme::Dark,
             bg_opacity: 0,
             warn_pct: 75.0,
             crit_pct: 90.0,
@@ -381,6 +394,13 @@ impl Settings {
                 "visible" => self.visible = parse_bool(v).unwrap_or(self.visible),
                 "sparklines" => self.sparklines = parse_bool(v).unwrap_or(self.sparklines),
                 "labels" => self.labels = parse_bool(v).unwrap_or(self.labels),
+                "label_style" => {
+                    self.label_style = match v.to_ascii_lowercase().as_str() {
+                        "meters" => LabelStyle::Meters,
+                        "both" => LabelStyle::Both,
+                        _ => LabelStyle::Text,
+                    }
+                }
                 "stacked" => self.stacked = parse_bool(v).unwrap_or(self.stacked),
                 "auto_stack" => self.auto_stack = parse_bool(v).unwrap_or(self.auto_stack),
                 "auto_update" => self.auto_update = parse_bool(v).unwrap_or(self.auto_update),
@@ -509,12 +529,17 @@ impl Settings {
             Theme::Dark => "dark",
             Theme::Light => "light",
         };
+        let label_style = match self.label_style {
+            LabelStyle::Text => "text",
+            LabelStyle::Meters => "meters",
+            LabelStyle::Both => "both",
+        };
         let mode = match self.mode {
             Mode::Dock => "dock",
             Mode::Float => "float",
         };
         o.push_str(&format!(
-            "\nvisible = {}\nsparklines = {}\nlabels = {}\n# 1 = metrics stacked in rows, 0 = one line, each metric its own column.\n\
+            "\nvisible = {}\nsparklines = {}\nlabels = {}\n# what precedes each value: text | meters | both\nlabel_style = {}\n# 1 = metrics stacked in rows, 0 = one line, each metric its own column.\n\
              # Default for every display; per display: stacked.DISPLAY2 = 0\nstacked = {}\n\
              # 1 = a one-line widget may switch to stacked rows when it doesn't fit\nauto_stack = {}\n\
              # 1 = check GitHub for a new version once at startup and install it\nauto_update = {}\n\
@@ -531,6 +556,7 @@ impl Settings {
             b(self.visible),
             b(self.sparklines),
             b(self.labels),
+            label_style,
             b(self.stacked),
             b(self.auto_stack),
             b(self.auto_update),
