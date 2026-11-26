@@ -32,7 +32,11 @@ jobs:
           # CI-only state: one badge at every tier, Bronze to Emulsion, so every coin shader shows in the tray
           $dir = "$env:LOCALAPPDATA/ResourceMonitor"
           New-Item -ItemType Directory -Force $dir, target/medal-shots | Out-Null
-          Set-Content "$dir/achievements.json" '{"v":1,"g":1,"k":{"watch":1,"heavy":2,"render":3,"mover":4,"bandwidth":5,"down":6,"up":7}}'
+          # struck a few days ago, so the coins show a little dust, not years of it
+          $t = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - 3 * 3600000
+          $ids = "watch","heavy","render","mover","bandwidth","down","up"
+          $u = ($ids | ForEach-Object { '"' + $_ + '":' + $t }) -join ","
+          Set-Content "$dir/achievements.json" ('{"v":1,"g":1,"u":{' + $u + '},"k":{"watch":1,"heavy":2,"render":3,"mover":4,"bandwidth":5,"down":6,"up":7}}')
           $p = Start-Process target/release/ResourceMonitor.exe -ArgumentList "--achievements" -PassThru
           Start-Sleep -Seconds 12
           Add-Type @"
@@ -78,6 +82,17 @@ jobs:
               [System.Windows.Forms.SendKeys]::SendWait("{END}"); Start-Sleep -Seconds 3
               Grab "target/medal-shots/coin-$($u.n).png"
             }
+            # drag across the coin (turns it), then a click (turns it over)
+            $r = New-Object W+R
+            [void][W]::GetWindowRect($h, [ref]$r)
+            [void][W]::SetCursorPos($r.L + 430, $r.T + 580); Start-Sleep -Milliseconds 150
+            [W]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero)
+            for ($i = 1; $i -le 12; $i++) { [void][W]::SetCursorPos($r.L + 430 + 8 * $i, $r.T + 580); Start-Sleep -Milliseconds 30 }
+            [W]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 250
+            Grab "target/medal-shots/coin-dragged.png"
+            Start-Sleep -Seconds 3
+            Click 430 580; Start-Sleep -Seconds 2
+            Grab "target/medal-shots/coin-flipped.png"
           }
           $log = "$dir/diagnostics.log"
           if (Test-Path $log) { Copy-Item $log target/medal-shots/; Get-Content $log }

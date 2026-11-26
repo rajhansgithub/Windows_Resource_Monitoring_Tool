@@ -3728,6 +3728,10 @@ pub fn insights_tick(a: &crate::app::App) {
     if u.hwnd.is_null() || !(u.page.shows_insights() || u.page == Page::Achievements) {
         return;
     }
+    // The coin programs finish compiling a while after the first start: swap the flat medal for the live coin.
+    if u.room_on && u.room.coin.waiting() {
+        u.kick();
+    }
     sync_insights(a, false);
 }
 

@@ -3995,6 +3995,11 @@ impl Stage {
         !self.failed && gpu::available() && gpu::coins_ready()
     }
 
+    /// A medal is on show but has no frame yet, and one can be drawn now (the coin programs just became ready).
+    pub fn waiting(&self) -> bool {
+        self.cur.is_some() && self.frame.is_empty() && self.ready()
+    }
+
     /// Show medal `id` at `tier` (1..=7). A different medal starts at the front.
     pub fn show(&mut self, id: &'static str, tier: u8) {
         if self.cur == Some((id, tier)) {
