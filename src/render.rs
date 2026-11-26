@@ -221,6 +221,12 @@ impl Canvas {
         self.buf()
     }
 
+    /// The canvas pixels to write (premultiplied BGRA, row 0 = top), e.g. to put a rendered image on it.
+    pub fn pixels_mut(&mut self) -> &mut [u32] {
+        unsafe { GdiFlush() };
+        self.buf()
+    }
+
     pub fn clear(&mut self, c: Rgba) {
         let p = premul(c);
         self.buf().fill(p);

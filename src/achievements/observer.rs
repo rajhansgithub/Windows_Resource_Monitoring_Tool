@@ -272,6 +272,16 @@ impl Observer {
         &self.state
     }
 
+    /// One rub of the polishing cloth on medal `id` (the Achievements page). Saved at once. Returns the shine earned.
+    pub fn polish(&mut self, id: &str) -> u64 {
+        let (_, gain) = self.state.polish(id, unix_ms());
+        if gain > 0 {
+            self.dirty = true;
+            self.save_if_due(true);
+        }
+        gain
+    }
+
     /// Achievements switched off: forget the half-built minute.
     pub fn pause(&mut self) {
         self.bucket = None;

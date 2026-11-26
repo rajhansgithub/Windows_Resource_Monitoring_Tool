@@ -917,6 +917,7 @@ impl App {
         let st = self.ach.state().clone();
         crate::achievements::ui::refresh(&st);
         crate::achievements::ui::show_moments(self.hwnd, &moments, &st, self.m.dark);
+        crate::settings_ui::ach_changed(self);
     }
 
     /// Alert rules evaluated on the samples we already take (no extra work).
@@ -1026,6 +1027,10 @@ impl App {
         ));
         let today = self.m.usage.get(usage::today());
         t.push_str(&format!("\nToday {}", fmt::bytes(today.total())));
+        if self.m.s.achievements {
+            t.push('\n');
+            t.push_str(&crate::achievements::tip_line(self.ach.state()));
+        }
         self.tray.tip(&t);
     }
 
@@ -1316,7 +1321,7 @@ impl App {
         }
     }
 
-    /// The Achievements window (tray menu entry, or `--achievements` on the command line).
+    /// The Achievements page of the main window (tray menu entry, or `--achievements` on the command line).
     pub fn open_achievements(&mut self) {
         self.command(ID_ACHIEVE);
     }
@@ -1325,10 +1330,7 @@ impl App {
         match id {
             ID_WEBSITE => shell_open(WEBSITE, None),
             ID_SETTINGS => crate::settings_ui::open_settings(self),
-            ID_ACHIEVE => {
-                let st = self.ach.state().clone();
-                crate::achievements::ui::open(self.hwnd, &st, self.m.dark);
-            }
+            ID_ACHIEVE => crate::settings_ui::open(self, crate::nav::Page::Achievements),
             ID_TASKMGR => shell_open("taskmgr.exe", None),
             ID_UPDATE_NOW => self.run(Cmd::CheckUpdates),
             ID_EXIT => unsafe {
