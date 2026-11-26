@@ -106,6 +106,8 @@ struct RackL {
 /// One line of the tray.
 enum TrayLine {
     Text { x: i32, y: i32, s: String, dim: bool, semi: bool },
+    /// The large view's heading (head font).
+    Title { x: i32, y: i32, s: String },
     Single { x: i32, y: i32, w: i32, got: bool, name: String, xp: String, line: String },
 }
 
@@ -123,6 +125,17 @@ pub struct Room {
     disc: Option<(i32, i32, i32, u8, f32, u8)>,
     /// The tray's "Polish" button (empty when the medal is clean or there is none).
     pub polish_btn: Rect,
+    /// The tray's "View large" button (empty when there is no coin).
+    pub big_btn: Rect,
+    /// The header's "View medals" button (empty when nothing is earned yet).
+    pub head_btn: Rect,
+    /// The large medal view: the whole page is one medal. Its buttons: back to the racks, previous, next.
+    pub big: bool,
+    /// Open the large view at the first layout (CI screenshots: `RESMON_ACH_BIG`).
+    want_big: bool,
+    pub close_btn: Rect,
+    pub prev_btn: Rect,
+    pub next_btn: Rect,
     /// The live coin, where it sits (content coordinates, square) and its side in px.
     pub coin: Stage,
     pub coin_rect: Rect,
@@ -151,6 +164,13 @@ impl Room {
             tray_lines: Vec::new(),
             disc: None,
             polish_btn: Rect::default(),
+            big_btn: Rect::default(),
+            head_btn: Rect::default(),
+            big: false,
+            want_big: std::env::var_os("RESMON_ACH_BIG").is_some(),
+            close_btn: Rect::default(),
+            prev_btn: Rect::default(),
+            next_btn: Rect::default(),
             coin: Stage::new(),
             coin_rect: Rect::default(),
             coin_n: 0,
@@ -225,8 +245,18 @@ impl Room {
 
     /// Lay the page out from `s` between `l` and `r`, starting at `y0`. Returns the bottom.
     #[allow(clippy::too_many_arguments)]
-    pub fn layout(&mut self, s: &State, mdc: HDC, f: &Fonts, dpi: u32, l: i32, r: i32, y0: i32) -> i32 {
+    /// `vh`: the height of the visible page area (the large view fills it).
+    pub fn layout(&mut self, s: &State, mdc: HDC, f: &Fonts, dpi: u32, l: i32, r: i32, y0: i32, vh: i32) -> i32 {
         self.dpi = dpi;
+        self.big_btn = Rect::default();
+        self.head_btn = Rect::default();
+        self.close_btn = Rect::default();
+        self.prev_btn = Rect::default();
+        self.next_btn = Rect::default();
+        if self.big && self.shown.is_some() {
+            return self.layout_big(s, mdc, f, l, r, y0, vh);
+        }
+        self.big = false;
         let lh = |font| measure_dc(mdc, font, "Ag").1;
         let w = r - l;
 
@@ -238,6 +268,11 @@ impl Room {
         let certs = Catalog::sets().iter().filter(|set| c::rack_status(s, set).cert > 0).count();
         self.head_right = format!("{} of {} badges \u{00B7} {} of {} racks certified", earned, Catalog::all().len(), certs, Catalog::sets().len());
         self.head = Rect { l, t: y0, r, b: y0 + self.sc(76) };
+        if earned > 0 {
+            let bw = measure_dc(mdc, f.body, "View medals").0 + self.sc(32);
+            let (bh, cy) = (self.sc(32), (self.head.t + self.head.b) / 2);
+            self.head_btn = Rect { l: r - self.sc(20) - bw, t: cy - bh / 2, r: r - self.sc(20), b: cy + bh / 2 };
+        }
 
         // Racks: 4 across when they fit, else 2, else 1.
         let pad = self.sc(16);
@@ -308,7 +343,8 @@ impl Room {
         self.single_rects.clear();
         self.shown = None;
         let mut y = tt + self.sc(16);
-        let side = self.sc(148);
+        // the coin grows with the window: 148 px at the default size, up to 300
+        let side = ((r - l) / 6).clamp(self.sc(148), self.sc(300));
         let now = super::observer::unix_ms();
         match self.units[self.sel].unit {
             Unit::Ladder(id) => {
@@ -398,6 +434,9 @@ impl Room {
         }
         self.tray = Rect { l: tl, t: tt, r: tr, b: y };
         self.floor = Rect { l, t: floor_t, r, b: self.tray.b + pad };
+        if std::mem::take(&mut self.want_big) && self.open_big(s) {
+            return self.layout_big(s, mdc, f, l, r, y0, vh);
+        }
         self.floor.b
     }
 
@@ -407,12 +446,154 @@ impl Room {
         let w = s.wear(id, now);
         self.tray_lines.push(TrayLine::Text { x, y, s: wear_words(&w), dim: true, semi: false });
         y += measure_dc(mdc, f.small, "Ag").1 + self.sc(10);
+        let mut bx = x;
+        if !self.big {
+            let bw = measure_dc(mdc, f.body, "View large").0 + self.sc(32);
+            self.big_btn = Rect { l: bx, t: y, r: bx + bw, b: y + self.sc(32) };
+            bx = self.big_btn.r + self.sc(8);
+        }
         if !w.clean {
             let bw = measure_dc(mdc, f.body, "Polish").0 + self.sc(32);
-            self.polish_btn = Rect { l: x, t: y, r: x + bw, b: y + self.sc(32) };
-            y = self.polish_btn.b;
+            self.polish_btn = Rect { l: bx, t: y, r: bx + bw, b: y + self.sc(32) };
+        }
+        if !self.big || !w.clean {
+            y += self.sc(32);
         }
         y
+    }
+
+    /// The medals that can be shown large, in page order: ladders with a tier, then the earned singles.
+    fn earned_order(s: &State) -> Vec<&'static str> {
+        let mut v = Vec::new();
+        for u in Room::plan() {
+            match u {
+                Unit::Ladder(id) if s.tier(id) > 0 => v.push(id),
+                Unit::Singles(cat) => v.extend(Catalog::all().iter().filter(|b| b.category == cat && !b.is_ladder() && s.earned(b.id)).map(|b| b.id)),
+                _ => {}
+            }
+        }
+        v
+    }
+
+    /// Open the large view on the medal the tray shows, else the first earned one. False when nothing is earned.
+    pub fn open_big(&mut self, s: &State) -> bool {
+        if self.shown.is_none() {
+            let Some(id) = Room::earned_order(s).first().copied() else {
+                return false;
+            };
+            self.pick(id);
+        }
+        self.big = true;
+        true
+    }
+
+    /// Show `id`: its unit selected in the racks (and the single picked).
+    fn pick(&mut self, id: &'static str) {
+        if let Some(i) = Room::index_of(id) {
+            self.sel = i;
+            self.pull = 1.0;
+        }
+        self.single = Catalog::get(id).filter(|b| !b.is_ladder()).map(|b| b.id);
+        self.shown = Some(id);
+    }
+
+    pub fn close_big(&mut self) {
+        self.big = false;
+    }
+
+    /// Large view: the previous (-1) or next (+1) earned medal; the racks follow (unit and single picked).
+    pub fn step(&mut self, s: &State, d: i32) {
+        let order = Room::earned_order(s);
+        if order.is_empty() {
+            return;
+        }
+        let cur = self.shown.and_then(|id| order.iter().position(|x| *x == id)).unwrap_or(0) as i32;
+        self.pick(order[(cur + d).rem_euclid(order.len() as i32) as usize]);
+    }
+
+    /// The large view: one medal filling the page (coin as big as fits), its name, the way to the next tier, its age.
+    #[allow(clippy::too_many_arguments)]
+    fn layout_big(&mut self, s: &State, mdc: HDC, f: &Fonts, l: i32, r: i32, y0: i32, vh: i32) -> i32 {
+        let lh = |font| measure_dc(mdc, font, "Ag").1;
+        let id = self.shown.unwrap();
+        let Some(b) = Catalog::get(id) else {
+            self.big = false;
+            return y0;
+        };
+        self.units.clear();
+        self.racks.clear();
+        self.tray_lines.clear();
+        self.single_rects.clear();
+        self.polish_btn = Rect::default();
+        self.head = Rect::default();
+        let pad = self.sc(20);
+        let bottom = y0 + vh.max(self.sc(420)) - self.sc(12);
+        self.floor = Rect { l, t: y0, r, b: bottom };
+
+        // top row: back to the racks on the left, previous / next on the right
+        let bh = self.sc(32);
+        let y = y0 + pad;
+        let b32 = self.sc(32);
+        let bw = |t: &str| measure_dc(mdc, f.body, t).0 + b32;
+        self.close_btn = Rect { l: l + pad, t: y, r: l + pad + bw("Back to racks"), b: y + bh };
+        if Room::earned_order(s).len() > 1 {
+            let nw = bw("Next");
+            self.next_btn = Rect { l: r - pad - nw, t: y, r: r - pad, b: y + bh };
+            let pw = bw("Previous");
+            self.prev_btn = Rect { l: self.next_btn.l - self.sc(8) - pw, t: y, r: self.next_btn.l - self.sc(8), b: y + bh };
+        }
+        let top = y + bh + pad;
+
+        // the facts, measured first so the coin gets the rest
+        let ladder = b.is_ladder();
+        let k = if ladder { s.tier(id) } else { single_tier(b.category) };
+        let goal = if ladder { c::goal_of(s, id) } else { None };
+        let title = format!("{} \u{00B7} {}", b.name, c::TIER_NAMES[(k.clamp(1, 7) - 1) as usize]);
+        let mut kv = String::new();
+        if ladder {
+            kv = format!("NOW {}", c::fmt_amount(c::amount_of(s, b), b.unit));
+            match goal {
+                Some(g) => kv.push_str(&format!(
+                    "   \u{00B7}   NEXT {} at {}   \u{00B7}   {} to go   \u{00B7}   +{} XP",
+                    g.tier_name(),
+                    c::fmt_amount(g.to as f64, g.unit),
+                    c::fmt_amount(g.left(), g.unit),
+                    g.xp
+                )),
+                None => kv.push_str("   \u{00B7}   top tier reached"),
+            }
+        }
+        let info_h = lh(f.head) + self.sc(6) + lh(f.small) + self.sc(10) + if kv.is_empty() { 0 } else { lh(f.small) + self.sc(12) } + lh(f.small) + self.sc(10) + bh;
+        let w = r - l - 2 * pad;
+        let h = bottom - pad - top;
+        // wide: coin left, facts right; narrow: coin on top, facts below
+        let info_w = self.sc(380);
+        let side_by_side = w - h >= info_w;
+        let side = if side_by_side { h.min(w - info_w - pad) } else { (h - info_h - pad).min(w) }.max(self.sc(160));
+        let (stage, x, mut ty) = if side_by_side {
+            let st = Rect { l: l + pad, t: top, r: l + pad + side, b: top + side };
+            (st, st.r + self.sc(32), top + (side - info_h).max(0) / 2)
+        } else {
+            let sl = l + (r - l - side) / 2;
+            let st = Rect { l: sl, t: top, r: sl + side, b: top + side };
+            (st, l + pad, st.b + pad)
+        };
+        self.coin_rect = stage;
+        self.disc = Some(((stage.l + stage.r) / 2, (stage.t + stage.b) / 2, side / 2, k, goal.map_or(1.0, |g| g.frac()), goal.map_or(k, |g| g.tier)));
+        self.tray_lines.push(TrayLine::Title { x, y: ty, s: title });
+        ty += lh(f.head) + self.sc(6);
+        self.tray_lines.push(TrayLine::Text { x, y: ty, s: b.line.to_string(), dim: true, semi: false });
+        ty += lh(f.small) + self.sc(10);
+        if !kv.is_empty() {
+            self.tray_lines.push(TrayLine::Text { x, y: ty, s: kv, dim: false, semi: false });
+            ty += lh(f.small) + self.sc(12);
+        }
+        let now = super::observer::unix_ms();
+        self.wear_lines(s, id, now, mdc, f, x, ty);
+        self.tray = self.floor;
+        self.coin.show(id, k.clamp(1, 7));
+        self.coin_n = side as u32;
+        self.floor.b + self.sc(12)
     }
 
     /// Draw. `hover` = unit index under the mouse. The host draws the "Polish" button (`polish_btn`).
@@ -421,6 +602,15 @@ impl Room {
         let sh = |r: Rect| Rect { l: r.l, t: r.t + dy, r: r.r, b: r.b + dy };
         let vis = |r: Rect| r.b + dy >= vt && r.t + dy <= vb;
         let rad = self.sc(6) as f32;
+        if self.big {
+            // the large view: the room's floor, one medal under a cold light
+            let fl = sh(self.floor);
+            cv.fill_round(fl, rad, hx(0x0d0f12));
+            cv.fill_rect(Rect { l: fl.l + self.sc(6), t: fl.t, r: fl.r - self.sc(6), b: fl.t + self.sc(2) }, COLD);
+            self.draw_medal(cv, f, dy, vt, vb, 255);
+            self.draw_lines(cv, f, dy, fl.r);
+            return;
+        }
 
         // Header card.
         if vis(self.head) {
@@ -441,9 +631,11 @@ impl Room {
             let ty = (h.t + h.b) / 2 - (th + sh2) / 2;
             cv.text(f.semi, &format!("Level {lv} \u{00B7} {title}"), x, ty, col.fg);
             cv.text(f.small, &format!("{into} / {need} XP to level {}", lv + 1), x, ty + th, col.dim);
+            // the "View medals" button (a page control) sits at the right; the counts go left of it
+            let right = if self.head_btn.is_empty() { h.r - self.sc(20) } else { self.head_btn.l - self.sc(16) };
             let rw = cv.measure(f.small, &self.head_right).0;
-            if h.r - self.sc(20) - rw > x + self.sc(220) {
-                cv.text_right(f.small, &self.head_right, h.r - self.sc(20), (h.t + h.b) / 2 - sh2 / 2, col.dim);
+            if right - rw > x + self.sc(220) {
+                cv.text_right(f.small, &self.head_right, right, (h.t + h.b) / 2 - sh2 / 2, col.dim);
             }
         }
 
@@ -566,55 +758,71 @@ impl Room {
             let a = (ease(self.pull) * 255.0) as u8;
             cv.fill_round(t, rad, hx(0x14171c));
             cv.fill_rect(Rect { l: t.l + self.sc(6), t: t.t, r: t.r - self.sc(6), b: t.t + self.sc(2) }, COLD.with_a(a));
-            let live = !self.coin_rect.is_empty() && {
-                let cr = sh(self.coin_rect);
-                if let Some((_, _, r0, _, frac, next)) = self.disc {
-                    // the way to the next tier, round the coin
-                    let (cx, cy) = ((cr.l + cr.r) as f32 / 2.0, (cr.t + cr.b) as f32 / 2.0);
-                    cv.ring(cx, cy, r0 as f32, self.sc(3) as f32, 1.0, hx(0x23272e));
-                    cv.ring(cx, cy, r0 as f32, self.sc(3) as f32, frac * (a as f32 / 255.0), tier_col(next.max(1)));
-                }
-                self.coin.draw(cv, (cr.l + cr.r) / 2, (cr.t + cr.b) / 2, vt, vb)
-            };
-            if let (false, Some((cx, cy, r0, k, frac, next))) = (live, self.disc) {
-                let (cx, cy, r0) = (cx as f32, (cy + dy) as f32, r0 as f32);
-                // the medal: a disc in its metal, a dark well, the tier initial; the ring is the way to the next tier
-                let metal = if k > 0 { tier_col(k) } else { hx(0x3a3f48) };
-                cv.ring(cx, cy, r0, self.sc(4) as f32, 1.0, hx(0x23272e));
-                cv.ring(cx, cy, r0, self.sc(4) as f32, frac * (a as f32 / 255.0), tier_col(next.max(1)));
-                let d = r0 - self.sc(10) as f32;
-                cv.fill_round(Rect { l: (cx - d) as i32, t: (cy - d) as i32, r: (cx + d) as i32, b: (cy + d) as i32 }, d, metal);
-                let d2 = d * 0.62;
-                cv.fill_round(Rect { l: (cx - d2) as i32, t: (cy - d2) as i32, r: (cx + d2) as i32, b: (cy + d2) as i32 }, d2, Rgba(12, 14, 18, 235));
-                let s = if k > 0 { &c::TIER_NAMES[(k - 1) as usize][..1] } else { "?" };
-                let (sw, shh) = cv.measure(f.head, s);
-                cv.text(f.head, s, cx as i32 - sw / 2, cy as i32 - shh / 2, if k > 0 { metal } else { INK_DIM });
+            self.draw_medal(cv, f, dy, vt, vb, a);
+            self.draw_lines(cv, f, dy, t.r);
+        }
+    }
+
+    /// The medal: the live coin, or the flat disc without a GPU; round it, the way to the next tier (`a`: fade in).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_medal(&self, cv: &mut Canvas, f: &Fonts, dy: i32, vt: i32, vb: i32, a: u8) {
+        let sh = |r: Rect| Rect { l: r.l, t: r.t + dy, r: r.r, b: r.b + dy };
+        let live = !self.coin_rect.is_empty() && {
+            let cr = sh(self.coin_rect);
+            if let Some((_, _, r0, _, frac, next)) = self.disc {
+                // the way to the next tier, round the coin
+                let (cx, cy) = ((cr.l + cr.r) as f32 / 2.0, (cr.t + cr.b) as f32 / 2.0);
+                cv.ring(cx, cy, r0 as f32, self.sc(3) as f32, 1.0, hx(0x23272e));
+                cv.ring(cx, cy, r0 as f32, self.sc(3) as f32, frac * (a as f32 / 255.0), tier_col(next.max(1)));
             }
-            for ln in &self.tray_lines {
-                match ln {
-                    TrayLine::Text { x, y, s, dim, semi } => {
-                        let font = if *semi { f.semi } else { f.small };
-                        let s2 = cv.ellipsize(font, s, t.r - self.sc(16) - x);
-                        cv.text(font, &s2, *x, y + dy, if *dim { INK_DIM } else { INK });
+            self.coin.draw(cv, (cr.l + cr.r) / 2, (cr.t + cr.b) / 2, vt, vb)
+        };
+        if let (false, Some((cx, cy, r0, k, frac, next))) = (live, self.disc) {
+            let (cx, cy, r0) = (cx as f32, (cy + dy) as f32, r0 as f32);
+            // the medal: a disc in its metal, a dark well, the tier initial; the ring is the way to the next tier
+            let metal = if k > 0 { tier_col(k) } else { hx(0x3a3f48) };
+            cv.ring(cx, cy, r0, self.sc(4) as f32, 1.0, hx(0x23272e));
+            cv.ring(cx, cy, r0, self.sc(4) as f32, frac * (a as f32 / 255.0), tier_col(next.max(1)));
+            let d = r0 - self.sc(10) as f32;
+            cv.fill_round(Rect { l: (cx - d) as i32, t: (cy - d) as i32, r: (cx + d) as i32, b: (cy + d) as i32 }, d, metal);
+            let d2 = d * 0.62;
+            cv.fill_round(Rect { l: (cx - d2) as i32, t: (cy - d2) as i32, r: (cx + d2) as i32, b: (cy + d2) as i32 }, d2, Rgba(12, 14, 18, 235));
+            let s = if k > 0 { &c::TIER_NAMES[(k - 1) as usize][..1] } else { "?" };
+            let (sw, shh) = cv.measure(f.head, s);
+            cv.text(f.head, s, cx as i32 - sw / 2, cy as i32 - shh / 2, if k > 0 { metal } else { INK_DIM });
+        }
+    }
+
+    /// The tray's text lines (and the singles list), clipped at `right`.
+    fn draw_lines(&self, cv: &mut Canvas, f: &Fonts, dy: i32, right: i32) {
+        for ln in &self.tray_lines {
+            match ln {
+                TrayLine::Title { x, y, s } => {
+                    let s2 = cv.ellipsize(f.head, s, right - self.sc(16) - x);
+                    cv.text(f.head, &s2, *x, y + dy, INK);
+                }
+                TrayLine::Text { x, y, s, dim, semi } => {
+                    let font = if *semi { f.semi } else { f.small };
+                    let s2 = cv.ellipsize(font, s, right - self.sc(16) - x);
+                    cv.text(font, &s2, *x, y + dy, if *dim { INK_DIM } else { INK });
+                }
+                TrayLine::Single { x, y, w, got, name, xp, line } => {
+                    let y = y + dy;
+                    let th = cv.measure(f.body, "Ag").1;
+                    let d = self.sc(10);
+                    let dot = Rect { l: *x, t: y + th / 2 - d / 2, r: x + d, b: y + th / 2 + d / 2 };
+                    if *got {
+                        cv.fill_round(dot, d as f32 / 2.0, LINK);
+                    } else {
+                        cv.stroke_round(dot, d as f32 / 2.0, INK_DIM);
                     }
-                    TrayLine::Single { x, y, w, got, name, xp, line } => {
-                        let y = y + dy;
-                        let th = cv.measure(f.body, "Ag").1;
-                        let d = self.sc(10);
-                        let dot = Rect { l: *x, t: y + th / 2 - d / 2, r: x + d, b: y + th / 2 + d / 2 };
-                        if *got {
-                            cv.fill_round(dot, d as f32 / 2.0, LINK);
-                        } else {
-                            cv.stroke_round(dot, d as f32 / 2.0, INK_DIM);
-                        }
-                        let nx = x + d + self.sc(10);
-                        let xw = cv.measure(f.small, xp).0;
-                        let n = cv.ellipsize(f.body, name, w - d - self.sc(20) - xw);
-                        cv.text(f.body, &n, nx, y, if *got { INK } else { INK_DIM });
-                        cv.text_right(f.small, xp, x + w, y + self.sc(1), if *got { AMBER } else { INK_DIM });
-                        let l2 = cv.ellipsize(f.small, line, w - d - self.sc(10));
-                        cv.text(f.small, &l2, nx, y + th, INK_DIM);
-                    }
+                    let nx = x + d + self.sc(10);
+                    let xw = cv.measure(f.small, xp).0;
+                    let n = cv.ellipsize(f.body, name, w - d - self.sc(20) - xw);
+                    cv.text(f.body, &n, nx, y, if *got { INK } else { INK_DIM });
+                    cv.text_right(f.small, xp, x + w, y + self.sc(1), if *got { AMBER } else { INK_DIM });
+                    let l2 = cv.ellipsize(f.small, line, w - d - self.sc(10));
+                    cv.text(f.small, &l2, nx, y + th, INK_DIM);
                 }
             }
         }

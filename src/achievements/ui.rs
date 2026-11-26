@@ -3955,7 +3955,10 @@ pub struct Stage {
     last: f64,
     woke: f64,
     frame: Vec<u32>,
+    /// Side of `frame` in px, and of the coin on screen (`size`); `scale` = n / size, lowered when frames cost too much.
     n: u32,
+    size: u32,
+    scale: f32,
     dirty: bool,
     ss: u8,
     cost: f32,
@@ -3984,6 +3987,8 @@ impl Stage {
             woke: 0.0,
             frame: Vec::new(),
             n: 0,
+            size: 0,
+            scale: if gpu::is_hardware() { 1.0 } else { 0.5 },
             dirty: true,
             ss: if gpu::is_hardware() { 4 } else { 1 },
             cost: 5.0,
@@ -4067,9 +4072,11 @@ impl Stage {
             self.flip = self.flip_t;
         }
         let moving = self.moving(now, reduced);
-        if !moving && !self.dirty && self.n == n && !self.frame.is_empty() {
+        if !moving && !self.dirty && self.size == n && !self.frame.is_empty() {
             return false;
         }
+        // while it moves, a big coin may be drawn with fewer pixels and scaled up; at rest always full size
+        let nr = if moving && !reduced { ((n as f32 * self.scale) as u32).max(64).min(n) } else { n };
         // a slow idle sway that fades out before the medal rests, so it stops without a jump
         let age = (now - self.woke) as f32;
         let fade = 1.0 - ((age - (STAGE_SWAY_S as f32 - 2.0)) / 2.0).clamp(0.0, 1.0);
@@ -4089,13 +4096,16 @@ impl Stage {
                 self.medals.ensure_back(id, tier, b.name, &sub);
             }
         }
-        let ss = if reduced && gpu::is_hardware() { 4 } else { self.ss };
+        // at rest (one frame, then nothing) always full anti-aliasing on a GPU; samples only drop while it moves
+        let ss = if (reduced || !moving) && gpu::is_hardware() { 4 } else { self.ss };
         let c0 = std::time::Instant::now();
-        match self.medals.coin_frame(id, tier, n, n, ss, t, yaw, pitch, (0.0, 0.0), wear) {
+        match self.medals.coin_frame(id, tier, nr, n, ss, t, yaw, pitch, (0.0, 0.0), wear) {
             Some(f) => {
                 self.frame = f;
-                self.n = n;
-                self.dirty = false;
+                self.n = nr;
+                self.size = n;
+                // a still frame at full size once it rests
+                self.dirty = nr != n;
             }
             None => {
                 self.failed = true; // the coin path failed: the flat medal from now on
@@ -4106,15 +4116,33 @@ impl Stage {
         if moving && !reduced {
             let ms = c0.elapsed().as_secs_f32() * 1000.0;
             self.cost = self.cost * 0.8 + ms * 0.2;
-            if self.cost > 12.0 && self.ss > 1 {
-                self.ss /= 2; // samples go first: half the cost
+            // too slow: 4 -> 2 samples, then down to 75% pixels, then 1 sample, then (weak GPUs only) down to 50%.
+            // Fast again: the same steps back. Edges stay smooth: 2 samples plus 75% keeps the outline clean.
+            let floor = if gpu::is_hardware() { 0.75 } else { 0.5 };
+            if self.cost > 12.0 && self.ss > 2 {
+                self.ss = 2;
                 self.cost = 8.0;
+            } else if self.cost > 12.0 && self.scale > floor {
+                self.scale = (self.scale - 0.05).max(floor);
+                self.cost = 8.0;
+            } else if self.cost > 12.0 && self.ss > 1 {
+                self.ss = 1;
+                self.cost = 8.0;
+            } else if self.cost > 12.0 && self.scale > 0.5 {
+                self.scale = (self.scale - 0.05).max(0.5);
+                self.cost = 8.0;
+            } else if self.cost < 5.0 && self.ss < 2 && gpu::is_hardware() {
+                self.ss = 2;
+                self.cost = 8.0;
+            } else if self.cost < 5.0 && self.scale < 1.0 {
+                self.scale = (self.scale + 0.05).min(1.0);
+                self.cost = 6.0;
             } else if self.cost < 5.0 && self.ss < 4 && gpu::is_hardware() {
-                self.ss *= 2;
+                self.ss = 4;
                 self.cost = 8.0;
             }
         }
-        moving
+        moving || self.dirty
     }
 
     /// Put the last frame on `cv`, centred on (`cx`, `cy`), only in rows `vt..vb`. False when there is none (the host
@@ -4125,7 +4153,8 @@ impl Stage {
         }
         let (w, h) = (cv.w, cv.h);
         let n = self.n as i32;
-        draw_tile(cv.pixels_mut(), w, h, &self.frame, n, cx as f32, cy as f32, 1.0, 1.0, 1.0, (vt.max(0), vb.min(h)));
+        let k = self.size.max(1) as f32 / self.n.max(1) as f32;
+        draw_tile(cv.pixels_mut(), w, h, &self.frame, n, cx as f32, cy as f32, k, k, 1.0, (vt.max(0), vb.min(h)));
         true
     }
 

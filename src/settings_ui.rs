@@ -196,6 +196,12 @@ const ID_GOAL: i32 = 905;
 const ID_CHIP: i32 = 906;
 const ID_POLISH: i32 = 907;
 const ID_COIN: i32 = 908;
+/// The large medal view: open (tray), back to the racks, previous, next.
+const ID_BIG: i32 = 909;
+const ID_BIG_CLOSE: i32 = 910;
+const ID_BIG_PREV: i32 = 911;
+const ID_BIG_NEXT: i32 = 912;
+const ID_BIG_HEAD: i32 = 913;
 const ID_ROOM: i32 = 1000;
 const ID_SINGLE: i32 = 1100;
 
@@ -1676,7 +1682,9 @@ impl Ui {
     /// Left and right edges of the cards (max width, left-aligned).
     fn col(&self) -> (i32, i32) {
         let l = self.content_x() + self.sc(PAGE_PAD);
-        let r = (self.cw - self.sc(PAGE_PAD)).min(l + self.sc(CONTENT_MAX)).max(l + self.sc(240));
+        // Achievements (the Server Room) fills the window; the other pages keep a readable column
+        let max = if self.page == Page::Achievements { self.sc(4000) } else { self.sc(CONTENT_MAX) };
+        let r = (self.cw - self.sc(PAGE_PAD)).min(l + max).max(l + self.sc(240));
         (l, r)
     }
 
@@ -1819,7 +1827,8 @@ impl Ui {
                 Def::Room => {
                     if let Some(st) = &self.ach {
                         let f = self.fonts.view();
-                        y = self.room.layout(st, self.mdc, &f, self.dpi, l, r, y);
+                        let (vt, vb) = self.view();
+                        y = self.room.layout(st, self.mdc, &f, self.dpi, l, r, y, vb - vt);
                         room_on = true;
                         for (i, rect) in self.room.hit_rects() {
                             controls.push(Control { id: ID_ROOM + i as i32, kind: Kind::Unit(i as u16), rect, layer: Layer::Page, enabled: true });
@@ -1832,6 +1841,18 @@ impl Ui {
                         }
                         if !self.room.polish_btn.is_empty() {
                             controls.push(Control { id: ID_POLISH, kind: Kind::Button("Polish", false), rect: self.room.polish_btn, layer: Layer::Page, enabled: true });
+                        }
+                        let big = [
+                            (ID_BIG, "View large", self.room.big_btn, true),
+                            (ID_BIG_HEAD, "View medals", self.room.head_btn, false),
+                            (ID_BIG_CLOSE, "Back to racks", self.room.close_btn, false),
+                            (ID_BIG_PREV, "Previous", self.room.prev_btn, false),
+                            (ID_BIG_NEXT, "Next", self.room.next_btn, false),
+                        ];
+                        for (id, label, rect, accent) in big {
+                            if !rect.is_empty() {
+                                controls.push(Control { id, kind: Kind::Button(label, accent), rect, layer: Layer::Page, enabled: true });
+                            }
                         }
                         y += self.sc(ROW_GAP);
                     }
@@ -3082,6 +3103,7 @@ fn activate(hwnd: HWND, id: i32) {
             let sel = u.ach.as_ref().and_then(crate::achievements::next_goal).and_then(|g| Room::index_of(g.id));
             go(Page::Achievements);
             if let (Some(u), Some(i)) = (ui(), sel) {
+                u.room.close_big();
                 if u.room.select(i) {
                     u.layout();
                     u.kick();
@@ -3146,6 +3168,31 @@ fn activate(hwnd: HWND, id: i32) {
                 run(Cmd::EditSettings);
             }
             ID_DATADIR => run(Cmd::DataFolder),
+            ID_BIG | ID_BIG_HEAD => {
+                let st = u.ach.clone();
+                if st.is_some_and(|st| u.room.open_big(&st)) {
+                    u.scroll_to(0, false);
+                    u.layout();
+                    u.focus = Some(ID_BIG_CLOSE);
+                    u.kick();
+                    invalidate(hwnd);
+                }
+            }
+            ID_BIG_CLOSE => {
+                u.room.close_big();
+                u.layout();
+                u.focus = None;
+                u.kick();
+                invalidate(hwnd);
+            }
+            ID_BIG_PREV | ID_BIG_NEXT => {
+                if let Some(st) = u.ach.clone() {
+                    u.room.step(&st, if id == ID_BIG_NEXT { 1 } else { -1 });
+                    u.layout();
+                    u.kick();
+                    invalidate(hwnd);
+                }
+            }
             ID_POLISH => {
                 if let (Some(a), Some(id)) = (app(), u.room.shown) {
                     if a.ach.polish(id) > 0 {
@@ -3257,6 +3304,12 @@ fn on_key(hwnd: HWND, key: u16) {
         VK_BROWSER_BACK => go_back(),
         // Esc only dismisses: the overlay pane, a tooltip. It never closes the window.
         VK_ESCAPE => {
+            if u.room.big && u.page == Page::Achievements {
+                u.room.close_big();
+                u.layout();
+                u.focus = None;
+                u.kick();
+            }
             if u.overlay {
                 u.overlay = false;
                 u.layout();
