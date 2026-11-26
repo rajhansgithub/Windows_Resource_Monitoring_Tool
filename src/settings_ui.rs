@@ -2411,7 +2411,8 @@ impl Ui {
             let (tw, _) = cv.measure(f.small, view::tone_label(pn.tone));
             let pw = self.sc(10 + 8 + 6 + 12) + tw;
             let px = right - pw;
-            view::draw_pill(cv, &f.view(), &p.view(), self.dpi, px, ty + (sh - self.sc(24)) / 2, pn.tone);
+            // Centred on the card, in line with the chevron.
+            view::draw_pill(cv, &f.view(), &p.view(), self.dpi, px, cy - self.sc(12), pn.tone);
             title_r = px - self.sc(12);
         }
         let t = cv.ellipsize(f.semi, panel.map_or(pg.title(), |pn| pn.title), title_r - tx);
@@ -2422,9 +2423,9 @@ impl Ui {
         };
         let bh = cv.measure(f.body, "Ag").1;
         let hy = ty + sh + self.sc(6);
-        let h = cv.ellipsize(f.body, headline, right - tx);
+        let h = cv.ellipsize(f.body, headline, title_r - tx);
         cv.text(f.body, &h, tx, hy, c_main);
-        let s = cv.ellipsize(f.small, fact, right - tx);
+        let s = cv.ellipsize(f.small, fact, title_r - tx);
         cv.text(f.small, &s, tx, hy + bh + self.sc(2), c_dim);
     }
 
