@@ -104,7 +104,7 @@ jobs:
           function Dump($f) { $b = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f)); Write-Output "DUMP-BEGIN $f"; for ($i=0; $i -lt $b.Length; $i+=4000) { Write-Output ("DUMP|" + $b.Substring($i, [Math]::Min(4000, $b.Length-$i))) }; Write-Output "DUMP-END" }
           function Tour($proc, $tag) {
             $ws = New-Object -ComObject WScript.Shell
-            foreach ($k in @(2, 1, 1, 1, 1)) {
+            foreach ($k in @(5, 1)) {
               [void]$ws.AppActivate($proc.Id); Start-Sleep -Milliseconds 400
               for ($j=0; $j -lt $k; $j++) { [System.Windows.Forms.SendKeys]::SendWait("^{TAB}"); Start-Sleep -Milliseconds 300 }
               Start-Sleep -Seconds 2
