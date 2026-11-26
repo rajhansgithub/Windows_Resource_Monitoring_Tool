@@ -80,6 +80,54 @@ pub struct Chart {
     /// `points` fill the newest (rightmost) slots, the rest stays empty. 0 = `points.len()`.
     /// Non-finite points are gaps.
     pub slots: usize,
+    /// Labels under the x axis: left, middle, right ("-60 min", "-30 min", "now").
+    /// Empty strings are not drawn.
+    pub x_labels: [String; 3],
+    /// Per-bar colours (bar charts only), one per point; empty = the accent colour.
+    pub tones: Vec<Tone>,
+}
+
+/// Left / middle / right x-axis labels for a chart.
+pub fn x_labels(l: &str, m: &str, r: &str) -> [String; 3] {
+    [l.into(), m.into(), r.into()]
+}
+
+/// The x-axis labels of a chart covering the last hour.
+pub fn last_hour() -> [String; 3] {
+    x_labels("-60 min", "-30 min", "now")
+}
+
+/// The x-axis labels of a per-day chart from local day `first` to `last` ("today"
+/// when `last` is the day of `now_ms`).
+pub fn day_span(first: u32, last: u32, now_ms: u64) -> [String; 3] {
+    let end = if last == time::day(now_ms) { "today".into() } else { time::day_label(last) };
+    let start = if first == last { String::new() } else { time::day_label(first) };
+    [start, String::new(), end]
+}
+
+/// Palette role of one part of a split bar (the view maps it to the theme).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum Role {
+    Accent,
+    /// Accent leaning toward "good" (a second, related part).
+    AccentAlt,
+    Warn,
+    /// Neutral grey (cache, other).
+    Neutral,
+    /// The empty track (free space).
+    Track,
+}
+
+/// A picture shown under the facts, above the chart.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Visual {
+    /// One bar split into parts that add up to a whole, with a legend
+    /// ("Apps 7.2 GB"). Parts are (label, value, colour); zero parts stay in the legend.
+    Split { parts: Vec<(&'static str, f32, Role)>, unit: &'static str },
+    /// Ring gauge (open at the bottom): the ceiling (percent of max speed allowed; None = this PC
+    /// does not report one), current use in percent and the reason for the ceiling
+    /// ("none" when nothing limits it).
+    Gauge { ceiling: Option<f32>, used: f32, reason: String },
 }
 
 /// Everything an Insights page needs to draw one feature.
@@ -93,6 +141,8 @@ pub struct Panel {
     pub headline: String,
     /// Short supporting facts, one per line.
     pub lines: Vec<String>,
+    /// Drawn between the facts and the chart; None = nothing to show.
+    pub visual: Option<Visual>,
     pub chart: Option<Chart>,
     /// Newest first.
     pub items: Vec<Item>,

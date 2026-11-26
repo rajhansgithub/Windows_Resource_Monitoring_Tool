@@ -601,7 +601,7 @@ impl Fonts {
     }
 
     fn view(&self) -> view::Fonts {
-        view::Fonts { body: self.body, small: self.small, tiny: self.tiny, semi: self.semi, head: self.head }
+        view::Fonts { body: self.body, small: self.small, tiny: self.tiny, semi: self.semi, cap: self.cap, head: self.head }
     }
 
     fn free(&self) {
@@ -900,6 +900,8 @@ struct Ui {
     painted: bool,
     // ---- Insights
     ins_on: bool,
+    /// This PC has a battery: battery-only cards (Bag Guard, the battery alert) show.
+    battery: bool,
     panels: Vec<Panel>,
     sig: u64,
     /// GetTickCount64 of the last rebuild (0 = stale).
@@ -977,6 +979,7 @@ impl Ui {
             maximized: false,
             painted: false,
             ins_on: false,
+            battery: true,
             panels: Vec::new(),
             sig: 0,
             built: 0,
@@ -1015,7 +1018,7 @@ impl Ui {
     fn take_panels(&mut self, on: bool, panels: Vec<Panel>) -> bool {
         // SAFETY: no preconditions.
         self.built = unsafe { GetTickCount64() }.max(1);
-        let sig = view::signature(on, &panels);
+        let sig = view::signature(on, &panels, self.page.panel());
         if sig == self.sig {
             return false;
         }
@@ -1466,7 +1469,7 @@ impl Ui {
             }
             Page::Alerts => {
                 let on = d.alerts;
-                vec![
+                let mut v = vec![
                     toggle_card("Alert notifications", "Show a tray notification when a limit is crossed", ID_ALERTS),
                     Def::Heading("Limits"),
                     gated(self.number_card("CPU usage above", "Percent of total CPU. 0 turns this alert off", ID_A_CPU, "%"), on),
@@ -1480,7 +1483,12 @@ impl Ui {
                     self.number_card("Red from", "Values turn red from this percentage", ID_CRIT, "%"),
                     Def::Heading("Insights"),
                     gated(toggle_card("Insight notifications", "Sleep verdict on wake, crashes and driver resets", ID_INS_TOASTS), d.insights),
-                ]
+                ];
+                // No battery, no battery alert (it could never fire).
+                if !self.battery {
+                    v.remove(6);
+                }
+                v
             }
             Page::Data => vec![
                 self.number_card("Monthly data cap", "In gigabytes. 0 turns the cap off", ID_CAP, "GB"),
@@ -1558,7 +1566,8 @@ impl Ui {
 
     fn insight_defs(&self, page: Page) -> Vec<Def> {
         let mut v = Vec::new();
-        if page == Page::Sleep {
+        // Bag Guard only on a PC with a battery; it never acts without one.
+        if page == Page::Sleep && self.battery {
             v.push(gated(
                 toggle_card("Bag Guard", "Hibernate a lid-shut laptop that keeps draining on battery", ID_BAGGUARD),
                 self.draft.insights,
@@ -3467,6 +3476,7 @@ pub fn open(a: &mut crate::app::App, page: Page) {
         let (rect, max) = initial_rect(a, dpi);
         let mut state = Box::new(Ui::new(dpi, a.m.dark, a.m.s.theme, draft, adapters, labels, a.displays(), page));
         let (on, panels) = view::fetch(a, unix_ms());
+        state.battery = view::has_battery(a);
         state.take_panels(on, panels);
         state.normal = rect;
         state.maximized = max;
@@ -3536,7 +3546,20 @@ pub fn app_changed(dark: bool, a: &crate::app::App) {
 /// and the window repaints only when something visible changed.
 pub fn insights_tick(a: &crate::app::App) {
     let Some(u) = ui() else { return };
-    if u.hwnd.is_null() || !u.page.shows_insights() {
+    if u.hwnd.is_null() {
+        return;
+    }
+    // A battery appeared or went away (a UPS, a docked tablet): show or hide the
+    // battery-only cards. A plain compare from the snapshot; no polling of its own.
+    let battery = view::has_battery(a);
+    if battery != u.battery {
+        u.battery = battery;
+        if matches!(u.page, Page::Sleep | Page::Alerts) {
+            u.layout();
+            invalidate(u.hwnd);
+        }
+    }
+    if !u.page.shows_insights() {
         return;
     }
     sync_insights(a, false);

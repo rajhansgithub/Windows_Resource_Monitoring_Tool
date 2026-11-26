@@ -819,6 +819,8 @@ impl App {
     /// Feed Insights from the sample just taken (no extra timers).
     fn insights_sample(&mut self, procs_sampled: bool) {
         if !self.ins.enabled() {
+            // Still lets the window follow a battery appearing or going away.
+            crate::settings_ui::insights_tick(self);
             return;
         }
         let interval_ms = if self.display_on { self.m.s.interval_ms } else { self.m.s.interval_ms.max(5000) };
