@@ -854,7 +854,13 @@ impl App {
     }
 
     pub fn open_insights(&mut self) {
-        crate::settings_ui::open(self, crate::nav::Page::Overview);
+        // Demo mode only (CI screenshots): RESMON_PAGE=<page key> opens that page.
+        let page = if crate::insights::view::demo() != crate::insights::view::Demo::Off {
+            std::env::var("RESMON_PAGE").ok().and_then(|k| crate::nav::Page::from_key(&k))
+        } else {
+            None
+        };
+        crate::settings_ui::open(self, page.unwrap_or(crate::nav::Page::Overview));
     }
 
     /// Feed the achievements observer from the sample just taken (no extra timers).

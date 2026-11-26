@@ -46,6 +46,7 @@
 
 use crate::app::{app, default_accent, effective_dark, Cmd, C_CRIT, C_WARN};
 use crate::fmt::SpeedUnit;
+use crate::grid;
 use crate::achievements::room::{self, Room};
 use crate::achievements::State as AchState;
 use crate::insights::view::{self, View};
@@ -100,9 +101,8 @@ const NAV_HEAD_H: i32 = 36;
 const NAV_SEP_H: i32 = 9;
 /// Page header (back button + title) above the scrolling content.
 const HEADER_H: i32 = 76;
-/// Margin of the content from the pane and the window edge; max content width.
+/// Margin of the content from the pane and the window edge.
 const PAGE_PAD: i32 = 24;
-const CONTENT_MAX: i32 = 1000;
 const CARD_PAD: i32 = 16;
 const ROW_H: i32 = 64;
 const ROW_GAP: i32 = 4;
@@ -1679,13 +1679,35 @@ impl Ui {
         }
     }
 
-    /// Left and right edges of the cards (max width, left-aligned).
-    fn col(&self) -> (i32, i32) {
+    /// How the current page uses the width (see `grid`).
+    fn class(&self) -> grid::Class {
+        match self.page {
+            Page::Overview => grid::Class::Overview,
+            // the Server Room fills the window
+            Page::Achievements => grid::Class::Fill,
+            // an ordered list: one column, never gridded
+            Page::Metrics => grid::Class::List,
+            p if p.panel().is_some() => grid::Class::Insights,
+            _ => grid::Class::Settings,
+        }
+    }
+
+    /// Room for the content between the page margins, px.
+    fn avail_w(&self) -> i32 {
         let l = self.content_x() + self.sc(PAGE_PAD);
-        // Achievements (the Server Room) fills the window; the other pages keep a readable column
-        let max = if self.page == Page::Achievements { self.sc(4000) } else { self.sc(CONTENT_MAX) };
-        let r = (self.cw - self.sc(PAGE_PAD)).min(l + max).max(l + self.sc(240));
-        (l, r)
+        (self.cw - self.sc(PAGE_PAD) - l).max(self.sc(240))
+    }
+
+    /// Left and right edges of the cards: 24 DIP margins; the old column below
+    /// ~1100 DIP, up to 2400 DIP wide above (`grid::content_w`). A capped block
+    /// is centred in the room there is; the Server Room fills it.
+    fn col(&self) -> (i32, i32) {
+        let l0 = self.content_x() + self.sc(PAGE_PAD);
+        let class = self.class();
+        let avail = self.avail_w();
+        let w = grid::content_w(class, avail, self.dpi);
+        let l = if class == grid::Class::Fill { l0 } else { grid::centred(l0, avail, w) };
+        (l, l + w)
     }
 
     fn view(&self) -> (i32, i32) {
@@ -1798,14 +1820,40 @@ impl Ui {
         controls.push(Control { id: ID_BACK, kind: Kind::Icon(G_BACK), rect: back, layer: Layer::Fixed, enabled: can_back });
 
         // Page.
-        let (row_h, ctl_h) = (self.sc(ROW_H), self.sc(CTL_H));
+        let class = self.class();
+        let cols_n = if class == grid::Class::List { grid::list_cols(self.avail_w(), self.dpi) } else { grid::card_cols(class, r - l, self.dpi) };
+        let defs = self.page_defs(self.page);
+        // Insights: headline, visual and chart left; items (and Bag Guard) right.
+        let has_panel = defs.iter().any(|d| matches!(d, Def::Panel(i) if self.panels.get(*i).is_some()));
+        let split = if class == grid::Class::Insights && has_panel { grid::insight_split(r - l, self.dpi) } else { None };
+        // Where the right column continues after the cards put there (content y).
+        let mut side: Option<i32> = None;
+        // Cards waiting to be flowed into the grid; a heading or any other block ends the run.
+        let mut run: Vec<Def> = Vec::new();
+        let mut seen_head = false;
         let mut y = 0;
         self.panel_idx = None;
         self.pview.clear();
         let mut room_on = false;
-        for (n, d) in self.page_defs(self.page).into_iter().enumerate() {
+        for (n, d) in defs.into_iter().enumerate() {
+            if let (Def::Card { .. }, Some((lw, gap, _))) = (&d, split) {
+                let Def::Card { title, desc, enabled, cells } = d else { continue };
+                let top = side.unwrap_or(y);
+                let rect = Rect { l: l + lw + gap, t: top, r, b: top + self.sc(ROW_H) };
+                self.push_card(rect, title, desc, enabled, cells, &mut controls, &mut blocks);
+                side = Some(rect.b + self.sc(ROW_GAP));
+                continue;
+            }
+            if matches!(d, Def::Card { .. } | Def::Summary(_)) {
+                run.push(d);
+                continue;
+            }
+            // The cards above the first heading of Overview (Insights switch) stay full width.
+            let n_cols = if class == grid::Class::Overview && !seen_head { 1 } else { cols_n };
+            y = self.flow(&mut run, l, r, y, n_cols, class == grid::Class::List, &mut controls, &mut blocks);
             match d {
                 Def::Heading(t) => {
+                    seen_head = true;
                     if n > 0 {
                         y += self.sc(HEAD_TOP) - self.sc(ROW_GAP);
                     }
@@ -1813,16 +1861,11 @@ impl Ui {
                     blocks.push(Block::Heading(Rect { l, t: y, r, b: y + h }, t));
                     y += h;
                 }
+                Def::Note(_) if split.is_some() => {}
                 Def::Note(t) => {
                     let h = if t.is_empty() { self.sc(12) } else { self.sc(NOTE_H) };
                     blocks.push(Block::Note(Rect { l, t: y, r, b: y + h }, t));
                     y += h;
-                }
-                Def::Summary(i) => {
-                    let Some(pg) = Page::of_panel(i) else { continue };
-                    let rect = Rect { l, t: y, r, b: y + self.sc(SUMMARY_H) };
-                    controls.push(Control { id: ID_SUMMARY + i as i32, kind: Kind::Summary(pg), rect, layer: Layer::Page, enabled: true });
-                    y = rect.b + self.sc(ROW_GAP);
                 }
                 Def::Room => {
                     if let Some(st) = &self.ach {
@@ -1865,46 +1908,24 @@ impl Ui {
                 Def::Panel(i) => {
                     if let Some(p) = self.panels.get(i) {
                         let f = self.fonts.view();
-                        y = self.pview.layout(p, self.mdc, &f, self.dpi, l, r, y, unix_ms());
+                        let cols = match split {
+                            Some((lw, gap, _)) => view::Cols {
+                                l,
+                                r: l + lw,
+                                // Items start under Bag Guard (if it is there) with a little air.
+                                side: Some(view::Side { l: l + lw + gap, r, y: side.map_or(y, |sy| sy + self.sc(20)) }),
+                            },
+                            None => view::Cols { l, r, side: None },
+                        };
+                        y = self.pview.layout(p, self.mdc, &f, self.dpi, cols, y, unix_ms());
                         self.panel_idx = Some(i);
                     }
                 }
-                Def::Card { title, desc, enabled, cells } => {
-                    let rect = Rect { l, t: y, r, b: y + row_h };
-                    let cy = y + row_h / 2;
-                    let (ct, cb) = (cy - ctl_h / 2, cy - ctl_h / 2 + ctl_h);
-                    let mut x = r - self.sc(CARD_PAD);
-                    let mut labels = Vec::new();
-                    let mut row = Vec::new();
-                    for c in cells.iter().rev() {
-                        let w = match c {
-                            Cell::Ctl { id, kind, w, enabled: e } => {
-                                let w = self.ctl_width(*kind, *w);
-                                let rc = Rect { l: x - w, t: ct, r: x, b: cb };
-                                row.push(Control { id: *id, kind: *kind, rect: rc, layer: Layer::Page, enabled: enabled && *e });
-                                w
-                            }
-                            Cell::Unit(shown, reserve) => {
-                                let w = self.measure(self.fonts.body, reserve);
-                                labels.push((Rect { l: x - w, t: ct, r: x, b: cb }, shown.to_string()));
-                                w
-                            }
-                            Cell::Value(id) => {
-                                let s = self.value_text(*id);
-                                let w = self.measure(self.fonts.body, "100 %").max(self.measure(self.fonts.body, &s));
-                                labels.push((Rect { l: x - w, t: ct, r: x, b: cb }, s));
-                                w
-                            }
-                        };
-                        x -= w + self.sc(CELL_GAP);
-                    }
-                    row.reverse(); // tab order: left to right
-                    controls.extend(row);
-                    blocks.push(Block::Card { rect, text_r: x, title, desc, enabled, labels });
-                    y += row_h + self.sc(ROW_GAP);
-                }
+                Def::Card { .. } | Def::Summary(_) => {}
             }
         }
+        let n_cols = if class == grid::Class::Overview && !seen_head { 1 } else { cols_n };
+        y = self.flow(&mut run, l, r, y, n_cols, class == grid::Class::List, &mut controls, &mut blocks);
         self.content_h = y + self.sc(24);
         self.controls = controls;
         self.blocks = blocks;
@@ -1918,6 +1939,81 @@ impl Ui {
                 self.focus = None;
             }
         }
+    }
+
+    /// Lay out one setting card in `rect` (content coordinates): the title and
+    /// description on the left, its controls right-aligned (in tab order, left
+    /// to right).
+    #[allow(clippy::too_many_arguments)]
+    fn push_card(&self, rect: Rect, title: String, desc: &'static str, enabled: bool, cells: Vec<Cell>, controls: &mut Vec<Control>, blocks: &mut Vec<Block>) {
+        let ctl_h = self.sc(CTL_H);
+        let cy = (rect.t + rect.b) / 2;
+        let (ct, cb) = (cy - ctl_h / 2, cy - ctl_h / 2 + ctl_h);
+        let mut x = rect.r - self.sc(CARD_PAD);
+        let mut labels = Vec::new();
+        let mut row = Vec::new();
+        for c in cells.iter().rev() {
+            let w = match c {
+                Cell::Ctl { id, kind, w, enabled: e } => {
+                    let w = self.ctl_width(*kind, *w);
+                    let rc = Rect { l: x - w, t: ct, r: x, b: cb };
+                    row.push(Control { id: *id, kind: *kind, rect: rc, layer: Layer::Page, enabled: enabled && *e });
+                    w
+                }
+                Cell::Unit(shown, reserve) => {
+                    let w = self.measure(self.fonts.body, reserve);
+                    labels.push((Rect { l: x - w, t: ct, r: x, b: cb }, shown.to_string()));
+                    w
+                }
+                Cell::Value(id) => {
+                    let s = self.value_text(*id);
+                    let w = self.measure(self.fonts.body, "100 %").max(self.measure(self.fonts.body, &s));
+                    labels.push((Rect { l: x - w, t: ct, r: x, b: cb }, s));
+                    w
+                }
+            };
+            x -= w + self.sc(CELL_GAP);
+        }
+        row.reverse(); // tab order: left to right
+        controls.extend(row);
+        blocks.push(Block::Card { rect, text_r: x, title, desc, enabled, labels });
+    }
+
+    /// Flow the waiting cards (setting cards, Overview summaries) into `n`
+    /// equal columns from content y `y`, row by row, left to right, every row as
+    /// tall as its tallest card. Controls are added in that same order, so Tab
+    /// follows the reading order. Returns the y for what comes next.
+    /// On the Metrics page (`list`) the cards of the ordered list stay one column
+    /// and any other card goes in the grid.
+    #[allow(clippy::too_many_arguments)]
+    fn flow(&self, run: &mut Vec<Def>, l: i32, r: i32, mut y: i32, n: usize, list: bool, controls: &mut Vec<Control>, blocks: &mut Vec<Block>) -> i32 {
+        let is_list = |d: &Def| list && matches!(d, Def::Card { cells, .. } if cells.iter().any(|c| matches!(c, Cell::Ctl { id, .. } if (ID_MTOG..ID_MDN + 20).contains(id))));
+        while !run.is_empty() {
+            let first = is_list(&run[0]);
+            let len = run.iter().take_while(|d| is_list(d) == first).count();
+            let mut seg: Vec<Def> = run.drain(..len).collect();
+            y = self.flow_seg(&mut seg, l, r, y, if first { 1 } else { n }, controls, blocks);
+        }
+        y
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn flow_seg(&self, run: &mut Vec<Def>, l: i32, r: i32, y: i32, n: usize, controls: &mut Vec<Control>, blocks: &mut Vec<Block>) -> i32 {
+        let heights: Vec<i32> = run.iter().map(|d| if matches!(d, Def::Summary(_)) { self.sc(SUMMARY_H) } else { self.sc(ROW_H) }).collect();
+        let (cells, bottom) = grid::place(l, r, n, grid::gap(n, self.dpi), y, &heights);
+        for (d, c) in run.drain(..).zip(cells) {
+            let rect = Rect { l: c.0, t: c.1, r: c.2, b: c.3 };
+            match d {
+                Def::Summary(i) => {
+                    if let Some(pg) = Page::of_panel(i) {
+                        controls.push(Control { id: ID_SUMMARY + i as i32, kind: Kind::Summary(pg), rect, layer: Layer::Page, enabled: true });
+                    }
+                }
+                Def::Card { title, desc, enabled, cells } => self.push_card(rect, title, desc, enabled, cells, controls, blocks),
+                _ => {}
+            }
+        }
+        bottom + self.sc(ROW_GAP)
     }
 
     fn control(&self, id: i32) -> Option<&Control> {

@@ -14,6 +14,7 @@
 //! same for a PC without a battery.
 
 use super::{time, Chart, Panel, Role, Tone, Visual};
+use crate::grid;
 use crate::render::{measure_dc, Canvas, Rgba};
 use crate::util::Rect;
 use std::sync::OnceLock;
@@ -654,7 +655,8 @@ enum F {
 
 /// Laid-out content of a panel (content coordinates).
 enum Block {
-    Text { x: i32, y: i32, font: F, dim: bool, s: String },
+    /// `r` is the right limit of the column the text sits in.
+    Text { x: i32, y: i32, r: i32, font: F, dim: bool, s: String },
     Pill { x: i32, y: i32, tone: Tone },
     /// The split bar and the top-left of each legend entry.
     Split { bar: Rect, legend: Vec<(i32, i32)> },
@@ -698,19 +700,36 @@ fn clipped(cv: &mut Canvas, r: Rect, f: impl FnOnce(&mut Canvas)) {
     cv.set_clip(old);
 }
 
+/// The right-hand column of a two-column panel: the items list goes here.
+#[derive(Clone, Copy)]
+pub struct Side {
+    pub l: i32,
+    pub r: i32,
+    /// Content y where the column starts.
+    pub y: i32,
+}
+
+/// Where a panel is laid out: the main column `l..r` (headline, visual, chart,
+/// and the items when `side` is None), or the left column of a two-column page
+/// with the items in `side`.
+#[derive(Clone, Copy)]
+pub struct Cols {
+    pub l: i32,
+    pub r: i32,
+    pub side: Option<Side>,
+}
+
 /// One laid-out panel.
 pub struct View {
     blocks: Vec<Block>,
     dpi: u32,
-    /// Right edge of the column.
-    r: i32,
     /// Plot area of the chart (content coordinates).
     plot: Option<Rect>,
 }
 
 impl View {
     pub fn new() -> View {
-        View { blocks: Vec::new(), dpi: 96, r: 0, plot: None }
+        View { blocks: Vec::new(), dpi: 96, plot: None }
     }
 
     fn sc(&self, v: i32) -> i32 {
@@ -722,12 +741,13 @@ impl View {
         self.plot = None;
     }
 
-    /// Lay out `p` in the column `l..r` from content y `y0`. Returns the bottom.
+    /// Lay out `p` in `cols` from content y `y0`. Returns the bottom (the lower
+    /// of the two columns on a two-column page).
     #[allow(clippy::too_many_arguments)]
-    pub fn layout(&mut self, p: &Panel, mdc: HDC, f: &Fonts, dpi: u32, l: i32, r: i32, y0: i32, now_ms: u64) -> i32 {
+    pub fn layout(&mut self, p: &Panel, mdc: HDC, f: &Fonts, dpi: u32, cols: Cols, y0: i32, now_ms: u64) -> i32 {
         self.dpi = dpi;
-        self.r = r;
         self.plot = None;
+        let (l, r) = (cols.l, cols.r);
         let mut blocks = Vec::new();
         let w = r - l;
         let lh = |font: HFONT| measure_dc(mdc, font, "Ag").1;
@@ -737,7 +757,7 @@ impl View {
         // Headline, wrapped.
         let hh = lh(f.head);
         for s in wrap(&m(f.head), &p.headline, w - self.sc(4)) {
-            blocks.push(Block::Text { x: l + self.sc(2), y, font: F::Head, dim: false, s });
+            blocks.push(Block::Text { x: l + self.sc(2), y, r, font: F::Head, dim: false, s });
             y += hh + self.sc(2);
         }
         y += self.sc(8);
@@ -746,7 +766,7 @@ impl View {
         let bh = lh(f.body);
         for line in &p.lines {
             for s in wrap(&m(f.body), line, w - self.sc(4)) {
-                blocks.push(Block::Text { x: l + self.sc(2), y, font: F::Body, dim: true, s });
+                blocks.push(Block::Text { x: l + self.sc(2), y, r, font: F::Body, dim: true, s });
                 y += bh + self.sc(2);
             }
         }
@@ -801,33 +821,39 @@ impl View {
             let gutter = y_labels(c).iter().map(|s| tw(f.tiny, s)).max().unwrap_or(0) + self.sc(8);
             let xl = c.x_labels.iter().any(|s| !s.is_empty());
             let top = y + self.sc(12) + lh(f.semi) + self.sc(12);
-            let plot = Rect { l: l + pad + gutter, t: top, r: r - pad, b: top + self.sc(PLOT_H) };
+            // One column: the fixed height. Two columns: it grows with the column.
+            let plot_h = if cols.side.is_some() { self.sc(grid::plot_h_dip(grid::dip(w, dpi))) } else { self.sc(PLOT_H) };
+            let plot = Rect { l: l + pad + gutter, t: top, r: r - pad, b: top + plot_h };
             let bottom = plot.b + if xl { self.sc(6) + tiny_h } else { 0 } + self.sc(12);
             self.plot = Some(plot);
             blocks.push(Block::Chart { rect: Rect { l, t: y, r, b: bottom } });
             y = bottom;
         }
-        // Cards.
-        y += self.sc(24);
+        // Cards: under the chart, or in the right column on a two-column page.
+        let (il, ir, mut iy) = match cols.side {
+            Some(s) => (s.l, s.r, s.y),
+            None => (l, r, y + self.sc(24)),
+        };
         let sh = lh(f.semi);
-        blocks.push(Block::Text { x: l + self.sc(2), y, font: F::Semi, dim: false, s: items_heading(p.key).into() });
-        y += sh + self.sc(10);
+        blocks.push(Block::Text { x: il + self.sc(2), y: iy, r: ir, font: F::Semi, dim: false, s: items_heading(p.key).into() });
+        iy += sh + self.sc(10);
         if p.items.is_empty() {
-            blocks.push(Block::Text { x: l + self.sc(2), y, font: F::Body, dim: true, s: empty_text(p.key).into() });
-            y += bh + self.sc(8);
+            blocks.push(Block::Text { x: il + self.sc(2), y: iy, r: ir, font: F::Body, dim: true, s: empty_text(p.key).into() });
+            iy += bh + self.sc(8);
         } else {
             let times: Vec<String> = p.items.iter().map(|it| when(it.t_ms, now_ms)).collect();
             let time_w = times.iter().map(|t| measure_dc(mdc, f.small, t).0).max().unwrap_or(0);
-            let tx = l + self.sc(24) + if time_w > 0 { time_w + self.sc(16) } else { 0 };
-            let text_w = (r - pad - tx).max(self.sc(80));
+            let tx = il + self.sc(24) + if time_w > 0 { time_w + self.sc(16) } else { 0 };
+            let text_w = (ir - pad - tx).max(self.sc(80));
             for (it, time) in p.items.iter().zip(times) {
                 let detail = wrap(&m(f.small), &it.detail, text_w);
                 let h = pad * 2 - self.sc(4) + sh + detail.len() as i32 * smh + if detail.is_empty() { 0 } else { self.sc(2) };
-                let rect = Rect { l, t: y, r, b: y + h.max(self.sc(48)) };
-                y = rect.b + self.sc(4);
+                let rect = Rect { l: il, t: iy, r: ir, b: iy + h.max(self.sc(48)) };
+                iy = rect.b + self.sc(4);
                 blocks.push(Block::Item { rect, tone: it.tone, time, title: it.title.clone(), detail, tx });
             }
         }
+        y = if cols.side.is_some() { y.max(iy) } else { iy };
         self.blocks = blocks;
         y
     }
@@ -845,7 +871,7 @@ impl View {
         let lh = |cv: &Canvas, font: HFONT| cv.measure(font, "Ag").1;
         for b in &self.blocks {
             match b {
-                Block::Text { x, y, font, dim, s } => {
+                Block::Text { x, y, r, font, dim, s } => {
                     let y = y + dy;
                     if y > vb || y + self.sc(40) < vt {
                         continue;
@@ -855,7 +881,7 @@ impl View {
                         F::Body => f.body,
                         F::Semi => f.semi,
                     };
-                    let s = cv.ellipsize(fh, s, self.r - x);
+                    let s = cv.ellipsize(fh, s, r - x);
                     cv.text(fh, &s, *x, y, if *dim { c.dim } else { c.fg });
                 }
                 Block::Pill { x, y, tone } => {
