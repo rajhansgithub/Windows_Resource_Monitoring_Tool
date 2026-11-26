@@ -42,10 +42,20 @@ pub fn show(a: &mut App, text: &str, pct: Option<f32>, activate: bool) {
             let sc = |v: i32| v * dpi as i32 / 96;
             let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
             let ex = WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
-            let mut rc = RECT { left: 0, top: 0, right: sc(400), bottom: sc(128) };
+            let mut rc = RECT {
+                left: 0,
+                top: 0,
+                right: sc(400),
+                bottom: sc(128),
+            };
             AdjustWindowRectExForDpi(&mut rc, style, 0, ex, dpi);
             let (w, h) = (rc.right - rc.left, rc.bottom - rc.top);
-            let work = tb.map(|t| t.work).unwrap_or(Rect { l: 0, t: 0, r: 1280, b: 720 });
+            let work = tb.map(|t| t.work).unwrap_or(Rect {
+                l: 0,
+                t: 0,
+                r: 1280,
+                b: 720,
+            });
             let cls = wide(CLASS);
             let title = wide("Resource Monitor \u{2014} Update");
             a.upd = CreateWindowExW(
@@ -66,7 +76,14 @@ pub fn show(a: &mut App, text: &str, pct: Option<f32>, activate: bool) {
                 return;
             }
             style_window(a.upd, a.dark);
-            ShowWindow(a.upd, if activate { SW_SHOWNORMAL } else { SW_SHOWNOACTIVATE });
+            ShowWindow(
+                a.upd,
+                if activate {
+                    SW_SHOWNORMAL
+                } else {
+                    SW_SHOWNOACTIVATE
+                },
+            );
         } else {
             InvalidateRect(a.upd, std::ptr::null(), 0);
             if activate {
@@ -86,19 +103,55 @@ fn paint(a: &App, hwnd: HWND) {
     let sc = |v: f32| (v * scale).round() as i32;
     let pal = palette(a.dark);
     let f = Fonts::new(scale);
-    p.fill(Rect { l: 0, t: 0, r: p.w, b: p.h }, pal.bg);
+    p.fill(
+        Rect {
+            l: 0,
+            t: 0,
+            r: p.w,
+            b: p.h,
+        },
+        pal.bg,
+    );
     let pad = sc(18.0);
     p.text(f.mid, "Software update", pad, pad, pal.fg);
-    p.text_right(f.small, concat!("current v", env!("CARGO_PKG_VERSION")), p.w - pad, pad + sc(4.0), pal.dim);
+    p.text_right(
+        f.small,
+        concat!("current v", env!("CARGO_PKG_VERSION")),
+        p.w - pad,
+        pad + sc(4.0),
+        pal.dim,
+    );
     let ty = pad + sc(28.0);
     let bar_y = p.h - pad - sc(8.0);
-    p.text_wrap(f.normal, &a.upd_text, Rect { l: pad, t: ty, r: p.w - pad, b: bar_y - sc(6.0) }, pal.fg);
+    p.text_wrap(
+        f.normal,
+        &a.upd_text,
+        Rect {
+            l: pad,
+            t: ty,
+            r: p.w - pad,
+            b: bar_y - sc(6.0),
+        },
+        pal.fg,
+    );
     if let Some(pct) = a.upd_pct {
-        let bar = Rect { l: pad, t: bar_y, r: p.w - pad, b: bar_y + sc(8.0) };
+        let bar = Rect {
+            l: pad,
+            t: bar_y,
+            r: p.w - pad,
+            b: bar_y + sc(8.0),
+        };
         p.round(bar, sc(8.0), pal.line);
         let fw = (bar.w() as f32 * (pct / 100.0).clamp(0.0, 1.0)) as i32;
         if fw > 0 {
-            p.round(Rect { r: bar.l + fw.max(bar.h()), ..bar }, sc(8.0), accent(Metric::Down, a.dark));
+            p.round(
+                Rect {
+                    r: bar.l + fw.max(bar.h()),
+                    ..bar
+                },
+                sc(8.0),
+                accent(Metric::Down, a.dark),
+            );
         }
     }
 }

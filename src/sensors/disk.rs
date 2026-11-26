@@ -35,7 +35,8 @@ impl Disk {
     }
 
     pub fn sample(&mut self) -> DiskSample {
-        let rate = |c: &Option<Counter>| c.as_ref().and_then(Counter::value).unwrap_or(0.0).max(0.0);
+        let rate =
+            |c: &Option<Counter>| c.as_ref().and_then(Counter::value).unwrap_or(0.0).max(0.0);
         let active = self.idle.as_ref().and_then(|c| {
             let mut busiest: Option<f64> = None;
             let ok = c.for_each(&mut self.buf, |name, idle| {
@@ -44,8 +45,16 @@ impl Disk {
                     busiest = Some(busiest.map_or(active, |b| b.max(active)));
                 }
             });
-            if ok { busiest.map(|b| b.clamp(0.0, 100.0) as f32) } else { None }
+            if ok {
+                busiest.map(|b| b.clamp(0.0, 100.0) as f32)
+            } else {
+                None
+            }
         });
-        DiskSample { read: rate(&self.read), write: rate(&self.write), active }
+        DiskSample {
+            read: rate(&self.read),
+            write: rate(&self.write),
+            active,
+        }
     }
 }

@@ -68,7 +68,11 @@ impl Gpu {
             let ok = c.for_each(&mut self.buf, |_, v| {
                 max = Some(max.map_or(v, |m| m.max(v)));
             });
-            if ok { max.map(|m| m.max(0.0) as u64) } else { None }
+            if ok {
+                max.map(|m| m.max(0.0) as u64)
+            } else {
+                None
+            }
         });
         (util, vram)
     }

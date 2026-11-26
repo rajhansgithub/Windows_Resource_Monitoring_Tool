@@ -57,7 +57,9 @@ pub fn set_accents(s: &Settings) {
     use std::sync::atomic::Ordering::Relaxed;
     let win = if s.windows_accent {
         let (mut c, mut opaque) = (0u32, 0i32);
-        let ok = unsafe { windows_sys::Win32::Graphics::Dwm::DwmGetColorizationColor(&mut c, &mut opaque) } == 0;
+        let ok = unsafe {
+            windows_sys::Win32::Graphics::Dwm::DwmGetColorizationColor(&mut c, &mut opaque)
+        } == 0;
         ok.then_some(c & 0xFF_FFFF)
     } else {
         None
@@ -76,7 +78,9 @@ pub fn default_accent(m: Metric) -> Rgba {
         Metric::Ram => Rgba::rgb(179, 157, 219),
         Metric::Gpu | Metric::GpuTemp => Rgba::rgb(255, 138, 101),
         Metric::Vram => Rgba::rgb(255, 171, 145),
-        Metric::DiskRead | Metric::DiskWrite | Metric::DiskActive | Metric::DiskFree => Rgba::rgb(255, 213, 79),
+        Metric::DiskRead | Metric::DiskWrite | Metric::DiskActive | Metric::DiskFree => {
+            Rgba::rgb(255, 213, 79)
+        }
         Metric::Up => Rgba::rgb(255, 145, 0),
         Metric::Down => Rgba::rgb(38, 198, 218),
         Metric::TodayUp | Metric::TodayDown => Rgba::rgb(165, 214, 167),
@@ -189,7 +193,9 @@ impl Model {
             .filter(|&m| match m {
                 // Hide sensors this machine doesn't have, once we know.
                 Metric::Gpu => self.gpu_seen || self.samples < 4,
-                Metric::Vram => (self.gpu_seen && self.snap.vram_used.is_some()) || self.samples < 4,
+                Metric::Vram => {
+                    (self.gpu_seen && self.snap.vram_used.is_some()) || self.samples < 4
+                }
                 Metric::Battery => self.snap.battery.is_some(),
                 Metric::DiskActive => self.snap.disk_active.is_some() || self.samples < 4,
                 Metric::GpuTemp => self.snap.gpu_temp.is_some() || self.samples < 4,
@@ -219,7 +225,9 @@ impl Model {
             Metric::DiskActive => s.disk_active,
             Metric::TodayUp | Metric::TodayDown => self.cycle_usage().map(|(_, p)| p as f32),
             // 40 °C cool … 95 °C hot.
-            Metric::GpuTemp => s.gpu_temp.map(|t| ((t - 40.0) / 55.0 * 100.0).clamp(0.0, 100.0)),
+            Metric::GpuTemp => s
+                .gpu_temp
+                .map(|t| ((t - 40.0) / 55.0 * 100.0).clamp(0.0, 100.0)),
             Metric::DiskFree => s.disk_used_pct,
             _ => None,
         }
@@ -260,9 +268,23 @@ impl Model {
                 Some(g) => (pct(g), self.level(g), "100%"),
                 None => ("\u{2013}".into(), 0, "100%"),
             },
-            Metric::Vram => (s.vram_used.map_or("\u{2013}".into(), fmt::bytes), 0, "8.88 GB"),
-            Metric::GpuTemp => (s.gpu_temp.map_or("\u{2013}".into(), |t| format!("{:.0}\u{00B0}C", t)), 0, "100\u{00B0}C"),
-            Metric::DiskFree => (s.disk_used_pct.map_or("\u{2013}".into(), |p| format!("{:.0}%", p)), 0, "100%"),
+            Metric::Vram => (
+                s.vram_used.map_or("\u{2013}".into(), fmt::bytes),
+                0,
+                "8.88 GB",
+            ),
+            Metric::GpuTemp => (
+                s.gpu_temp
+                    .map_or("\u{2013}".into(), |t| format!("{:.0}\u{00B0}C", t)),
+                0,
+                "100\u{00B0}C",
+            ),
+            Metric::DiskFree => (
+                s.disk_used_pct
+                    .map_or("\u{2013}".into(), |p| format!("{:.0}%", p)),
+                0,
+                "100%",
+            ),
             Metric::DiskRead => (fmt::rate(s.disk_read), 0, "8.88 MB/s"),
             Metric::DiskWrite => (fmt::rate(s.disk_write), 0, "8.88 MB/s"),
             Metric::DiskActive => {
@@ -292,7 +314,11 @@ impl Model {
                     } else {
                         0
                     };
-                    (format!("{}%{}", b.percent, if b.charging { "+" } else { "" }), lvl, "100%+")
+                    (
+                        format!("{}%{}", b.percent, if b.charging { "+" } else { "" }),
+                        lvl,
+                        "100%+",
+                    )
                 }
                 None => ("\u{2013}".into(), 0, "100%"),
             },
@@ -305,9 +331,12 @@ impl Model {
         let start = h.len().saturating_sub(n);
         let data = h.iter().skip(start).copied();
         let floor = match m {
-            Metric::Cpu | Metric::Ram | Metric::Gpu | Metric::DiskActive | Metric::Battery | Metric::DiskFree => {
-                return data.map(|v| v / 100.0).collect()
-            }
+            Metric::Cpu
+            | Metric::Ram
+            | Metric::Gpu
+            | Metric::DiskActive
+            | Metric::Battery
+            | Metric::DiskFree => return data.map(|v| v / 100.0).collect(),
             // 30..100 °C mapped to the chart.
             Metric::GpuTemp => return data.map(|v| ((v - 30.0) / 70.0).clamp(0.0, 1.0)).collect(),
             Metric::Up | Metric::Down => 64.0 * 1024.0,
@@ -443,10 +472,12 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         crate::achievements::ui::register(hinst);
         // Compile the medal shaders in the background a little after start-up (seconds on the first run after an
         // update, then from the disk cache), so opening Achievements never freezes the window.
-        let _ = std::thread::Builder::new().name("ach-gpu-warm".into()).spawn(|| {
-            std::thread::sleep(std::time::Duration::from_secs(8));
-            crate::achievements::gpu::warm();
-        });
+        let _ = std::thread::Builder::new()
+            .name("ach-gpu-warm".into())
+            .spawn(|| {
+                std::thread::sleep(std::time::Duration::from_secs(8));
+                crate::achievements::gpu::warm();
+            });
 
         // Hidden top-level window (not message-only: those miss broadcasts
         // such as TaskbarCreated, WM_SETTINGCHANGE and WM_DISPLAYCHANGE).
@@ -479,7 +510,9 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
             m: Model {
                 s,
                 snap: Snapshot::default(),
-                hist: (0..Metric::ALL.len()).map(|_| VecDeque::with_capacity(HIST)).collect(),
+                hist: (0..Metric::ALL.len())
+                    .map(|_| VecDeque::with_capacity(HIST))
+                    .collect(),
                 usage: UsageStore::load(),
                 dark,
                 samples: 0,
@@ -571,7 +604,11 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
             WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
         );
         // Slow down when the display is off (usage stays exact: counters are cumulative).
-        RegisterPowerSettingNotification(hwnd as HANDLE, &GUID_CONSOLE_DISPLAY_STATE, DEVICE_NOTIFY_WINDOW_HANDLE);
+        RegisterPowerSettingNotification(
+            hwnd as HANDLE,
+            &GUID_CONSOLE_DISPLAY_STATE,
+            DEVICE_NOTIFY_WINDOW_HANDLE,
+        );
 
         crate::insights::register_power(hwnd as isize);
 
@@ -583,10 +620,16 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         a.update_timer();
         a.refresh(true);
         if after_update {
-            a.ach_event(crate::achievements::Event::UpdateInstalled { now_ms: crate::achievements::observer::unix_ms() });
+            a.ach_event(crate::achievements::Event::UpdateInstalled {
+                now_ms: crate::achievements::observer::unix_ms(),
+            });
             crate::update_ui::show(
                 a,
-                concat!("Updated successfully. You're now on v", env!("CARGO_PKG_VERSION"), "."),
+                concat!(
+                    "Updated successfully. You're now on v",
+                    env!("CARGO_PKG_VERSION"),
+                    "."
+                ),
                 Some(100.0),
                 false,
             );
@@ -595,7 +638,15 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
     Some(())
 }
 
-unsafe extern "system" fn on_foreground(_: HWINEVENTHOOK, _: u32, _: HWND, _: i32, _: i32, _: u32, _: u32) {
+unsafe extern "system" fn on_foreground(
+    _: HWINEVENTHOOK,
+    _: u32,
+    _: HWND,
+    _: i32,
+    _: i32,
+    _: u32,
+    _: u32,
+) {
     if let Some(a) = app() {
         a.hook_foreground();
         a.schedule_check();
@@ -604,7 +655,15 @@ unsafe extern "system" fn on_foreground(_: HWINEVENTHOOK, _: u32, _: HWND, _: i3
 
 /// The foreground app's own window moved/resized — e.g. a browser or player
 /// going full-screen (F11, full-screen video) without a focus change.
-unsafe extern "system" fn on_foreground_move(_: HWINEVENTHOOK, _: u32, hwnd: HWND, obj: i32, child: i32, _: u32, _: u32) {
+unsafe extern "system" fn on_foreground_move(
+    _: HWINEVENTHOOK,
+    _: u32,
+    hwnd: HWND,
+    obj: i32,
+    child: i32,
+    _: u32,
+    _: u32,
+) {
     if obj != OBJID_WINDOW || child != 0 {
         return;
     }
@@ -620,7 +679,15 @@ unsafe extern "system" fn on_foreground_move(_: HWINEVENTHOOK, _: u32, hwnd: HWN
 /// Taskbar windows created/destroyed/shown/hidden/moved (auto-hide slide,
 /// second-monitor taskbar recreated after sleep or a display change…).
 /// Scoped to Explorer's taskbar thread, so it fires only for taskbar activity.
-unsafe extern "system" fn on_taskbar_event(_: HWINEVENTHOOK, ev: u32, hwnd: HWND, obj: i32, child: i32, _: u32, _: u32) {
+unsafe extern "system" fn on_taskbar_event(
+    _: HWINEVENTHOOK,
+    ev: u32,
+    hwnd: HWND,
+    obj: i32,
+    child: i32,
+    _: u32,
+    _: u32,
+) {
     if obj != OBJID_WINDOW || child != 0 || hwnd.is_null() {
         return;
     }
@@ -628,7 +695,10 @@ unsafe extern "system" fn on_taskbar_event(_: HWINEVENTHOOK, ev: u32, hwnd: HWND
     let ours = a.taskbars.iter().any(|t| t.hwnd == hwnd);
     let relevant = match ev {
         EVENT_OBJECT_CREATE | EVENT_OBJECT_SHOW => {
-            ours || matches!(class_name(hwnd).as_str(), "Shell_TrayWnd" | "Shell_SecondaryTrayWnd")
+            ours || matches!(
+                class_name(hwnd).as_str(),
+                "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
+            )
         }
         // The tray area inside a taskbar grew or shrank (icons added, the
         // "Show hidden icons" arrow appeared): re-place the widget.
@@ -646,7 +716,9 @@ unsafe extern "system" fn on_taskbar_event(_: HWINEVENTHOOK, ev: u32, hwnd: HWND
 impl App {
     /// (Re)attach the taskbar hooks to whatever thread owns the taskbar now.
     fn hook_taskbar_moves(&mut self) {
-        let Some(tb) = self.taskbars.iter().find(|t| !t.hwnd.is_null()) else { return };
+        let Some(tb) = self.taskbars.iter().find(|t| !t.hwnd.is_null()) else {
+            return;
+        };
         let mut pid = 0u32;
         let tid = unsafe { GetWindowThreadProcessId(tb.hwnd, &mut pid) };
         if tid == 0 || tid == self.move_hook_tid {
@@ -745,7 +817,11 @@ impl App {
             // and counters aren't attached/detached on every hover.
             gpu: sh(Metric::Gpu) || sh(Metric::Vram) || sh(Metric::GpuTemp) || self.detail_warm(),
             // Disk counters are cheap; Insights needs them for disk incidents and the idle baseline.
-            disk: sh(Metric::DiskRead) || sh(Metric::DiskWrite) || sh(Metric::DiskActive) || self.detail_warm() || self.ins.enabled(),
+            disk: sh(Metric::DiskRead)
+                || sh(Metric::DiskWrite)
+                || sh(Metric::DiskActive)
+                || self.detail_warm()
+                || self.ins.enabled(),
             // Insights asks for process lists only while an incident or awake burst needs a culprit.
             procs: sh(Metric::TopProc) || self.detail_warm() || self.ins.wants_procs(),
         }
@@ -823,7 +899,11 @@ impl App {
             crate::settings_ui::insights_tick(self);
             return;
         }
-        let interval_ms = if self.display_on { self.m.s.interval_ms } else { self.m.s.interval_ms.max(5000) };
+        let interval_ms = if self.display_on {
+            self.m.s.interval_ms
+        } else {
+            self.m.s.interval_ms.max(5000)
+        };
         let ctx = crate::insights::Ctx {
             now_ms: crate::insights::unix_ms(),
             snap: &self.m.snap,
@@ -909,7 +989,10 @@ impl App {
 
     /// End task attempt finished (`ok` false = Windows refused).
     pub fn ach_task_ended(&mut self, ok: bool) {
-        self.ach_event(crate::achievements::Event::TaskEnded { ok, now_ms: crate::achievements::observer::unix_ms() });
+        self.ach_event(crate::achievements::Event::TaskEnded {
+            ok,
+            now_ms: crate::achievements::observer::unix_ms(),
+        });
     }
 
     /// New achievement moments are ready to show.
@@ -933,7 +1016,12 @@ impl App {
         let mut fire: Vec<(String, String)> = Vec::new();
         // Achievement events: (alert kind, fired?) in the order they happened.
         let mut ach: Vec<(u8, bool)> = Vec::new();
-        let mut sustained = |kind: u8, v: f32, lim: f32, since: &mut Option<Instant>, done: &mut bool, what: &str| {
+        let mut sustained = |kind: u8,
+                             v: f32,
+                             lim: f32,
+                             since: &mut Option<Instant>,
+                             done: &mut bool,
+                             what: &str| {
             if lim <= 0.0 {
                 return;
             }
@@ -944,7 +1032,11 @@ impl App {
                     ach.push((kind, true));
                     fire.push((
                         format!("{} is at {:.0}%", what, v),
-                        format!("It has stayed above {:.0}% for {}.", lim, fmt::duration(secs)),
+                        format!(
+                            "It has stayed above {:.0}% for {}.",
+                            lim,
+                            fmt::duration(secs)
+                        ),
                     ));
                 }
             } else if v < lim - 5.0 {
@@ -955,8 +1047,22 @@ impl App {
             }
         };
         let al = &mut self.alerts;
-        sustained(crate::achievements::observer::kind::CPU, snap.cpu, s.alert_cpu_pct, &mut al.cpu_since, &mut al.cpu_done, "CPU");
-        sustained(crate::achievements::observer::kind::RAM, snap.ram_pct, s.alert_ram_pct, &mut al.ram_since, &mut al.ram_done, "Memory");
+        sustained(
+            crate::achievements::observer::kind::CPU,
+            snap.cpu,
+            s.alert_cpu_pct,
+            &mut al.cpu_since,
+            &mut al.cpu_done,
+            "CPU",
+        );
+        sustained(
+            crate::achievements::observer::kind::RAM,
+            snap.ram_pct,
+            s.alert_ram_pct,
+            &mut al.ram_since,
+            &mut al.ram_done,
+            "Memory",
+        );
         if let Some(used) = snap.disk_used_pct {
             let free = 100.0 - used;
             if s.alert_disk_free_pct > 0.0 && free < s.alert_disk_free_pct {
@@ -965,7 +1071,11 @@ impl App {
                     ach.push((crate::achievements::observer::kind::DISK, true));
                     fire.push((
                         format!("System drive almost full ({:.0}% free)", free),
-                        format!("{} free of {}.", fmt::bytes(snap.disk_total - snap.disk_used), fmt::bytes(snap.disk_total)),
+                        format!(
+                            "{} free of {}.",
+                            fmt::bytes(snap.disk_total - snap.disk_used),
+                            fmt::bytes(snap.disk_total)
+                        ),
                     ));
                 }
             } else if free > s.alert_disk_free_pct + 2.0 {
@@ -975,23 +1085,43 @@ impl App {
             }
         }
         if let Some(b) = snap.battery {
-            let low = !b.on_ac && !b.charging && s.alert_battery_pct > 0 && (b.percent as u32) <= s.alert_battery_pct;
+            let low = !b.on_ac
+                && !b.charging
+                && s.alert_battery_pct > 0
+                && (b.percent as u32) <= s.alert_battery_pct;
             if low && !al.battery_done {
                 al.battery_done = true;
                 ach.push((crate::achievements::observer::kind::BATTERY, true));
-                fire.push((format!("Battery low ({}%)", b.percent), "Plug in your charger.".into()));
+                fire.push((
+                    format!("Battery low ({}%)", b.percent),
+                    "Plug in your charger.".into(),
+                ));
             } else if !low && std::mem::take(&mut al.battery_done) {
                 ach.push((crate::achievements::observer::kind::BATTERY, false));
             }
         }
         if s.alert_cap {
             if let Some((used, pct)) = self.m.cycle_usage() {
-                let level = if pct >= 100.0 { 2 } else if pct >= 90.0 { 1 } else { 0 };
+                let level = if pct >= 100.0 {
+                    2
+                } else if pct >= 90.0 {
+                    1
+                } else {
+                    0
+                };
                 if level > al.cap_level {
                     ach.push((crate::achievements::observer::kind::CAP, true));
                     fire.push((
-                        if level == 2 { "Monthly data cap reached".into() } else { "90% of your data cap used".into() },
-                        format!("{} of {:.0} GB this billing cycle.", fmt::bytes(used), s.data_cap_gb),
+                        if level == 2 {
+                            "Monthly data cap reached".into()
+                        } else {
+                            "90% of your data cap used".into()
+                        },
+                        format!(
+                            "{} of {:.0} GB this billing cycle.",
+                            fmt::bytes(used),
+                            s.data_cap_gb
+                        ),
                     ));
                 }
                 if level == 0 && al.cap_level > 0 {
@@ -1043,7 +1173,10 @@ impl App {
         match m {
             // File deleted: "delete to reset".
             None => {
-                self.m.s = Settings { first_run: false, ..Settings::default() };
+                self.m.s = Settings {
+                    first_run: false,
+                    ..Settings::default()
+                };
                 self.save_settings();
             }
             Some(_) => match self.m.s.reload() {
@@ -1098,7 +1231,11 @@ impl App {
     }
 
     fn update_timer(&self) {
-        let ms = if self.display_on { self.m.s.interval_ms } else { self.m.s.interval_ms.max(5000) };
+        let ms = if self.display_on {
+            self.m.s.interval_ms
+        } else {
+            self.m.s.interval_ms.max(5000)
+        };
         unsafe {
             // Coalescable: lets Windows batch our wakeups with others to save power.
             SetCoalescableTimer(self.hwnd, T_SAMPLE, ms, None, (ms / 10).max(32));
@@ -1120,7 +1257,11 @@ impl App {
     }
 
     pub fn primary_taskbar(&self) -> Option<Taskbar> {
-        self.taskbars.iter().find(|t| t.primary).or(self.taskbars.first()).copied()
+        self.taskbars
+            .iter()
+            .find(|t| t.primary)
+            .or(self.taskbars.first())
+            .copied()
     }
 
     /// Create/destroy widgets to match the taskbars present and the
@@ -1135,7 +1276,9 @@ impl App {
         });
         if dead {
             crate::util::diag("taskbar or widget window was destroyed by Windows; recreating");
-            self.overlays.retain(|o| unsafe { IsWindow(o.hwnd) != 0 && (o.tb.hwnd.is_null() || IsWindow(o.tb.hwnd) != 0) });
+            self.overlays.retain(|o| unsafe {
+                IsWindow(o.hwnd) != 0 && (o.tb.hwnd.is_null() || IsWindow(o.tb.hwnd) != 0)
+            });
             self.need_locate = true;
         }
         if self.need_locate || self.taskbars.is_empty() {
@@ -1148,7 +1291,9 @@ impl App {
             // Tray area changed size: measure where its buttons start again
             // (event-driven, not a timer).
             let tray_moved = tbs.iter().any(|t| {
-                self.taskbars.iter().any(|o| o.hwnd == t.hwnd && o.tray != t.tray)
+                self.taskbars
+                    .iter()
+                    .any(|o| o.hwnd == t.hwnd && o.tray != t.tray)
             });
             self.taskbars = tbs;
             self.hook_taskbar_moves();
@@ -1161,10 +1306,18 @@ impl App {
         let check = std::mem::take(&mut self.need_check);
         let tbs = self.taskbars.clone();
         let wanted: Vec<Taskbar> = if self.m.s.mode == Mode::Float {
-            tbs.iter().find(|t| t.primary).or(tbs.first()).copied().into_iter().collect()
+            tbs.iter()
+                .find(|t| t.primary)
+                .or(tbs.first())
+                .copied()
+                .into_iter()
+                .collect()
         } else {
-            let mut w: Vec<Taskbar> =
-                tbs.iter().filter(|t| self.m.s.wants_display(&t.key(), t.primary)).copied().collect();
+            let mut w: Vec<Taskbar> = tbs
+                .iter()
+                .filter(|t| self.m.s.wants_display(&t.key(), t.primary))
+                .copied()
+                .collect();
             if w.is_empty() {
                 // Chosen display unplugged: fall back to the main taskbar.
                 w.extend(tbs.iter().find(|t| t.primary).copied());
@@ -1178,7 +1331,8 @@ impl App {
         let mut i = 0;
         while i < self.overlays.len() {
             let o = &self.overlays[i];
-            let owner_ok = (self.m.s.mode == Mode::Dock && !o.tb.hwnd.is_null()) == !o.owner.is_null();
+            let owner_ok =
+                (self.m.s.mode == Mode::Dock && !o.tb.hwnd.is_null()) == !o.owner.is_null();
             if owner_ok && wanted.iter().any(|t| t.hwnd == o.tb.hwnd) {
                 i += 1;
             } else {
@@ -1213,13 +1367,19 @@ impl App {
             wt.set_targets(targets);
         }
 
-        let own: Vec<HWND> =
-            self.overlays.iter().map(|o| o.hwnd).chain([self.hwnd, self.popup, self.report]).collect();
+        let own: Vec<HWND> = self
+            .overlays
+            .iter()
+            .map(|o| o.hwnd)
+            .chain([self.hwnd, self.popup, self.report])
+            .collect();
         let dock = self.m.s.mode == Mode::Dock;
         let mut anchor_hidden = false;
         let m = &self.m;
         for o in &mut self.overlays {
-            let Some(tb) = wanted.iter().find(|t| t.hwnd == o.tb.hwnd).copied() else { continue };
+            let Some(tb) = wanted.iter().find(|t| t.hwnd == o.tb.hwnd).copied() else {
+                continue;
+            };
             let moved = !tb.same_geometry(&o.tb);
             o.tb = tb;
             if check || !o.shown && !o.fullscreen {
@@ -1232,7 +1392,11 @@ impl App {
                     crate::util::diag(&format!(
                         "{}: {} \u{2014} {}",
                         tb.label(),
-                        if fs { "hidden for full-screen app" } else { "full-screen ended, shown" },
+                        if fs {
+                            "hidden for full-screen app"
+                        } else {
+                            "full-screen ended, shown"
+                        },
                         why
                     ));
                 }
@@ -1251,7 +1415,12 @@ impl App {
                 } else {
                     "visible"
                 };
-                crate::util::diag(&format!("{}: {} ({})", tb.label(), if want { "show" } else { "hide" }, why));
+                crate::util::diag(&format!(
+                    "{}: {} ({})",
+                    tb.label(),
+                    if want { "show" } else { "hide" },
+                    why
+                ));
             }
             if want {
                 if redraw || moved || !o.shown {
@@ -1284,7 +1453,12 @@ impl App {
         let hm = unsafe { CreatePopupMenu() };
         let add = |m: HMENU, id: usize, text: &str, checked: bool| unsafe {
             let t = wide(text);
-            AppendMenuW(m, MF_STRING | if checked { MF_CHECKED } else { MF_UNCHECKED }, id, t.as_ptr());
+            AppendMenuW(
+                m,
+                MF_STRING | if checked { MF_CHECKED } else { MF_UNCHECKED },
+                id,
+                t.as_ptr(),
+            );
         };
         let sep = |m: HMENU| unsafe {
             AppendMenuW(m, MF_SEPARATOR, 0, std::ptr::null());
@@ -1309,7 +1483,14 @@ impl App {
             self.menu_open = true;
             SetForegroundWindow(hwnd);
             // `self` must not be used past this point: the menu loop re-enters.
-            let cmd = TrackPopupMenuEx(hm, TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, hwnd, std::ptr::null());
+            let cmd = TrackPopupMenuEx(
+                hm,
+                TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                x,
+                y,
+                hwnd,
+                std::ptr::null(),
+            );
             DestroyMenu(hm);
             PostMessageW(hwnd, WM_NULL, 0, 0);
             if let Some(a) = app() {
@@ -1352,7 +1533,12 @@ impl App {
             Cmd::Website => return shell_open(WEBSITE, None),
             Cmd::Report => return report::open(self),
             Cmd::CheckUpdates => {
-                crate::update_ui::show(self, "Checking GitHub for a newer version\u{2026}", Some(0.0), true);
+                crate::update_ui::show(
+                    self,
+                    "Checking GitHub for a newer version\u{2026}",
+                    Some(0.0),
+                    true,
+                );
                 return crate::update::check(self.hwnd as isize, true);
             }
             Cmd::RecheckIcons => {
@@ -1363,7 +1549,10 @@ impl App {
             }
             Cmd::EditSettings => {
                 self.save_settings();
-                return shell_open("notepad.exe", Some(&format!("\"{}\"", Settings::path().display())));
+                return shell_open(
+                    "notepad.exe",
+                    Some(&format!("\"{}\"", Settings::path().display())),
+                );
             }
             Cmd::DataFolder => {
                 self.m.usage.save();
@@ -1419,7 +1608,9 @@ impl App {
     // ---------------------------------------------------------------- mouse
 
     fn on_mouse(&mut self, hwnd: HWND, msg: u32) {
-        let Some(i) = self.overlays.iter().position(|o| o.hwnd == hwnd) else { return };
+        let Some(i) = self.overlays.iter().position(|o| o.hwnd == hwnd) else {
+            return;
+        };
         let mut pt = POINT { x: 0, y: 0 };
         unsafe { GetCursorPos(&mut pt) };
         match msg {
@@ -1489,7 +1680,12 @@ impl App {
                 let o = &mut self.overlays[i];
                 unsafe { SetCapture(o.hwnd) };
                 let offset_start = self.m.s.offset(&o.tb.key(), o.tb.primary);
-                o.drag = Some(Drag { start: pt, win_start: (o.pos.l, o.pos.t), offset_start, moved: false });
+                o.drag = Some(Drag {
+                    start: pt,
+                    win_start: (o.pos.l, o.pos.t),
+                    offset_start,
+                    moved: false,
+                });
             }
             WM_LBUTTONUP => {
                 // Take the drag state before ReleaseCapture (which sends WM_CAPTURECHANGED).
@@ -1594,8 +1790,8 @@ const NIN_KEYSELECT_: u32 = NIN_SELECT | 1;
 unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match msg {
         WM_MOUSEACTIVATE => MA_NOACTIVATE as isize,
-        WM_MOUSEMOVE | WM_MOUSEHOVER | WM_MOUSELEAVE | WM_LBUTTONDOWN | WM_LBUTTONUP | WM_LBUTTONDBLCLK
-        | WM_RBUTTONUP | WM_CAPTURECHANGED => {
+        WM_MOUSEMOVE | WM_MOUSEHOVER | WM_MOUSELEAVE | WM_LBUTTONDOWN | WM_LBUTTONUP
+        | WM_LBUTTONDBLCLK | WM_RBUTTONUP | WM_CAPTURECHANGED => {
             if let Some(a) = app() {
                 a.on_mouse(hwnd, msg);
             }
@@ -1606,7 +1802,9 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARA
 }
 
 unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
-    let Some(a) = app() else { return DefWindowProcW(hwnd, msg, w, l) };
+    let Some(a) = app() else {
+        return DefWindowProcW(hwnd, msg, w, l);
+    };
     if msg == a.msg_taskbar_created && msg != 0 {
         // Explorer restarted: tray icon is gone and taskbars were recreated.
         a.tray.add();
@@ -1665,14 +1863,22 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
                     if a.popup_open() {
                         popup::hide(a);
                     } else {
-                        a.popup_anchor = a.overlays.iter().find(|o| o.tb.primary).map_or(std::ptr::null_mut(), |o| o.hwnd);
+                        a.popup_anchor = a
+                            .overlays
+                            .iter()
+                            .find(|o| o.tb.primary)
+                            .map_or(std::ptr::null_mut(), |o| o.hwnd);
                         popup::show(a, true);
                     }
                 }
                 WM_LBUTTONDBLCLK => report::open(a),
                 // A click on an Insights notification opens the page that wrote it.
                 NIN_BALLOONUSERCLICK => {
-                    if let Some(p) = a.tray.balloon_source().and_then(crate::nav::Page::of_panel_key) {
+                    if let Some(p) = a
+                        .tray
+                        .balloon_source()
+                        .and_then(crate::nav::Page::of_panel_key)
+                    {
                         crate::settings_ui::open(a, p);
                     }
                 }
@@ -1705,7 +1911,9 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         crate::update::WM_APP_UPDATE_STAGE => {
             let pct = l as f32 / 10.0;
             let text = match w {
-                crate::update::STAGE_DOWNLOAD => format!("A new version was found. Downloading\u{2026} {:.0}%", pct),
+                crate::update::STAGE_DOWNLOAD => {
+                    format!("A new version was found. Downloading\u{2026} {:.0}%", pct)
+                }
                 crate::update::STAGE_VERIFY => "Verifying the download\u{2026}".to_string(),
                 _ => "Installing\u{2026}".to_string(),
             };
@@ -1804,8 +2012,15 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
                 PBT_POWERSETTINGCHANGE => {
                     let p = l as *const POWERBROADCAST_SETTING;
                     if !p.is_null() && (*p).DataLength >= 4 {
-                        let data = u32::from_le_bytes([(*p).Data[0], *(*p).Data.as_ptr().add(1), *(*p).Data.as_ptr().add(2), *(*p).Data.as_ptr().add(3)]);
-                        if let Some(ev) = crate::insights::power_from_setting(&(*p).PowerSetting, data) {
+                        let data = u32::from_le_bytes([
+                            (*p).Data[0],
+                            *(*p).Data.as_ptr().add(1),
+                            *(*p).Data.as_ptr().add(2),
+                            *(*p).Data.as_ptr().add(3),
+                        ]);
+                        if let Some(ev) =
+                            crate::insights::power_from_setting(&(*p).PowerSetting, data)
+                        {
                             let n = a.ins.on_power(ev, now_ms);
                             a.insight_notices(n);
                         }
@@ -1840,7 +2055,10 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             0
         }
         crate::insights::WM_APP_POWER_MODE => {
-            let n = a.ins.on_power(crate::insights::Power::Mode(w as i32), crate::insights::unix_ms());
+            let n = a.ins.on_power(
+                crate::insights::Power::Mode(w as i32),
+                crate::insights::unix_ms(),
+            );
             a.insight_notices(n);
             0
         }
@@ -1876,7 +2094,15 @@ mod tests {
     #[test]
     fn packing() {
         let c = pack(&[Cpu, Ram, DiskRead, Up, Down, TodayDown, TopProc], 2);
-        assert_eq!(c, vec![vec![Cpu, Ram], vec![DiskRead], vec![Up, Down], vec![TodayDown, TopProc]]);
+        assert_eq!(
+            c,
+            vec![
+                vec![Cpu, Ram],
+                vec![DiskRead],
+                vec![Up, Down],
+                vec![TodayDown, TopProc]
+            ]
+        );
         let c = pack(&[Cpu, Gpu, Up, Down], 2);
         assert_eq!(c, vec![vec![Cpu, Gpu], vec![Up, Down]]);
     }

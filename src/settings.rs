@@ -90,7 +90,10 @@ impl Metric {
         self as usize
     }
     pub fn from_key(k: &str) -> Option<Metric> {
-        Metric::ALL.iter().copied().find(|m| m.key().eq_ignore_ascii_case(k.trim()))
+        Metric::ALL
+            .iter()
+            .copied()
+            .find(|m| m.key().eq_ignore_ascii_case(k.trim()))
     }
 }
 
@@ -246,7 +249,10 @@ fn decode(bytes: &[u8]) -> String {
         return String::from_utf8_lossy(rest).into_owned();
     }
     if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
-        let w: Vec<u16> = rest.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        let w: Vec<u16> = rest
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
         return String::from_utf16_lossy(&w);
     }
     String::from_utf8_lossy(bytes).into_owned()
@@ -279,11 +285,18 @@ impl Settings {
 
     /// Stacked rows on this display? Per-display choice, else the default.
     pub fn stacked_for(&self, display: &str) -> bool {
-        self.stacked_on.iter().find(|(k, _)| k.eq_ignore_ascii_case(display)).map_or(self.stacked, |e| e.1)
+        self.stacked_on
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(display))
+            .map_or(self.stacked, |e| e.1)
     }
 
     pub fn set_stacked(&mut self, display: &str, on: bool) {
-        match self.stacked_on.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(display)) {
+        match self
+            .stacked_on
+            .iter_mut()
+            .find(|(k, _)| k.eq_ignore_ascii_case(display))
+        {
             Some(e) => e.1 = on,
             None => self.stacked_on.push((display.to_string(), on)),
         }
@@ -293,13 +306,20 @@ impl Settings {
         if primary {
             return self.dock_offset;
         }
-        self.offsets.iter().find(|(k, _)| k.eq_ignore_ascii_case(display)).map_or(0, |(_, v)| *v)
+        self.offsets
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(display))
+            .map_or(0, |(_, v)| *v)
     }
 
     pub fn set_offset(&mut self, display: &str, primary: bool, v: i32) {
         if primary {
             self.dock_offset = v;
-        } else if let Some(e) = self.offsets.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(display)) {
+        } else if let Some(e) = self
+            .offsets
+            .iter_mut()
+            .find(|(k, _)| k.eq_ignore_ascii_case(display))
+        {
             e.1 = v;
         } else {
             self.offsets.push((display.to_string(), v));
@@ -311,7 +331,9 @@ impl Settings {
         match self.displays.to_ascii_lowercase().as_str() {
             "all" => true,
             "primary" => primary,
-            list => list.split(',').any(|d| d.trim().eq_ignore_ascii_case(display)),
+            list => list
+                .split(',')
+                .any(|d| d.trim().eq_ignore_ascii_case(display)),
         }
     }
 
@@ -346,10 +368,16 @@ impl Settings {
     fn apply(&mut self, txt: &str) {
         for line in txt.lines() {
             let line = line.trim();
-            if line.is_empty() || line.starts_with('#') || line.starts_with(';') || line.starts_with('[') {
+            if line.is_empty()
+                || line.starts_with('#')
+                || line.starts_with(';')
+                || line.starts_with('[')
+            {
                 continue;
             }
-            let Some((k, v)) = line.split_once('=') else { continue };
+            let Some((k, v)) = line.split_once('=') else {
+                continue;
+            };
             let (k, v) = (k.trim(), v.trim());
             if let Some(mk) = k.strip_prefix("color.") {
                 let hex = v.trim_start_matches('#');
@@ -372,7 +400,9 @@ impl Settings {
                 continue;
             }
             if let Some(m) = k.strip_prefix("show.") {
-                if let (Some(m), Some(on)) = (Metric::ALL.iter().find(|x| x.key() == m), parse_bool(v)) {
+                if let (Some(m), Some(on)) =
+                    (Metric::ALL.iter().find(|x| x.key() == m), parse_bool(v))
+                {
                     self.show[m.idx()] = on;
                 }
                 continue;
@@ -396,39 +426,75 @@ impl Settings {
                     self.order = o;
                 }
                 "font" => self.font = v.to_string(),
-                "windows_accent" => self.windows_accent = parse_bool(v).unwrap_or(self.windows_accent),
+                "windows_accent" => {
+                    self.windows_accent = parse_bool(v).unwrap_or(self.windows_accent)
+                }
                 "alerts" => self.alerts = parse_bool(v).unwrap_or(self.alerts),
                 "achievements" => self.achievements = parse_bool(v).unwrap_or(self.achievements),
                 "insights" => self.insights = parse_bool(v).unwrap_or(self.insights),
-                "insight_toasts" => self.insight_toasts = parse_bool(v).unwrap_or(self.insight_toasts),
+                "insight_toasts" => {
+                    self.insight_toasts = parse_bool(v).unwrap_or(self.insight_toasts)
+                }
                 "bag_guard" => self.bag_guard = parse_bool(v).unwrap_or(self.bag_guard),
                 "alert_cpu_pct" => self.alert_cpu_pct = v.parse().unwrap_or(self.alert_cpu_pct),
                 "alert_ram_pct" => self.alert_ram_pct = v.parse().unwrap_or(self.alert_ram_pct),
-                "alert_secs" => self.alert_secs = v.parse().map(|x: u32| x.clamp(5, 3600)).unwrap_or(self.alert_secs),
-                "alert_disk_free_pct" => self.alert_disk_free_pct = v.parse().unwrap_or(self.alert_disk_free_pct),
-                "alert_battery_pct" => self.alert_battery_pct = v.parse().unwrap_or(self.alert_battery_pct),
+                "alert_secs" => {
+                    self.alert_secs = v
+                        .parse()
+                        .map(|x: u32| x.clamp(5, 3600))
+                        .unwrap_or(self.alert_secs)
+                }
+                "alert_disk_free_pct" => {
+                    self.alert_disk_free_pct = v.parse().unwrap_or(self.alert_disk_free_pct)
+                }
+                "alert_battery_pct" => {
+                    self.alert_battery_pct = v.parse().unwrap_or(self.alert_battery_pct)
+                }
                 "alert_cap" => self.alert_cap = parse_bool(v).unwrap_or(self.alert_cap),
                 "window" => self.window = crate::nav::Placement::parse(v).or(self.window),
                 "window_page" => self.window_page = v.to_string(),
                 "max_width_pct" => {
-                    self.max_width_pct = v.parse().map(|x: u32| x.min(90)).unwrap_or(self.max_width_pct)
+                    self.max_width_pct = v
+                        .parse()
+                        .map(|x: u32| x.min(90))
+                        .unwrap_or(self.max_width_pct)
                 }
                 "speed_unit" => self.unit = SpeedUnit::from_key(v).unwrap_or(self.unit),
                 "adapter" => self.adapter = v.to_string(),
                 "interval_ms" => {
-                    self.interval_ms = v.parse().map(|x: u32| x.clamp(250, 10_000)).unwrap_or(self.interval_ms)
+                    self.interval_ms = v
+                        .parse()
+                        .map(|x: u32| x.clamp(250, 10_000))
+                        .unwrap_or(self.interval_ms)
                 }
                 "mode" => {
-                    self.mode = if v.eq_ignore_ascii_case("float") { Mode::Float } else { Mode::Dock }
+                    self.mode = if v.eq_ignore_ascii_case("float") {
+                        Mode::Float
+                    } else {
+                        Mode::Dock
+                    }
                 }
                 "float_x" => self.float_x = v.parse().unwrap_or(self.float_x),
                 "float_y" => self.float_y = v.parse().unwrap_or(self.float_y),
-                "dock_offset" => self.dock_offset = v.parse().map(|x: i32| x.max(0)).unwrap_or(self.dock_offset),
-                "displays" => self.displays = if v.is_empty() { "primary".into() } else { v.to_string() },
-                "hide_fullscreen" => self.hide_fullscreen = parse_bool(v).unwrap_or(self.hide_fullscreen),
+                "dock_offset" => {
+                    self.dock_offset = v.parse().map(|x: i32| x.max(0)).unwrap_or(self.dock_offset)
+                }
+                "displays" => {
+                    self.displays = if v.is_empty() {
+                        "primary".into()
+                    } else {
+                        v.to_string()
+                    }
+                }
+                "hide_fullscreen" => {
+                    self.hide_fullscreen = parse_bool(v).unwrap_or(self.hide_fullscreen)
+                }
                 "click_through" => self.click_through = parse_bool(v).unwrap_or(self.click_through),
                 "text_scale" => {
-                    self.text_scale = v.parse().map(|x: u32| x.clamp(70, 200)).unwrap_or(self.text_scale)
+                    self.text_scale = v
+                        .parse()
+                        .map(|x: u32| x.clamp(70, 200))
+                        .unwrap_or(self.text_scale)
                 }
                 "theme" => {
                     self.theme = match v.to_ascii_lowercase().as_str() {
@@ -440,9 +506,17 @@ impl Settings {
                 "bg_opacity" => self.bg_opacity = v.parse().unwrap_or(self.bg_opacity),
                 "warn_pct" => self.warn_pct = v.parse().unwrap_or(self.warn_pct),
                 "crit_pct" => self.crit_pct = v.parse().unwrap_or(self.crit_pct),
-                "data_cap_gb" => self.data_cap_gb = v.parse::<f64>().map(|x| x.max(0.0)).unwrap_or(self.data_cap_gb),
+                "data_cap_gb" => {
+                    self.data_cap_gb = v
+                        .parse::<f64>()
+                        .map(|x| x.max(0.0))
+                        .unwrap_or(self.data_cap_gb)
+                }
                 "cap_reset_day" => {
-                    self.cap_reset_day = v.parse().map(|x: u32| x.clamp(1, 28)).unwrap_or(self.cap_reset_day)
+                    self.cap_reset_day = v
+                        .parse()
+                        .map(|x: u32| x.clamp(1, 28))
+                        .unwrap_or(self.cap_reset_day)
                 }
                 _ => {}
             }
@@ -451,8 +525,12 @@ impl Settings {
 
     /// Carry over choices from the old .NET version (settings.json) on first run.
     fn import_legacy(&mut self) {
-        let Some(dir) = crate::util::legacy_dir() else { return };
-        let Ok(txt) = std::fs::read_to_string(dir.join("settings.json")) else { return };
+        let Some(dir) = crate::util::legacy_dir() else {
+            return;
+        };
+        let Ok(txt) = std::fs::read_to_string(dir.join("settings.json")) else {
+            return;
+        };
         let get = |key: &str| -> Option<String> {
             let i = txt.find(&format!("\"{}\"", key))?;
             let rest = &txt[i + key.len() + 2..];
@@ -498,7 +576,9 @@ impl Settings {
 
     pub fn save(&self) {
         let mut o = String::with_capacity(1024);
-        o.push_str("# Resource Monitor settings. Edit freely; changes apply within a few seconds.\n");
+        o.push_str(
+            "# Resource Monitor settings. Edit freely; changes apply within a few seconds.\n",
+        );
         o.push_str("# Booleans: 1/0. Delete this file to reset everything.\n\n");
         o.push_str("# Metrics shown on the taskbar widget\n");
         for m in Metric::ALL {
@@ -591,7 +671,9 @@ impl Settings {
             o.push_str(&format!("dock_offset.{} = {}\n", k, v));
         }
         if self.window.is_some() || !self.window_page.is_empty() {
-            o.push_str("\n# Main window: x,y,width,height,maximized (screen pixels) and the last page\n");
+            o.push_str(
+                "\n# Main window: x,y,width,height,maximized (screen pixels) and the last page\n",
+            );
             if let Some(w) = &self.window {
                 o.push_str(&format!("window = {}\n", w.format()));
             }
@@ -603,7 +685,9 @@ impl Settings {
     }
 
     pub fn mtime() -> Option<SystemTime> {
-        std::fs::metadata(Self::path()).and_then(|m| m.modified()).ok()
+        std::fs::metadata(Self::path())
+            .and_then(|m| m.modified())
+            .ok()
     }
 }
 
@@ -630,7 +714,10 @@ mod tests {
         let mut s = Settings::default();
         assert!(s.window.is_none() && s.window_page.is_empty());
         s.apply("window = 10,20,1200,800,1\nwindow_page = alerts\n");
-        assert_eq!(s.window.map(|w| (w.x, w.y, w.w, w.h, w.max)), Some((10, 20, 1200, 800, true)));
+        assert_eq!(
+            s.window.map(|w| (w.x, w.y, w.w, w.h, w.max)),
+            Some((10, 20, 1200, 800, true))
+        );
         assert_eq!(s.window_page, "alerts");
         // Garbage keeps the last good value.
         s.apply("window = nonsense\n");
@@ -644,19 +731,26 @@ pub fn watch(hwnd: isize, msg: u32) {
     use windows_sys::Win32::Storage::FileSystem::*;
     use windows_sys::Win32::System::Threading::{WaitForSingleObject, INFINITE};
     let dir = crate::util::wide(&crate::util::data_dir().display().to_string());
-    let _ = std::thread::Builder::new().name("settings-watch".into()).stack_size(64 * 1024).spawn(move || unsafe {
-        let h = FindFirstChangeNotificationW(dir.as_ptr(), 0, FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_FILE_NAME);
-        if h == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
-            return;
-        }
-        loop {
-            if WaitForSingleObject(h, INFINITE) != 0 {
+    let _ = std::thread::Builder::new()
+        .name("settings-watch".into())
+        .stack_size(64 * 1024)
+        .spawn(move || unsafe {
+            let h = FindFirstChangeNotificationW(
+                dir.as_ptr(),
+                0,
+                FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_FILE_NAME,
+            );
+            if h == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
                 return;
             }
-            windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(hwnd as _, msg, 0, 0);
-            if FindNextChangeNotification(h) == 0 {
-                return;
+            loop {
+                if WaitForSingleObject(h, INFINITE) != 0 {
+                    return;
+                }
+                windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(hwnd as _, msg, 0, 0);
+                if FindNextChangeNotification(h) == 0 {
+                    return;
+                }
             }
-        }
-    });
+        });
 }

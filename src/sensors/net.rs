@@ -48,12 +48,20 @@ fn is_up(r: &MIB_IF_ROW2) -> bool {
 
 /// Alias without the trailing NUL padding.
 fn alias(r: &MIB_IF_ROW2) -> &[u16] {
-    let len = r.Alias.iter().position(|&c| c == 0).unwrap_or(r.Alias.len());
+    let len = r
+        .Alias
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(r.Alias.len());
     &r.Alias[..len]
 }
 
 fn description(r: &MIB_IF_ROW2) -> String {
-    let len = r.Description.iter().position(|&c| c == 0).unwrap_or(r.Description.len());
+    let len = r
+        .Description
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(r.Description.len());
     String::from_utf16_lossy(&r.Description[..len])
 }
 
@@ -124,7 +132,11 @@ impl Net {
                 None => {
                     self.prev.insert(
                         luid,
-                        Prev { rx: row.InOctets, tx: row.OutOctets, generation },
+                        Prev {
+                            rx: row.InOctets,
+                            tx: row.OutOctets,
+                            generation,
+                        },
                     );
                 }
             }
@@ -160,9 +172,17 @@ pub fn adapters() -> Vec<AdapterInfo> {
         let connected = is_up(row);
         match out.iter_mut().find(|a| a.alias == name) {
             Some(existing) => existing.connected |= connected,
-            None => out.push(AdapterInfo { alias: name, description: description(row), connected }),
+            None => out.push(AdapterInfo {
+                alias: name,
+                description: description(row),
+                connected,
+            }),
         }
     }
-    out.sort_by(|a, b| b.connected.cmp(&a.connected).then_with(|| a.alias.cmp(&b.alias)));
+    out.sort_by(|a, b| {
+        b.connected
+            .cmp(&a.connected)
+            .then_with(|| a.alias.cmp(&b.alias))
+    });
     out
 }

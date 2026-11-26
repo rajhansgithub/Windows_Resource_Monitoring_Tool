@@ -10,5 +10,8 @@ pub fn usage() -> (u64, u64) {
     if unsafe { GlobalMemoryStatusEx(&mut st) } == 0 {
         return (0, 0);
     }
-    (st.ullTotalPhys.saturating_sub(st.ullAvailPhys), st.ullTotalPhys)
+    (
+        st.ullTotalPhys.saturating_sub(st.ullAvailPhys),
+        st.ullTotalPhys,
+    )
 }

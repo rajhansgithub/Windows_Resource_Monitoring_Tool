@@ -12,11 +12,11 @@
 //! Also here: the Overview "Next goal" card and the level chip of the nav pane.
 //! Layout is in content coordinates; drawing takes the scroll offset `dy`.
 
-use super::core::{self as c, Category, Catalog, Goal, State};
+use super::core::{self as c, Catalog, Category, Goal, State};
+use super::ui::{wear_words, Stage};
 use crate::insights::view::{Colors, Fonts};
 use crate::render::{measure_dc, Canvas, Rgba};
 use crate::util::Rect;
-use super::ui::{wear_words, Stage};
 use windows_sys::Win32::Graphics::Gdi::HDC;
 
 const fn hx(v: u32) -> Rgba {
@@ -24,7 +24,9 @@ const fn hx(v: u32) -> Rgba {
 }
 
 /// Tier colours (Bronze .. Emulsion), as in the medal case.
-pub const TIER_HEX: [u32; 7] = [0xc07f45, 0xc9cfd8, 0xeac35e, 0xa9e4e1, 0xcbe7ff, 0xff4757, 0xb49cff];
+pub const TIER_HEX: [u32; 7] = [
+    0xc07f45, 0xc9cfd8, 0xeac35e, 0xa9e4e1, 0xcbe7ff, 0xff4757, 0xb49cff,
+];
 
 pub fn tier_col(t: u8) -> Rgba {
     hx(TIER_HEX[(t.clamp(1, 7) - 1) as usize])
@@ -105,10 +107,24 @@ struct RackL {
 
 /// One line of the tray.
 enum TrayLine {
-    Text { x: i32, y: i32, s: String, dim: bool, semi: bool },
+    Text {
+        x: i32,
+        y: i32,
+        s: String,
+        dim: bool,
+        semi: bool,
+    },
     /// The large view's heading (head font).
     Title { x: i32, y: i32, s: String },
-    Single { x: i32, y: i32, w: i32, got: bool, name: String, xp: String, line: String },
+    Single {
+        x: i32,
+        y: i32,
+        w: i32,
+        got: bool,
+        name: String,
+        xp: String,
+        line: String,
+    },
 }
 
 pub struct Room {
@@ -127,6 +143,8 @@ pub struct Room {
     pub polish_btn: Rect,
     /// The tray's "View large" button (empty when there is no coin).
     pub big_btn: Rect,
+    /// The header's "View medals" button (empty when nothing is earned yet).
+    pub head_btn: Rect,
     /// The large medal view: the whole page is one medal. Its buttons: back to the racks, previous, next.
     pub big: bool,
     /// Open the large view at the first layout (CI screenshots: `RESMON_ACH_BIG`).
@@ -163,6 +181,7 @@ impl Room {
             disc: None,
             polish_btn: Rect::default(),
             big_btn: Rect::default(),
+            head_btn: Rect::default(),
             big: false,
             want_big: std::env::var_os("RESMON_ACH_BIG").is_some(),
             close_btn: Rect::default(),
@@ -188,10 +207,21 @@ impl Room {
         let mut v = Vec::new();
         for set in Catalog::sets() {
             v.extend(set.members.iter().map(|m| Unit::Ladder(m)));
-            v.extend(std::iter::repeat_n(Unit::Blank, RACK_UNITS - set.members.len()));
+            v.extend(std::iter::repeat_n(
+                Unit::Blank,
+                RACK_UNITS - set.members.len(),
+            ));
         }
         v.push(Unit::Ladder("stillhere"));
-        v.extend([Category::Start, Category::Mastery, Category::Accident, Category::Secret].map(Unit::Singles));
+        v.extend(
+            [
+                Category::Start,
+                Category::Mastery,
+                Category::Accident,
+                Category::Secret,
+            ]
+            .map(Unit::Singles),
+        );
         v
     }
 
@@ -207,7 +237,12 @@ impl Room {
 
     /// Unit rectangles that take clicks: (index, rect), content coordinates.
     pub fn hit_rects(&self) -> Vec<(usize, Rect)> {
-        self.units.iter().enumerate().filter(|(_, u)| u.unit != Unit::Blank).map(|(i, u)| (i, u.r)).collect()
+        self.units
+            .iter()
+            .enumerate()
+            .filter(|(_, u)| u.unit != Unit::Blank)
+            .map(|(i, u)| (i, u.r))
+            .collect()
     }
 
     /// Pick a unit (pulls it out). Returns true when the selection changed.
@@ -236,16 +271,31 @@ impl Room {
         if self.pull >= 1.0 {
             return coin;
         }
-        self.pull = if animate { (self.pull + dt / 0.22).min(1.0) } else { 1.0 };
+        self.pull = if animate {
+            (self.pull + dt / 0.22).min(1.0)
+        } else {
+            1.0
+        };
         true
     }
 
     /// Lay the page out from `s` between `l` and `r`, starting at `y0`. Returns the bottom.
     #[allow(clippy::too_many_arguments)]
     /// `vh`: the height of the visible page area (the large view fills it).
-    pub fn layout(&mut self, s: &State, mdc: HDC, f: &Fonts, dpi: u32, l: i32, r: i32, y0: i32, vh: i32) -> i32 {
+    pub fn layout(
+        &mut self,
+        s: &State,
+        mdc: HDC,
+        f: &Fonts,
+        dpi: u32,
+        l: i32,
+        r: i32,
+        y0: i32,
+        vh: i32,
+    ) -> i32 {
         self.dpi = dpi;
         self.big_btn = Rect::default();
+        self.head_btn = Rect::default();
         self.close_btn = Rect::default();
         self.prev_btn = Rect::default();
         self.next_btn = Rect::default();
@@ -260,17 +310,56 @@ impl Room {
         let xp = c::total_xp(s);
         let (lv, into, need) = c::level_progress(xp);
         self.level = (lv, into, need, c::title_of(lv));
-        let earned = Catalog::all().iter().filter(|b| if b.is_ladder() { s.tier(b.id) > 0 } else { s.earned(b.id) }).count();
-        let certs = Catalog::sets().iter().filter(|set| c::rack_status(s, set).cert > 0).count();
-        self.head_right = format!("{} of {} badges \u{00B7} {} of {} racks certified", earned, Catalog::all().len(), certs, Catalog::sets().len());
-        self.head = Rect { l, t: y0, r, b: y0 + self.sc(76) };
+        let earned = Catalog::all()
+            .iter()
+            .filter(|b| {
+                if b.is_ladder() {
+                    s.tier(b.id) > 0
+                } else {
+                    s.earned(b.id)
+                }
+            })
+            .count();
+        let certs = Catalog::sets()
+            .iter()
+            .filter(|set| c::rack_status(s, set).cert > 0)
+            .count();
+        self.head_right = format!(
+            "{} of {} badges \u{00B7} {} of {} racks certified",
+            earned,
+            Catalog::all().len(),
+            certs,
+            Catalog::sets().len()
+        );
+        self.head = Rect {
+            l,
+            t: y0,
+            r,
+            b: y0 + self.sc(76),
+        };
+        if earned > 0 {
+            let bw = measure_dc(mdc, f.body, "View medals").0 + self.sc(32);
+            let (bh, cy) = (self.sc(32), (self.head.t + self.head.b) / 2);
+            self.head_btn = Rect {
+                l: r - self.sc(20) - bw,
+                t: cy - bh / 2,
+                r: r - self.sc(20),
+                b: cy + bh / 2,
+            };
+        }
 
         // Racks: 4 across when they fit, else 2, else 1.
         let pad = self.sc(16);
         let gap = self.sc(12);
         let min_w = self.sc(184);
         let inner = w - 2 * pad;
-        let cols = if inner >= 4 * min_w + 3 * gap { 4 } else if inner >= 2 * min_w + gap { 2 } else { 1 };
+        let cols = if inner >= 4 * min_w + 3 * gap {
+            4
+        } else if inner >= 2 * min_w + gap {
+            2
+        } else {
+            1
+        };
         let rack_w = (inner - gap * (cols - 1)) / cols;
         let unit_h = self.sc(46);
         let unit_gap = self.sc(6);
@@ -287,30 +376,74 @@ impl Room {
             let (col, row) = (k as i32 % cols, k as i32 / cols);
             let rx = l + pad + col * (rack_w + gap);
             let ry = floor_t + pad + row * (rack_h + gap);
-            let rr = Rect { l: rx, t: ry, r: rx + rack_w, b: ry + rack_h };
+            let rr = Rect {
+                l: rx,
+                t: ry,
+                r: rx + rack_w,
+                b: ry + rack_h,
+            };
             let units = &plan[k * RACK_UNITS..(k + 1) * RACK_UNITS];
             let (tape, stamp, stamp_col, hint) = if let Some(set) = Catalog::sets().get(k) {
                 let st = c::rack_status(s, set);
-                let stamp = if st.cert > 0 { format!("{} CERT", c::TIER_NAMES[(st.cert - 1) as usize].to_uppercase()) } else {
+                let stamp = if st.cert > 0 {
+                    format!(
+                        "{} CERT",
+                        c::TIER_NAMES[(st.cert - 1) as usize].to_uppercase()
+                    )
+                } else {
                     let nx = st.next.unwrap_or(1);
-                    format!("{}/4 {}", 4 - st.blockers.len(), c::TIER_NAMES[(nx - 1) as usize].to_uppercase())
+                    format!(
+                        "{}/4 {}",
+                        4 - st.blockers.len(),
+                        c::TIER_NAMES[(nx - 1) as usize].to_uppercase()
+                    )
                 };
-                let col = if st.cert > 0 { tier_col(st.cert) } else { INK_DIM };
+                let col = if st.cert > 0 {
+                    tier_col(st.cert)
+                } else {
+                    INK_DIM
+                };
                 let hint = match (st.next, st.blockers.as_slice()) {
-                    (Some(nx), [one]) => Some(format!("{} holds the {} cert", Catalog::get(one).map_or(*one, |b| b.name), c::TIER_NAMES[(nx - 1) as usize])),
-                    (Some(nx), b) if b.len() == 2 => Some(format!("2 units from {} cert", c::TIER_NAMES[(nx - 1) as usize])),
+                    (Some(nx), [one]) => Some(format!(
+                        "{} holds the {} cert",
+                        Catalog::get(one).map_or(*one, |b| b.name),
+                        c::TIER_NAMES[(nx - 1) as usize]
+                    )),
+                    (Some(nx), b) if b.len() == 2 => Some(format!(
+                        "2 units from {} cert",
+                        c::TIER_NAMES[(nx - 1) as usize]
+                    )),
                     _ => None,
                 };
                 (set.name, stamp, col, hint)
             } else {
-                let got = Catalog::all().iter().filter(|b| !b.is_ladder() && s.earned(b.id)).count();
+                let got = Catalog::all()
+                    .iter()
+                    .filter(|b| !b.is_ladder() && s.earned(b.id))
+                    .count();
                 let all = Catalog::all().iter().filter(|b| !b.is_ladder()).count();
-                ("Rack 04 \u{00B7} Records", format!("{got}/{all}"), INK_DIM, None)
+                (
+                    "Rack 04 \u{00B7} Records",
+                    format!("{got}/{all}"),
+                    INK_DIM,
+                    None,
+                )
             };
-            self.racks.push(RackL { r: rr, tape, stamp, stamp_col, hint });
+            self.racks.push(RackL {
+                r: rr,
+                tape,
+                stamp,
+                stamp_col,
+                hint,
+            });
             for (j, u) in units.iter().enumerate() {
                 let ut = ry + rack_top + j as i32 * (unit_h + unit_gap);
-                let ur = Rect { l: rx + self.sc(10), t: ut, r: rx + rack_w - self.sc(10), b: ut + unit_h };
+                let ur = Rect {
+                    l: rx + self.sc(10),
+                    t: ut,
+                    r: rx + rack_w - self.sc(10),
+                    b: ut + unit_h,
+                };
                 self.units.push(unit_l(s, *u, ur));
             }
         }
@@ -319,7 +452,9 @@ impl Room {
 
         // Selection: keep it; first time, the next goal's unit.
         if self.sel >= self.units.len() || self.units[self.sel].unit == Unit::Blank {
-            self.sel = c::next_goal(s).and_then(|g| Room::index_of(g.id)).unwrap_or(0);
+            self.sel = c::next_goal(s)
+                .and_then(|g| Room::index_of(g.id))
+                .unwrap_or(0);
             self.pull = 1.0;
         }
 
@@ -344,25 +479,65 @@ impl Room {
                 let goal = c::goal_of(s, id);
                 let rad = side / 2;
                 let dcx = tl + self.sc(14) + rad;
-                self.disc = Some((dcx, y + rad, rad, k, goal.map_or(1.0, |g| g.frac()), goal.map_or(k, |g| g.tier)));
+                self.disc = Some((
+                    dcx,
+                    y + rad,
+                    rad,
+                    k,
+                    goal.map_or(1.0, |g| g.frac()),
+                    goal.map_or(k, |g| g.tier),
+                ));
                 if k > 0 {
-                    self.coin_rect = Rect { l: dcx - rad, t: y, r: dcx + rad, b: y + side };
+                    self.coin_rect = Rect {
+                        l: dcx - rad,
+                        t: y,
+                        r: dcx + rad,
+                        b: y + side,
+                    };
                     self.shown = Some(id);
                 }
                 let x = dcx + rad + self.sc(22);
-                let title = if k > 0 { format!("{} \u{00B7} {}", b.name, c::TIER_NAMES[(k - 1) as usize]) } else { format!("{} \u{00B7} not started", b.name) };
-                self.tray_lines.push(TrayLine::Text { x, y, s: title, dim: false, semi: true });
+                let title = if k > 0 {
+                    format!("{} \u{00B7} {}", b.name, c::TIER_NAMES[(k - 1) as usize])
+                } else {
+                    format!("{} \u{00B7} not started", b.name)
+                };
+                self.tray_lines.push(TrayLine::Text {
+                    x,
+                    y,
+                    s: title,
+                    dim: false,
+                    semi: true,
+                });
                 y += lh(f.semi) + self.sc(2);
-                self.tray_lines.push(TrayLine::Text { x, y, s: b.line.to_string(), dim: true, semi: false });
+                self.tray_lines.push(TrayLine::Text {
+                    x,
+                    y,
+                    s: b.line.to_string(),
+                    dim: true,
+                    semi: false,
+                });
                 y += lh(f.small) + self.sc(8);
                 let have = c::amount_of(s, b);
                 let mut kv = format!("NOW {}", c::fmt_amount(have, b.unit));
                 if let Some(g) = goal {
-                    kv.push_str(&format!("   \u{00B7}   NEXT {} at {}   \u{00B7}   {} to go   \u{00B7}   +{} XP", g.tier_name(), c::fmt_amount(g.to as f64, g.unit), c::fmt_amount(g.left(), g.unit), g.xp));
+                    kv.push_str(&format!(
+                        "   \u{00B7}   NEXT {} at {}   \u{00B7}   {} to go   \u{00B7}   +{} XP",
+                        g.tier_name(),
+                        c::fmt_amount(g.to as f64, g.unit),
+                        c::fmt_amount(g.left(), g.unit),
+                        g.xp
+                    ));
                 } else {
                     kv.push_str("   \u{00B7}   top tier reached");
                 }
-                self.tray_lines.push(TrayLine::Text { x, y, s: kv, dim: false, semi: false });
+                self.tray_lines.push(TrayLine::Text {
+                    x,
+                    y,
+                    s: kv,
+                    dim: false,
+                    semi: false,
+                });
                 y += lh(f.small) + self.sc(12);
                 if k > 0 {
                     y = self.wear_lines(s, id, now, mdc, f, x, y);
@@ -370,41 +545,84 @@ impl Room {
                 y = y.max(tt + self.sc(16) + side) + self.sc(16);
             }
             Unit::Singles(cat) => {
-                let all: Vec<_> = Catalog::all().iter().filter(|b| b.category == cat).collect();
+                let all: Vec<_> = Catalog::all()
+                    .iter()
+                    .filter(|b| b.category == cat)
+                    .collect();
                 let got = all.iter().filter(|b| s.earned(b.id)).count();
                 // the coin of the picked single (first earned one by default), left of the list
-                if self.single.is_none_or(|id| !all.iter().any(|b| b.id == id && s.earned(id))) {
+                if self
+                    .single
+                    .is_none_or(|id| !all.iter().any(|b| b.id == id && s.earned(id)))
+                {
                     self.single = all.iter().find(|b| s.earned(b.id)).map(|b| b.id);
                 }
                 let top = y;
                 let mut x = tl + self.sc(18);
                 if let Some(id) = self.single {
-                    self.coin_rect = Rect { l: tl + self.sc(14), t: y, r: tl + self.sc(14) + side, b: y + side };
+                    self.coin_rect = Rect {
+                        l: tl + self.sc(14),
+                        t: y,
+                        r: tl + self.sc(14) + side,
+                        b: y + side,
+                    };
                     let k = single_tier(cat);
-                    self.disc = Some(((self.coin_rect.l + self.coin_rect.r) / 2, y + side / 2, side / 2, k, 1.0, k));
+                    self.disc = Some((
+                        (self.coin_rect.l + self.coin_rect.r) / 2,
+                        y + side / 2,
+                        side / 2,
+                        k,
+                        1.0,
+                        k,
+                    ));
                     self.shown = Some(id);
                     x = self.coin_rect.r + self.sc(22);
                 }
-                self.tray_lines.push(TrayLine::Text { x, y, s: format!("{} \u{00B7} {} of {}", cat_name(cat), got, all.len()), dim: false, semi: true });
+                self.tray_lines.push(TrayLine::Text {
+                    x,
+                    y,
+                    s: format!("{} \u{00B7} {} of {}", cat_name(cat), got, all.len()),
+                    dim: false,
+                    semi: true,
+                });
                 y += lh(f.semi) + self.sc(10);
                 let cols2 = if tr - x >= self.sc(520) { 2 } else { 1 };
                 let cw = (tr - x - self.sc(18) - self.sc(16) * (cols2 - 1)) / cols2;
                 let row_h = lh(f.body) + lh(f.small) + self.sc(10);
                 for (i, b) in all.iter().enumerate() {
-                    let (cx, cy) = (x + (i as i32 % cols2) * (cw + self.sc(16)), y + (i as i32 / cols2) * row_h);
+                    let (cx, cy) = (
+                        x + (i as i32 % cols2) * (cw + self.sc(16)),
+                        y + (i as i32 / cols2) * row_h,
+                    );
                     let e = s.earned(b.id);
                     let hidden = cat == Category::Secret && !e;
                     if e {
-                        self.single_rects.push((b.id, Rect { l: cx - self.sc(6), t: cy - self.sc(3), r: cx + cw + self.sc(6), b: cy + row_h - self.sc(5) }));
+                        self.single_rects.push((
+                            b.id,
+                            Rect {
+                                l: cx - self.sc(6),
+                                t: cy - self.sc(3),
+                                r: cx + cw + self.sc(6),
+                                b: cy + row_h - self.sc(5),
+                            },
+                        ));
                     }
                     self.tray_lines.push(TrayLine::Single {
                         x: cx,
                         y: cy,
                         w: cw,
                         got: e,
-                        name: if hidden { "? ? ?".into() } else { b.name.to_string() },
+                        name: if hidden {
+                            "? ? ?".into()
+                        } else {
+                            b.name.to_string()
+                        },
                         xp: format!("+{} XP", b.xp),
-                        line: if hidden { "Hidden until earned".into() } else { b.line.to_string() },
+                        line: if hidden {
+                            "Hidden until earned".into()
+                        } else {
+                            b.line.to_string()
+                        },
                     });
                 }
                 y += ((all.len() as i32 + cols2 - 1) / cols2) * row_h + self.sc(8);
@@ -417,15 +635,31 @@ impl Room {
         }
         match self.shown {
             Some(id) => {
-                let tier = Catalog::get(id).map_or(1, |b| if b.is_ladder() { s.tier(id) } else { single_tier(b.category) });
+                let tier = Catalog::get(id).map_or(1, |b| {
+                    if b.is_ladder() {
+                        s.tier(id)
+                    } else {
+                        single_tier(b.category)
+                    }
+                });
                 self.coin.show(id, tier.clamp(1, 7));
                 self.coin_n = self.coin_rect.w().max(0) as u32;
             }
             None => self.coin.hide(),
         }
-        self.tray = Rect { l: tl, t: tt, r: tr, b: y };
-        self.floor = Rect { l, t: floor_t, r, b: self.tray.b + pad };
-        if std::mem::take(&mut self.want_big) && self.open_big() {
+        self.tray = Rect {
+            l: tl,
+            t: tt,
+            r: tr,
+            b: y,
+        };
+        self.floor = Rect {
+            l,
+            t: floor_t,
+            r,
+            b: self.tray.b + pad,
+        };
+        if std::mem::take(&mut self.want_big) && self.open_big(s) {
             return self.layout_big(s, mdc, f, l, r, y0, vh);
         }
         self.floor.b
@@ -433,19 +667,44 @@ impl Room {
 
     /// The medal's age (dust, cobwebs) and, when it is not clean, the Polish button. Returns the bottom.
     #[allow(clippy::too_many_arguments)]
-    fn wear_lines(&mut self, s: &State, id: &'static str, now: u64, mdc: HDC, f: &Fonts, x: i32, mut y: i32) -> i32 {
+    fn wear_lines(
+        &mut self,
+        s: &State,
+        id: &'static str,
+        now: u64,
+        mdc: HDC,
+        f: &Fonts,
+        x: i32,
+        mut y: i32,
+    ) -> i32 {
         let w = s.wear(id, now);
-        self.tray_lines.push(TrayLine::Text { x, y, s: wear_words(&w), dim: true, semi: false });
+        self.tray_lines.push(TrayLine::Text {
+            x,
+            y,
+            s: wear_words(&w),
+            dim: true,
+            semi: false,
+        });
         y += measure_dc(mdc, f.small, "Ag").1 + self.sc(10);
         let mut bx = x;
         if !self.big {
             let bw = measure_dc(mdc, f.body, "View large").0 + self.sc(32);
-            self.big_btn = Rect { l: bx, t: y, r: bx + bw, b: y + self.sc(32) };
+            self.big_btn = Rect {
+                l: bx,
+                t: y,
+                r: bx + bw,
+                b: y + self.sc(32),
+            };
             bx = self.big_btn.r + self.sc(8);
         }
         if !w.clean {
             let bw = measure_dc(mdc, f.body, "Polish").0 + self.sc(32);
-            self.polish_btn = Rect { l: bx, t: y, r: bx + bw, b: y + self.sc(32) };
+            self.polish_btn = Rect {
+                l: bx,
+                t: y,
+                r: bx + bw,
+                b: y + self.sc(32),
+            };
         }
         if !self.big || !w.clean {
             y += self.sc(32);
@@ -459,20 +718,38 @@ impl Room {
         for u in Room::plan() {
             match u {
                 Unit::Ladder(id) if s.tier(id) > 0 => v.push(id),
-                Unit::Singles(cat) => v.extend(Catalog::all().iter().filter(|b| b.category == cat && !b.is_ladder() && s.earned(b.id)).map(|b| b.id)),
+                Unit::Singles(cat) => v.extend(
+                    Catalog::all()
+                        .iter()
+                        .filter(|b| b.category == cat && !b.is_ladder() && s.earned(b.id))
+                        .map(|b| b.id),
+                ),
                 _ => {}
             }
         }
         v
     }
 
-    /// Open the large view on the medal the tray shows. False when there is none.
-    pub fn open_big(&mut self) -> bool {
+    /// Open the large view on the medal the tray shows, else the first earned one. False when nothing is earned.
+    pub fn open_big(&mut self, s: &State) -> bool {
         if self.shown.is_none() {
-            return false;
+            let Some(id) = Room::earned_order(s).first().copied() else {
+                return false;
+            };
+            self.pick(id);
         }
         self.big = true;
         true
+    }
+
+    /// Show `id`: its unit selected in the racks (and the single picked).
+    fn pick(&mut self, id: &'static str) {
+        if let Some(i) = Room::index_of(id) {
+            self.sel = i;
+            self.pull = 1.0;
+        }
+        self.single = Catalog::get(id).filter(|b| !b.is_ladder()).map(|b| b.id);
+        self.shown = Some(id);
     }
 
     pub fn close_big(&mut self) {
@@ -485,19 +762,25 @@ impl Room {
         if order.is_empty() {
             return;
         }
-        let cur = self.shown.and_then(|id| order.iter().position(|x| *x == id)).unwrap_or(0) as i32;
-        let id = order[(cur + d).rem_euclid(order.len() as i32) as usize];
-        if let Some(i) = Room::index_of(id) {
-            self.sel = i;
-            self.pull = 1.0;
-        }
-        self.single = Catalog::get(id).filter(|b| !b.is_ladder()).map(|b| b.id);
-        self.shown = Some(id);
+        let cur = self
+            .shown
+            .and_then(|id| order.iter().position(|x| *x == id))
+            .unwrap_or(0) as i32;
+        self.pick(order[(cur + d).rem_euclid(order.len() as i32) as usize]);
     }
 
     /// The large view: one medal filling the page (coin as big as fits), its name, the way to the next tier, its age.
     #[allow(clippy::too_many_arguments)]
-    fn layout_big(&mut self, s: &State, mdc: HDC, f: &Fonts, l: i32, r: i32, y0: i32, vh: i32) -> i32 {
+    fn layout_big(
+        &mut self,
+        s: &State,
+        mdc: HDC,
+        f: &Fonts,
+        l: i32,
+        r: i32,
+        y0: i32,
+        vh: i32,
+    ) -> i32 {
         let lh = |font| measure_dc(mdc, font, "Ag").1;
         let id = self.shown.unwrap();
         let Some(b) = Catalog::get(id) else {
@@ -512,27 +795,55 @@ impl Room {
         self.head = Rect::default();
         let pad = self.sc(20);
         let bottom = y0 + vh.max(self.sc(420)) - self.sc(12);
-        self.floor = Rect { l, t: y0, r, b: bottom };
+        self.floor = Rect {
+            l,
+            t: y0,
+            r,
+            b: bottom,
+        };
 
         // top row: back to the racks on the left, previous / next on the right
         let bh = self.sc(32);
         let y = y0 + pad;
         let b32 = self.sc(32);
         let bw = |t: &str| measure_dc(mdc, f.body, t).0 + b32;
-        self.close_btn = Rect { l: l + pad, t: y, r: l + pad + bw("Back to racks"), b: y + bh };
+        self.close_btn = Rect {
+            l: l + pad,
+            t: y,
+            r: l + pad + bw("Back to racks"),
+            b: y + bh,
+        };
         if Room::earned_order(s).len() > 1 {
             let nw = bw("Next");
-            self.next_btn = Rect { l: r - pad - nw, t: y, r: r - pad, b: y + bh };
+            self.next_btn = Rect {
+                l: r - pad - nw,
+                t: y,
+                r: r - pad,
+                b: y + bh,
+            };
             let pw = bw("Previous");
-            self.prev_btn = Rect { l: self.next_btn.l - self.sc(8) - pw, t: y, r: self.next_btn.l - self.sc(8), b: y + bh };
+            self.prev_btn = Rect {
+                l: self.next_btn.l - self.sc(8) - pw,
+                t: y,
+                r: self.next_btn.l - self.sc(8),
+                b: y + bh,
+            };
         }
         let top = y + bh + pad;
 
         // the facts, measured first so the coin gets the rest
         let ladder = b.is_ladder();
-        let k = if ladder { s.tier(id) } else { single_tier(b.category) };
+        let k = if ladder {
+            s.tier(id)
+        } else {
+            single_tier(b.category)
+        };
         let goal = if ladder { c::goal_of(s, id) } else { None };
-        let title = format!("{} \u{00B7} {}", b.name, c::TIER_NAMES[(k.clamp(1, 7) - 1) as usize]);
+        let title = format!(
+            "{} \u{00B7} {}",
+            b.name,
+            c::TIER_NAMES[(k.clamp(1, 7) - 1) as usize]
+        );
         let mut kv = String::new();
         if ladder {
             kv = format!("NOW {}", c::fmt_amount(c::amount_of(s, b), b.unit));
@@ -547,29 +858,74 @@ impl Room {
                 None => kv.push_str("   \u{00B7}   top tier reached"),
             }
         }
-        let info_h = lh(f.head) + self.sc(6) + lh(f.small) + self.sc(10) + if kv.is_empty() { 0 } else { lh(f.small) + self.sc(12) } + lh(f.small) + self.sc(10) + bh;
+        let info_h = lh(f.head)
+            + self.sc(6)
+            + lh(f.small)
+            + self.sc(10)
+            + if kv.is_empty() {
+                0
+            } else {
+                lh(f.small) + self.sc(12)
+            }
+            + lh(f.small)
+            + self.sc(10)
+            + bh;
         let w = r - l - 2 * pad;
         let h = bottom - pad - top;
         // wide: coin left, facts right; narrow: coin on top, facts below
         let info_w = self.sc(380);
         let side_by_side = w - h >= info_w;
-        let side = if side_by_side { h.min(w - info_w - pad) } else { (h - info_h - pad).min(w) }.max(self.sc(160));
+        let side = if side_by_side {
+            h.min(w - info_w - pad)
+        } else {
+            (h - info_h - pad).min(w)
+        }
+        .max(self.sc(160));
         let (stage, x, mut ty) = if side_by_side {
-            let st = Rect { l: l + pad, t: top, r: l + pad + side, b: top + side };
+            let st = Rect {
+                l: l + pad,
+                t: top,
+                r: l + pad + side,
+                b: top + side,
+            };
             (st, st.r + self.sc(32), top + (side - info_h).max(0) / 2)
         } else {
             let sl = l + (r - l - side) / 2;
-            let st = Rect { l: sl, t: top, r: sl + side, b: top + side };
+            let st = Rect {
+                l: sl,
+                t: top,
+                r: sl + side,
+                b: top + side,
+            };
             (st, l + pad, st.b + pad)
         };
         self.coin_rect = stage;
-        self.disc = Some(((stage.l + stage.r) / 2, (stage.t + stage.b) / 2, side / 2, k, goal.map_or(1.0, |g| g.frac()), goal.map_or(k, |g| g.tier)));
+        self.disc = Some((
+            (stage.l + stage.r) / 2,
+            (stage.t + stage.b) / 2,
+            side / 2,
+            k,
+            goal.map_or(1.0, |g| g.frac()),
+            goal.map_or(k, |g| g.tier),
+        ));
         self.tray_lines.push(TrayLine::Title { x, y: ty, s: title });
         ty += lh(f.head) + self.sc(6);
-        self.tray_lines.push(TrayLine::Text { x, y: ty, s: b.line.to_string(), dim: true, semi: false });
+        self.tray_lines.push(TrayLine::Text {
+            x,
+            y: ty,
+            s: b.line.to_string(),
+            dim: true,
+            semi: false,
+        });
         ty += lh(f.small) + self.sc(10);
         if !kv.is_empty() {
-            self.tray_lines.push(TrayLine::Text { x, y: ty, s: kv, dim: false, semi: false });
+            self.tray_lines.push(TrayLine::Text {
+                x,
+                y: ty,
+                s: kv,
+                dim: false,
+                semi: false,
+            });
             ty += lh(f.small) + self.sc(12);
         }
         let now = super::observer::unix_ms();
@@ -582,15 +938,37 @@ impl Room {
 
     /// Draw. `hover` = unit index under the mouse. The host draws the "Polish" button (`polish_btn`).
     #[allow(clippy::too_many_arguments)]
-    pub fn draw(&self, cv: &mut Canvas, f: &Fonts, col: &Colors, dy: i32, vt: i32, vb: i32, hover: Option<usize>) {
-        let sh = |r: Rect| Rect { l: r.l, t: r.t + dy, r: r.r, b: r.b + dy };
+    pub fn draw(
+        &self,
+        cv: &mut Canvas,
+        f: &Fonts,
+        col: &Colors,
+        dy: i32,
+        vt: i32,
+        vb: i32,
+        hover: Option<usize>,
+    ) {
+        let sh = |r: Rect| Rect {
+            l: r.l,
+            t: r.t + dy,
+            r: r.r,
+            b: r.b + dy,
+        };
         let vis = |r: Rect| r.b + dy >= vt && r.t + dy <= vb;
         let rad = self.sc(6) as f32;
         if self.big {
             // the large view: the room's floor, one medal under a cold light
             let fl = sh(self.floor);
             cv.fill_round(fl, rad, hx(0x0d0f12));
-            cv.fill_rect(Rect { l: fl.l + self.sc(6), t: fl.t, r: fl.r - self.sc(6), b: fl.t + self.sc(2) }, COLD);
+            cv.fill_rect(
+                Rect {
+                    l: fl.l + self.sc(6),
+                    t: fl.t,
+                    r: fl.r - self.sc(6),
+                    b: fl.t + self.sc(2),
+                },
+                COLD,
+            );
             self.draw_medal(cv, f, dy, vt, vb, 255);
             self.draw_lines(cv, f, dy, fl.r);
             return;
@@ -603,9 +981,19 @@ impl Room {
             cv.stroke_round(h, rad, col.card_border);
             let (lv, into, need, title) = self.level;
             let rr = self.sc(26) as f32;
-            let (cx, cy) = (h.l as f32 + self.sc(20) as f32 + rr, (h.t + h.b) as f32 / 2.0);
+            let (cx, cy) = (
+                h.l as f32 + self.sc(20) as f32 + rr,
+                (h.t + h.b) as f32 / 2.0,
+            );
             cv.ring(cx, cy, rr, self.sc(5) as f32, 1.0, col.line);
-            cv.ring(cx, cy, rr, self.sc(5) as f32, into as f32 / need.max(1) as f32, tier_col(1));
+            cv.ring(
+                cx,
+                cy,
+                rr,
+                self.sc(5) as f32,
+                into as f32 / need.max(1) as f32,
+                tier_col(1),
+            );
             let n = lv.to_string();
             let (nw, nh) = cv.measure(f.semi, &n);
             cv.text(f.semi, &n, cx as i32 - nw / 2, cy as i32 - nh / 2, col.fg);
@@ -613,11 +1001,35 @@ impl Room {
             let th = cv.measure(f.semi, "Ag").1;
             let sh2 = cv.measure(f.small, "Ag").1;
             let ty = (h.t + h.b) / 2 - (th + sh2) / 2;
-            cv.text(f.semi, &format!("Level {lv} \u{00B7} {title}"), x, ty, col.fg);
-            cv.text(f.small, &format!("{into} / {need} XP to level {}", lv + 1), x, ty + th, col.dim);
+            cv.text(
+                f.semi,
+                &format!("Level {lv} \u{00B7} {title}"),
+                x,
+                ty,
+                col.fg,
+            );
+            cv.text(
+                f.small,
+                &format!("{into} / {need} XP to level {}", lv + 1),
+                x,
+                ty + th,
+                col.dim,
+            );
+            // the "View medals" button (a page control) sits at the right; the counts go left of it
+            let right = if self.head_btn.is_empty() {
+                h.r - self.sc(20)
+            } else {
+                self.head_btn.l - self.sc(16)
+            };
             let rw = cv.measure(f.small, &self.head_right).0;
-            if h.r - self.sc(20) - rw > x + self.sc(220) {
-                cv.text_right(f.small, &self.head_right, h.r - self.sc(20), (h.t + h.b) / 2 - sh2 / 2, col.dim);
+            if right - rw > x + self.sc(220) {
+                cv.text_right(
+                    f.small,
+                    &self.head_right,
+                    right,
+                    (h.t + h.b) / 2 - sh2 / 2,
+                    col.dim,
+                );
             }
         }
 
@@ -629,10 +1041,27 @@ impl Room {
             let tile = self.sc(30);
             let mut ty = fl.t + tile;
             while ty < fl.b {
-                cv.fill_rect(Rect { l: fl.l + self.sc(2), t: ty, r: fl.r - self.sc(2), b: ty + 1 }, FLOOR_LINE);
+                cv.fill_rect(
+                    Rect {
+                        l: fl.l + self.sc(2),
+                        t: ty,
+                        r: fl.r - self.sc(2),
+                        b: ty + 1,
+                    },
+                    FLOOR_LINE,
+                );
                 ty += tile;
             }
-            cv.fill_round(Rect { l: fl.l + fl.w() / 6, t: fl.t, r: fl.r - fl.w() / 6, b: fl.t + self.sc(3) }, 2.0, COLD.with_a(90));
+            cv.fill_round(
+                Rect {
+                    l: fl.l + fl.w() / 6,
+                    t: fl.t,
+                    r: fl.r - fl.w() / 6,
+                    b: fl.t + self.sc(3),
+                },
+                2.0,
+                COLD.with_a(90),
+            );
         }
         for rk in &self.racks {
             if !vis(rk.r) {
@@ -643,26 +1072,64 @@ impl Room {
             cv.stroke_round(r, self.sc(3) as f32, STEEL_EDGE);
             // rails
             for x in [r.l + self.sc(4), r.r - self.sc(6)] {
-                cv.fill_rect(Rect { l: x, t: r.t + self.sc(32), r: x + self.sc(2), b: r.b - self.sc(8) }, VENT);
+                cv.fill_rect(
+                    Rect {
+                        l: x,
+                        t: r.t + self.sc(32),
+                        r: x + self.sc(2),
+                        b: r.b - self.sc(8),
+                    },
+                    VENT,
+                );
             }
             // label-maker tape + certificate stamp
             let tw = cv.measure(f.small, rk.tape).0 + self.sc(12);
-            let tape = Rect { l: r.l + self.sc(10), t: r.t + self.sc(9), r: (r.l + self.sc(10) + tw).min(r.r - self.sc(60)), b: r.t + self.sc(27) };
+            let tape = Rect {
+                l: r.l + self.sc(10),
+                t: r.t + self.sc(9),
+                r: (r.l + self.sc(10) + tw).min(r.r - self.sc(60)),
+                b: r.t + self.sc(27),
+            };
             cv.fill_round(tape, 2.0, TAPE);
             let tape_s = cv.ellipsize(f.small, rk.tape, tape.w() - self.sc(12));
             let tsh = cv.measure(f.small, "Ag").1;
-            cv.text(f.small, &tape_s, tape.l + self.sc(6), (tape.t + tape.b) / 2 - tsh / 2, TAPE_INK);
+            cv.text(
+                f.small,
+                &tape_s,
+                tape.l + self.sc(6),
+                (tape.t + tape.b) / 2 - tsh / 2,
+                TAPE_INK,
+            );
             let sw = cv.measure(f.tiny, &rk.stamp).0 + self.sc(10);
-            let st = Rect { l: r.r - self.sc(10) - sw, t: r.t + self.sc(9), r: r.r - self.sc(10), b: r.t + self.sc(27) };
+            let st = Rect {
+                l: r.r - self.sc(10) - sw,
+                t: r.t + self.sc(9),
+                r: r.r - self.sc(10),
+                b: r.t + self.sc(27),
+            };
             cv.stroke_round(st, 2.0, rk.stamp_col);
             let tyh = cv.measure(f.tiny, "Ag").1;
-            cv.text(f.tiny, &rk.stamp, st.l + self.sc(5), (st.t + st.b) / 2 - tyh / 2, rk.stamp_col);
+            cv.text(
+                f.tiny,
+                &rk.stamp,
+                st.l + self.sc(5),
+                (st.t + st.b) / 2 - tyh / 2,
+                rk.stamp_col,
+            );
             // vents
             for k in 0..2 {
                 let vy = r.b - self.sc(10) - (k + 1) * self.sc(9);
                 let mut x = r.l + self.sc(12);
                 while x < r.r - self.sc(12) {
-                    cv.fill_rect(Rect { l: x, t: vy, r: x + self.sc(2), b: vy + self.sc(6) }, VENT);
+                    cv.fill_rect(
+                        Rect {
+                            l: x,
+                            t: vy,
+                            r: x + self.sc(2),
+                            b: vy + self.sc(6),
+                        },
+                        VENT,
+                    );
                     x += self.sc(5);
                 }
             }
@@ -679,20 +1146,50 @@ impl Room {
             let selected = i == self.sel;
             let p = if selected { self.pull } else { 0.0 };
             let out = (ease(p) * self.sc(5) as f32) as i32;
-            let r = Rect { l: u.r.l - out, t: u.r.t + dy - out / 2, r: u.r.r + out, b: u.r.b + dy + out / 2 };
+            let r = Rect {
+                l: u.r.l - out,
+                t: u.r.t + dy - out / 2,
+                r: u.r.r + out,
+                b: u.r.b + dy + out / 2,
+            };
             if u.unit == Unit::Blank {
                 cv.fill_round(r, 2.0, hx(0x202329));
                 let mut x = r.l + self.sc(14);
                 while x < r.r - self.sc(14) {
-                    cv.fill_rect(Rect { l: x, t: r.t + self.sc(14), r: x + self.sc(2), b: r.b - self.sc(14) }, VENT);
+                    cv.fill_rect(
+                        Rect {
+                            l: x,
+                            t: r.t + self.sc(14),
+                            r: x + self.sc(2),
+                            b: r.b - self.sc(14),
+                        },
+                        VENT,
+                    );
                     x += self.sc(6);
                 }
                 continue;
             }
             if selected {
-                cv.fill_round(Rect { l: r.l - 2, t: r.t - 2, r: r.r + 2, b: r.b + 4 }, 4.0, Rgba(0, 0, 0, 120));
+                cv.fill_round(
+                    Rect {
+                        l: r.l - 2,
+                        t: r.t - 2,
+                        r: r.r + 2,
+                        b: r.b + 4,
+                    },
+                    4.0,
+                    Rgba(0, 0, 0, 120),
+                );
             }
-            cv.fill_round(r, 2.0, if hover == Some(i) || selected { UNIT_HOT } else { UNIT });
+            cv.fill_round(
+                r,
+                2.0,
+                if hover == Some(i) || selected {
+                    UNIT_HOT
+                } else {
+                    UNIT
+                },
+            );
             if selected {
                 cv.stroke_round(r, 2.0, COLD);
             }
@@ -703,21 +1200,39 @@ impl Room {
             let step = led_h + self.sc(2);
             let top = (r.t + r.b) / 2 - (of as i32 * step) / 2;
             for k in 0..of {
-                let lr = Rect { l: lx, t: top + k as i32 * step, r: lx + self.sc(7), b: top + k as i32 * step + led_h };
+                let lr = Rect {
+                    l: lx,
+                    t: top + k as i32 * step,
+                    r: lx + self.sc(7),
+                    b: top + k as i32 * step + led_h,
+                };
                 // the top LED is the highest tier
                 let idx = of - 1 - k;
                 let on = idx < lit;
                 cv.fill_rect(lr, if on { cols[idx as usize] } else { LED_OFF });
             }
             // activity LED, right
-            let al = Rect { l: r.r - self.sc(14), t: (r.t + r.b) / 2 - self.sc(3), r: r.r - self.sc(8), b: (r.t + r.b) / 2 + self.sc(3) };
-            cv.fill_round(al, self.sc(3) as f32, if u.live { LINK } else { hx(0x4a4f58) });
+            let al = Rect {
+                l: r.r - self.sc(14),
+                t: (r.t + r.b) / 2 - self.sc(3),
+                r: r.r - self.sc(8),
+                b: (r.t + r.b) / 2 + self.sc(3),
+            };
+            cv.fill_round(
+                al,
+                self.sc(3) as f32,
+                if u.live { LINK } else { hx(0x4a4f58) },
+            );
             // text
             let tx = lx + self.sc(16);
             let maxw = al.l - tx - self.sc(6);
             let th = cv.measure(f.body, "Ag").1;
             let sh2 = cv.measure(f.tiny, "Ag").1;
-            let bar_h = if u.bar.is_some() { self.sc(3) + self.sc(4) } else { 0 };
+            let bar_h = if u.bar.is_some() {
+                self.sc(3) + self.sc(4)
+            } else {
+                0
+            };
             let ty = (r.t + r.b) / 2 - (th + sh2 + bar_h) / 2;
             let t = cv.ellipsize(f.body, &u.title, maxw);
             cv.text(f.body, &t, tx, ty, INK);
@@ -725,7 +1240,12 @@ impl Room {
             cv.text(f.tiny, &s, tx, ty + th, INK_DIM);
             if let Some((frac, bc)) = u.bar {
                 let by = ty + th + sh2 + self.sc(4);
-                let br = Rect { l: tx, t: by, r: tx + maxw, b: by + self.sc(3) };
+                let br = Rect {
+                    l: tx,
+                    t: by,
+                    r: tx + maxw,
+                    b: by + self.sc(3),
+                };
                 cv.fill_rect(br, hx(0x11141a));
                 let fw = ((maxw as f32) * frac).round() as i32;
                 if fw > 0 {
@@ -739,7 +1259,15 @@ impl Room {
             let t = sh(self.tray);
             let a = (ease(self.pull) * 255.0) as u8;
             cv.fill_round(t, rad, hx(0x14171c));
-            cv.fill_rect(Rect { l: t.l + self.sc(6), t: t.t, r: t.r - self.sc(6), b: t.t + self.sc(2) }, COLD.with_a(a));
+            cv.fill_rect(
+                Rect {
+                    l: t.l + self.sc(6),
+                    t: t.t,
+                    r: t.r - self.sc(6),
+                    b: t.t + self.sc(2),
+                },
+                COLD.with_a(a),
+            );
             self.draw_medal(cv, f, dy, vt, vb, a);
             self.draw_lines(cv, f, dy, t.r);
         }
@@ -748,30 +1276,78 @@ impl Room {
     /// The medal: the live coin, or the flat disc without a GPU; round it, the way to the next tier (`a`: fade in).
     #[allow(clippy::too_many_arguments)]
     fn draw_medal(&self, cv: &mut Canvas, f: &Fonts, dy: i32, vt: i32, vb: i32, a: u8) {
-        let sh = |r: Rect| Rect { l: r.l, t: r.t + dy, r: r.r, b: r.b + dy };
+        let sh = |r: Rect| Rect {
+            l: r.l,
+            t: r.t + dy,
+            r: r.r,
+            b: r.b + dy,
+        };
         let live = !self.coin_rect.is_empty() && {
             let cr = sh(self.coin_rect);
             if let Some((_, _, r0, _, frac, next)) = self.disc {
                 // the way to the next tier, round the coin
                 let (cx, cy) = ((cr.l + cr.r) as f32 / 2.0, (cr.t + cr.b) as f32 / 2.0);
                 cv.ring(cx, cy, r0 as f32, self.sc(3) as f32, 1.0, hx(0x23272e));
-                cv.ring(cx, cy, r0 as f32, self.sc(3) as f32, frac * (a as f32 / 255.0), tier_col(next.max(1)));
+                cv.ring(
+                    cx,
+                    cy,
+                    r0 as f32,
+                    self.sc(3) as f32,
+                    frac * (a as f32 / 255.0),
+                    tier_col(next.max(1)),
+                );
             }
-            self.coin.draw(cv, (cr.l + cr.r) / 2, (cr.t + cr.b) / 2, vt, vb)
+            self.coin
+                .draw(cv, (cr.l + cr.r) / 2, (cr.t + cr.b) / 2, vt, vb)
         };
         if let (false, Some((cx, cy, r0, k, frac, next))) = (live, self.disc) {
             let (cx, cy, r0) = (cx as f32, (cy + dy) as f32, r0 as f32);
             // the medal: a disc in its metal, a dark well, the tier initial; the ring is the way to the next tier
             let metal = if k > 0 { tier_col(k) } else { hx(0x3a3f48) };
             cv.ring(cx, cy, r0, self.sc(4) as f32, 1.0, hx(0x23272e));
-            cv.ring(cx, cy, r0, self.sc(4) as f32, frac * (a as f32 / 255.0), tier_col(next.max(1)));
+            cv.ring(
+                cx,
+                cy,
+                r0,
+                self.sc(4) as f32,
+                frac * (a as f32 / 255.0),
+                tier_col(next.max(1)),
+            );
             let d = r0 - self.sc(10) as f32;
-            cv.fill_round(Rect { l: (cx - d) as i32, t: (cy - d) as i32, r: (cx + d) as i32, b: (cy + d) as i32 }, d, metal);
+            cv.fill_round(
+                Rect {
+                    l: (cx - d) as i32,
+                    t: (cy - d) as i32,
+                    r: (cx + d) as i32,
+                    b: (cy + d) as i32,
+                },
+                d,
+                metal,
+            );
             let d2 = d * 0.62;
-            cv.fill_round(Rect { l: (cx - d2) as i32, t: (cy - d2) as i32, r: (cx + d2) as i32, b: (cy + d2) as i32 }, d2, Rgba(12, 14, 18, 235));
-            let s = if k > 0 { &c::TIER_NAMES[(k - 1) as usize][..1] } else { "?" };
+            cv.fill_round(
+                Rect {
+                    l: (cx - d2) as i32,
+                    t: (cy - d2) as i32,
+                    r: (cx + d2) as i32,
+                    b: (cy + d2) as i32,
+                },
+                d2,
+                Rgba(12, 14, 18, 235),
+            );
+            let s = if k > 0 {
+                &c::TIER_NAMES[(k - 1) as usize][..1]
+            } else {
+                "?"
+            };
             let (sw, shh) = cv.measure(f.head, s);
-            cv.text(f.head, s, cx as i32 - sw / 2, cy as i32 - shh / 2, if k > 0 { metal } else { INK_DIM });
+            cv.text(
+                f.head,
+                s,
+                cx as i32 - sw / 2,
+                cy as i32 - shh / 2,
+                if k > 0 { metal } else { INK_DIM },
+            );
         }
     }
 
@@ -788,11 +1364,24 @@ impl Room {
                     let s2 = cv.ellipsize(font, s, right - self.sc(16) - x);
                     cv.text(font, &s2, *x, y + dy, if *dim { INK_DIM } else { INK });
                 }
-                TrayLine::Single { x, y, w, got, name, xp, line } => {
+                TrayLine::Single {
+                    x,
+                    y,
+                    w,
+                    got,
+                    name,
+                    xp,
+                    line,
+                } => {
                     let y = y + dy;
                     let th = cv.measure(f.body, "Ag").1;
                     let d = self.sc(10);
-                    let dot = Rect { l: *x, t: y + th / 2 - d / 2, r: x + d, b: y + th / 2 + d / 2 };
+                    let dot = Rect {
+                        l: *x,
+                        t: y + th / 2 - d / 2,
+                        r: x + d,
+                        b: y + th / 2 + d / 2,
+                    };
                     if *got {
                         cv.fill_round(dot, d as f32 / 2.0, LINK);
                     } else {
@@ -802,7 +1391,13 @@ impl Room {
                     let xw = cv.measure(f.small, xp).0;
                     let n = cv.ellipsize(f.body, name, w - d - self.sc(20) - xw);
                     cv.text(f.body, &n, nx, y, if *got { INK } else { INK_DIM });
-                    cv.text_right(f.small, xp, x + w, y + self.sc(1), if *got { AMBER } else { INK_DIM });
+                    cv.text_right(
+                        f.small,
+                        xp,
+                        x + w,
+                        y + self.sc(1),
+                        if *got { AMBER } else { INK_DIM },
+                    );
                     let l2 = cv.ellipsize(f.small, line, w - d - self.sc(10));
                     cv.text(f.small, &l2, nx, y + th, INK_DIM);
                 }
@@ -814,7 +1409,15 @@ impl Room {
 fn unit_l(s: &State, u: Unit, r: Rect) -> UnitL {
     let off = [LED_OFF; 7];
     match u {
-        Unit::Blank => UnitL { unit: u, r, title: String::new(), sub: String::new(), leds: (0, 0, off), bar: None, live: false },
+        Unit::Blank => UnitL {
+            unit: u,
+            r,
+            title: String::new(),
+            sub: String::new(),
+            leds: (0, 0, off),
+            bar: None,
+            live: false,
+        },
         Unit::Ladder(id) => {
             let b = Catalog::get(id).unwrap();
             let k = s.tier(id).min(7);
@@ -823,15 +1426,35 @@ fn unit_l(s: &State, u: Unit, r: Rect) -> UnitL {
             for (i, cl) in cols.iter_mut().enumerate() {
                 *cl = tier_col(i as u8 + 1);
             }
-            let state = if k > 0 { c::TIER_NAMES[(k - 1) as usize] } else { "offline" };
+            let state = if k > 0 {
+                c::TIER_NAMES[(k - 1) as usize]
+            } else {
+                "offline"
+            };
             let sub = match g {
-                Some(g) => format!("{} \u{00B7} {} to {}", state, c::fmt_amount(g.left(), g.unit), g.tier_name()),
+                Some(g) => format!(
+                    "{} \u{00B7} {} to {}",
+                    state,
+                    c::fmt_amount(g.left(), g.unit),
+                    g.tier_name()
+                ),
                 None => format!("{} \u{00B7} top tier", state),
             };
-            UnitL { unit: u, r, title: b.name.to_string(), sub, leds: (k, 7, cols), bar: g.map(|g| (g.frac(), tier_col(g.tier))), live: k > 0 }
+            UnitL {
+                unit: u,
+                r,
+                title: b.name.to_string(),
+                sub,
+                leds: (k, 7, cols),
+                bar: g.map(|g| (g.frac(), tier_col(g.tier))),
+                live: k > 0,
+            }
         }
         Unit::Singles(cat) => {
-            let all: Vec<_> = Catalog::all().iter().filter(|b| b.category == cat).collect();
+            let all: Vec<_> = Catalog::all()
+                .iter()
+                .filter(|b| b.category == cat)
+                .collect();
             let got = all.iter().filter(|b| s.earned(b.id)).count();
             let tc = tier_col(single_tier(cat));
             let next = all.iter().find(|b| !s.earned(b.id));
@@ -840,7 +1463,15 @@ fn unit_l(s: &State, u: Unit, r: Rect) -> UnitL {
                 Some(b) => format!("{} of {} \u{00B7} next: {}", got, all.len(), b.name),
                 None => format!("all {} earned", all.len()),
             };
-            UnitL { unit: u, r, title: cat_name(cat).to_string(), sub, leds: (got as u8, all.len().min(7) as u8, [tc; 7]), bar: None, live: got > 0 }
+            UnitL {
+                unit: u,
+                r,
+                title: cat_name(cat).to_string(),
+                sub,
+                leds: (got as u8, all.len().min(7) as u8, [tc; 7]),
+                bar: None,
+                live: got > 0,
+            }
         }
     }
 }
@@ -854,10 +1485,27 @@ pub fn goal_card_h(dpi: u32) -> i32 {
 
 /// Draw the Overview "Next goal" card into `r` (client coordinates).
 #[allow(clippy::too_many_arguments)]
-pub fn draw_goal_card(cv: &mut Canvas, f: &Fonts, col: &Colors, dpi: u32, r: Rect, s: &State, g: &Goal, hover: bool) {
+pub fn draw_goal_card(
+    cv: &mut Canvas,
+    f: &Fonts,
+    col: &Colors,
+    dpi: u32,
+    r: Rect,
+    s: &State,
+    g: &Goal,
+    hover: bool,
+) {
     let sc = |v: i32| (v * dpi as i32 + 48) / 96;
     let rad = sc(6) as f32;
-    cv.fill_round(r, rad, if hover { col.card.mix(col.fg, 0.04) } else { col.card });
+    cv.fill_round(
+        r,
+        rad,
+        if hover {
+            col.card.mix(col.fg, 0.04)
+        } else {
+            col.card
+        },
+    );
     cv.stroke_round(r, rad, col.card_border);
     let rr = sc(26) as f32;
     let (cx, cy) = (r.l as f32 + sc(18) as f32 + rr, (r.t + r.b) as f32 / 2.0);
@@ -865,7 +1513,13 @@ pub fn draw_goal_card(cv: &mut Canvas, f: &Fonts, col: &Colors, dpi: u32, r: Rec
     cv.ring(cx, cy, rr, sc(5) as f32, g.frac(), tier_col(g.tier));
     let pct = format!("{}%", (g.frac() * 100.0).floor() as i32);
     let (pw, ph) = cv.measure(f.small, &pct);
-    cv.text(f.small, &pct, cx as i32 - pw / 2, cy as i32 - ph / 2, col.fg);
+    cv.text(
+        f.small,
+        &pct,
+        cx as i32 - pw / 2,
+        cy as i32 - ph / 2,
+        col.fg,
+    );
     let x = (cx + rr) as i32 + sc(16);
     let maxw = r.r - sc(16) - x;
     let lh = |cv: &Canvas, font| cv.measure(font, "Ag").1;
@@ -873,14 +1527,30 @@ pub fn draw_goal_card(cv: &mut Canvas, f: &Fonts, col: &Colors, dpi: u32, r: Rec
     let mut y = (r.t + r.b) / 2 - (h1 + h2 + h3) / 2;
     cv.text(f.tiny, "NEXT GOAL", x, y, col.dim);
     y += h1;
-    let t = cv.ellipsize(f.semi, &format!("{} \u{00B7} {}", g.name, g.tier_name()), maxw);
+    let t = cv.ellipsize(
+        f.semi,
+        &format!("{} \u{00B7} {}", g.name, g.tier_name()),
+        maxw,
+    );
     cv.text(f.semi, &t, x, y, col.fg);
     y += h2;
-    let mut line = format!("{} of {} \u{00B7} {} to go \u{00B7} +{} XP", c::fmt_amount(g.have, g.unit), c::fmt_amount(g.to as f64, g.unit), c::fmt_amount(g.left(), g.unit), g.xp);
-    if let Some(set) = Catalog::get(g.id).and_then(|b| b.set).and_then(Catalog::set) {
+    let mut line = format!(
+        "{} of {} \u{00B7} {} to go \u{00B7} +{} XP",
+        c::fmt_amount(g.have, g.unit),
+        c::fmt_amount(g.to as f64, g.unit),
+        c::fmt_amount(g.left(), g.unit),
+        g.xp
+    );
+    if let Some(set) = Catalog::get(g.id)
+        .and_then(|b| b.set)
+        .and_then(Catalog::set)
+    {
         let st = c::rack_status(s, set);
         if st.blockers == [g.id] {
-            line.push_str(&format!(" \u{00B7} completes the {} cert", c::TIER_NAMES[(st.next.unwrap_or(1) - 1) as usize]));
+            line.push_str(&format!(
+                " \u{00B7} completes the {} cert",
+                c::TIER_NAMES[(st.next.unwrap_or(1) - 1) as usize]
+            ));
         }
     }
     let l2 = cv.ellipsize(f.small, &line, maxw);
@@ -895,20 +1565,48 @@ pub fn chip_h(dpi: u32, labels: bool) -> i32 {
 
 /// Draw the level chip in `r`: a ring with the level, and (with labels) the title, XP and next goal.
 #[allow(clippy::too_many_arguments)]
-pub fn draw_chip(cv: &mut Canvas, f: &Fonts, col: &Colors, dpi: u32, r: Rect, s: &State, labels: bool, hover: bool) {
+pub fn draw_chip(
+    cv: &mut Canvas,
+    f: &Fonts,
+    col: &Colors,
+    dpi: u32,
+    r: Rect,
+    s: &State,
+    labels: bool,
+    hover: bool,
+) {
     let sc = |v: i32| (v * dpi as i32 + 48) / 96;
     let (lv, into, need) = c::level_progress(c::total_xp(s));
     if labels {
-        cv.fill_round(r, sc(6) as f32, if hover { col.card.mix(col.fg, 0.06) } else { col.card });
+        cv.fill_round(
+            r,
+            sc(6) as f32,
+            if hover {
+                col.card.mix(col.fg, 0.06)
+            } else {
+                col.card
+            },
+        );
         cv.stroke_round(r, sc(6) as f32, col.card_border);
     } else if hover {
         cv.fill_round(r, sc(4) as f32, col.card.mix(col.fg, 0.06));
     }
     let rr = sc(14) as f32;
-    let cx = if labels { r.l as f32 + sc(10) as f32 + rr } else { (r.l + r.r) as f32 / 2.0 };
+    let cx = if labels {
+        r.l as f32 + sc(10) as f32 + rr
+    } else {
+        (r.l + r.r) as f32 / 2.0
+    };
     let cy = (r.t + r.b) as f32 / 2.0;
     cv.ring(cx, cy, rr, sc(3) as f32, 1.0, col.line);
-    cv.ring(cx, cy, rr, sc(3) as f32, into as f32 / need.max(1) as f32, tier_col(1));
+    cv.ring(
+        cx,
+        cy,
+        rr,
+        sc(3) as f32,
+        into as f32 / need.max(1) as f32,
+        tier_col(1),
+    );
     let n = lv.to_string();
     let (nw, nh) = cv.measure(f.small, &n);
     cv.text(f.small, &n, cx as i32 - nw / 2, cy as i32 - nh / 2, col.fg);
@@ -919,7 +1617,11 @@ pub fn draw_chip(cv: &mut Canvas, f: &Fonts, col: &Colors, dpi: u32, r: Rect, s:
     let maxw = r.r - sc(8) - x;
     let (h1, h2) = (cv.measure(f.small, "Ag").1, cv.measure(f.tiny, "Ag").1);
     let y = (r.t + r.b) / 2 - (h1 + h2) / 2;
-    let t = cv.ellipsize(f.small, &format!("Level {lv} \u{00B7} {}", c::title_of(lv)), maxw);
+    let t = cv.ellipsize(
+        f.small,
+        &format!("Level {lv} \u{00B7} {}", c::title_of(lv)),
+        maxw,
+    );
     cv.text(f.small, &t, x, y, col.fg);
     let mut sub = format!("{into} / {need} XP");
     if let Some(g) = c::next_goal(s) {

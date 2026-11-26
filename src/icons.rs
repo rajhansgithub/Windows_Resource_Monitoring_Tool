@@ -97,7 +97,8 @@ struct Uia {
 impl Uia {
     fn new() -> Option<Uia> {
         unsafe {
-            let auto: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
+            let auto: IUIAutomation =
+                CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
             let cache = auto.CreateCacheRequest().ok()?;
             cache.AddProperty(UIA_BoundingRectanglePropertyId).ok()?;
             cache.AddProperty(UIA_ControlTypePropertyId).ok()?;
@@ -113,8 +114,13 @@ impl Uia {
     fn measure(&self, t: &Target) -> Option<(i32, Option<i32>)> {
         unsafe {
             let hwnd = HWND(t.taskbar as *mut core::ffi::c_void);
-            let root = self.auto.ElementFromHandleBuildCache(hwnd, &self.cache).ok()?;
-            let all = root.FindAllBuildCache(TreeScope_Descendants, &self.cond, &self.cache).ok()?;
+            let root = self
+                .auto
+                .ElementFromHandleBuildCache(hwnd, &self.cache)
+                .ok()?;
+            let all = root
+                .FindAllBuildCache(TreeScope_Descendants, &self.cond, &self.cache)
+                .ok()?;
             let n = all.Length().ok()?;
             let tb = t.rect;
             let mut buttons: Vec<RECT> = Vec::new();
@@ -124,13 +130,18 @@ impl Uia {
                 if e.CachedControlType().ok() != Some(UIA_ButtonControlTypeId) {
                     continue;
                 }
-                let Ok(r) = e.CachedBoundingRectangle() else { continue };
+                let Ok(r) = e.CachedBoundingRectangle() else {
+                    continue;
+                };
                 if !is_icon(&r, tb, tb.r + 2) {
                     continue;
                 }
                 // Win11 tray items (clock, show-desktop, notification icons)
                 // are "SystemTray.*"; they are not app icons.
-                let cls = e.CachedClassName().map(|b| b.to_string()).unwrap_or_default();
+                let cls = e
+                    .CachedClassName()
+                    .map(|b| b.to_string())
+                    .unwrap_or_default();
                 if cls.starts_with("SystemTray.") {
                     tray_l = Some(tray_l.map_or(r.left, |v: i32| v.min(r.left)));
                     continue;
@@ -146,7 +157,12 @@ impl Uia {
                 Some(x) => x.min(t.limit),
                 None => t.limit,
             };
-            let right = buttons.iter().filter(|r| r.left < limit - 2).map(|r| r.right).max().unwrap_or(tb.l);
+            let right = buttons
+                .iter()
+                .filter(|r| r.left < limit - 2)
+                .map(|r| r.right)
+                .max()
+                .unwrap_or(tb.l);
             Some((right, tray_l))
         }
     }
@@ -189,7 +205,8 @@ fn worker(shared: Arc<(Mutex<Shared>, Condvar)>, notify: isize) {
             // Right after sign-in Explorer is still building the taskbar and
             // tray (the "Show hidden icons" arrow appears late), so the
             // startup check waits until it has settled; otherwise a moment.
-            let uptime_s = unsafe { windows_sys::Win32::System::SystemInformation::GetTickCount64() } / 1000;
+            let uptime_s =
+                unsafe { windows_sys::Win32::System::SystemInformation::GetTickCount64() } / 1000;
             let wait = if uptime_s < 180 { 20_000 } else { 400 };
             std::thread::sleep(Duration::from_millis(wait));
             let Ok(s) = m.lock() else { return };
@@ -204,18 +221,15 @@ fn worker(shared: Arc<(Mutex<Shared>, Condvar)>, notify: isize) {
         }
         let Some(uia) = &uia else { continue };
         for t in &targets {
-            let Some((x, tray)) = uia.measure(t) else { continue };
+            let Some((x, tray)) = uia.measure(t) else {
+                continue;
+            };
             unsafe {
                 use windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW;
                 if let Some(tl) = tray {
                     PostMessageW(notify as _, WM_APP_TRAY, t.taskbar as usize, tl as isize);
                 }
-                PostMessageW(
-                    notify as _,
-                    WM_APP_ICONS,
-                    t.taskbar as usize,
-                    x as isize,
-                );
+                PostMessageW(notify as _, WM_APP_ICONS, t.taskbar as usize, x as isize);
             }
         }
     }
@@ -226,8 +240,18 @@ mod tests {
     use super::*;
     #[test]
     fn icon_filter() {
-        let tb = crate::util::Rect { l: 0, t: 1032, r: 1920, b: 1080 };
-        let r = |l, t, rr, b| RECT { left: l, top: t, right: rr, bottom: b };
+        let tb = crate::util::Rect {
+            l: 0,
+            t: 1032,
+            r: 1920,
+            b: 1080,
+        };
+        let r = |l, t, rr, b| RECT {
+            left: l,
+            top: t,
+            right: rr,
+            bottom: b,
+        };
         assert!(is_icon(&r(900, 1036, 940, 1076), tb, 1700));
         assert!(!is_icon(&r(1710, 1036, 1750, 1076), tb, 1700)); // tray
         assert!(!is_icon(&r(0, 1032, 1920, 1080), tb, 1700)); // container

@@ -234,7 +234,9 @@ pub fn split_gap(gap_ms: u64, interval_ms: u64) -> (u64, bool) {
 
 /// Our own process and the idle pseudo-processes never count as culprits.
 fn ignored_proc(name: &str) -> bool {
-    ["ResourceMonitor", "Idle", "System Idle Process", "_Total"].iter().any(|n| n.eq_ignore_ascii_case(name))
+    ["ResourceMonitor", "Idle", "System Idle Process", "_Total"]
+        .iter()
+        .any(|n| n.eq_ignore_ascii_case(name))
 }
 
 /// Bag Guard decision. `reads` are (unix ms, mWh), oldest first, taken once a minute while
@@ -254,8 +256,13 @@ pub fn bag_guard_due(
         Some(m) if m > 0 => m as f32,
         _ => return false,
     };
-    let Some(&(t1, m1)) = reads.last() else { return false };
-    let Some(&(t0, m0)) = reads.iter().find(|(t, _)| t1.saturating_sub(*t) <= GUARD_WINDOW_MS + 60_000) else {
+    let Some(&(t1, m1)) = reads.last() else {
+        return false;
+    };
+    let Some(&(t0, m0)) = reads
+        .iter()
+        .find(|(t, _)| t1.saturating_sub(*t) <= GUARD_WINDOW_MS + 60_000)
+    else {
         return false;
     };
     let span = t1.saturating_sub(t0);
@@ -293,7 +300,11 @@ pub fn verdict(n: &Night) -> (Tone, String) {
     match n.drain_per_h() {
         None => {
             // "On power" only means something on a PC that has a battery.
-            let place = if n.on_ac && n.battery { " on power" } else { "" };
+            let place = if n.on_ac && n.battery {
+                " on power"
+            } else {
+                ""
+            };
             if awake > 50 {
                 let mut t = format!("Stayed awake {}% of {}{}.", awake, dur(total), place);
                 if let Some(c) = culprit {
@@ -301,15 +312,30 @@ pub fn verdict(n: &Night) -> (Tone, String) {
                 }
                 (Tone::Warn, t)
             } else {
-                (Tone::Info, format!("Slept {}{}. Awake {}% of the time.", dur(total), place, awake))
+                (
+                    Tone::Info,
+                    format!(
+                        "Slept {}{}. Awake {}% of the time.",
+                        dur(total),
+                        place,
+                        awake
+                    ),
+                )
             }
         }
         Some(rate) => {
             let lost = n.lost_pct().unwrap_or(0.0).round() as u32;
             if rate <= GOOD_RATE {
-                return (Tone::Good, format!("Slept {}. Lost {}%. Good.", dur(total), lost));
+                return (
+                    Tone::Good,
+                    format!("Slept {}. Lost {}%. Good.", dur(total), lost),
+                );
             }
-            let tone = if rate <= WARN_RATE { Tone::Warn } else { Tone::Bad };
+            let tone = if rate <= WARN_RATE {
+                Tone::Warn
+            } else {
+                Tone::Bad
+            };
             let mut t = format!("Lost {}% in {}.", lost, dur_short(total));
             if awake > 30 {
                 match culprit {
@@ -333,14 +359,25 @@ pub fn notice_for(n: &Night) -> Option<Notice> {
         return None;
     }
     let (tone, text) = verdict(n);
-    let title = if tone == Tone::Bad { "Battery drained while asleep" } else { "Sleep verdict" };
-    Some(Notice { key: "sleep", title: title.into(), text })
+    let title = if tone == Tone::Bad {
+        "Battery drained while asleep"
+    } else {
+        "Sleep verdict"
+    };
+    Some(Notice {
+        key: "sleep",
+        title: title.into(),
+        text,
+    })
 }
 
 /// Field lookup by several candidate names, ignoring case; empty values count as missing.
 fn field<'a>(e: &'a SysEvent, names: &[&str]) -> Option<&'a str> {
     names.iter().find_map(|k| {
-        e.data.iter().find(|(n, v)| n.eq_ignore_ascii_case(k) && !v.trim().is_empty()).map(|(_, v)| v.trim())
+        e.data
+            .iter()
+            .find(|(n, v)| n.eq_ignore_ascii_case(k) && !v.trim().is_empty())
+            .map(|(_, v)| v.trim())
     })
 }
 
@@ -374,7 +411,11 @@ fn reason_from_code(c: u32) -> Option<&'static str> {
 /// Turn a wake source text ("Device -Intel(R) Ethernet Connection") into plain words.
 pub fn clean_reason(text: &str) -> Option<String> {
     let t = text.trim();
-    let t = t.strip_prefix("Device -").or_else(|| t.strip_prefix("Device-")).unwrap_or(t).trim();
+    let t = t
+        .strip_prefix("Device -")
+        .or_else(|| t.strip_prefix("Device-"))
+        .unwrap_or(t)
+        .trim();
     let l = t.to_ascii_lowercase();
     if l.is_empty() || l.contains("unknown") {
         return None;
@@ -384,7 +425,15 @@ pub fn clean_reason(text: &str) -> Option<String> {
         "Power button"
     } else if has(&["sleep button"]) {
         "Sleep button"
-    } else if has(&["ethernet", "wi-fi", "wifi", "wireless", "wlan", "network", "gbe family"]) {
+    } else if has(&[
+        "ethernet",
+        "wi-fi",
+        "wifi",
+        "wireless",
+        "wlan",
+        "network",
+        "gbe family",
+    ]) {
         "network adapter"
     } else if has(&["keyboard"]) {
         "keyboard"
@@ -410,8 +459,19 @@ pub fn clean_reason(text: &str) -> Option<String> {
 pub fn wake_info(e: &SysEvent) -> Option<(bool, Option<Wake>)> {
     let p = e.provider.to_ascii_lowercase();
     if p.ends_with("power-troubleshooter") && e.id == 1 {
-        let reason = field(e, &["WakeSourceText", "WakeSource", "WakeSourceName", "Source"]).and_then(clean_reason);
-        return Some((true, reason.map(|reason| Wake { t_ms: e.t_ms, rank: 2, reason })));
+        let reason = field(
+            e,
+            &["WakeSourceText", "WakeSource", "WakeSourceName", "Source"],
+        )
+        .and_then(clean_reason);
+        return Some((
+            true,
+            reason.map(|reason| Wake {
+                t_ms: e.t_ms,
+                rank: 2,
+                reason,
+            }),
+        ));
     }
     if !p.ends_with("kernel-power") {
         return None;
@@ -423,9 +483,25 @@ pub fn wake_info(e: &SysEvent) -> Option<(bool, Option<Wake>)> {
                 .and_then(reason_from_code)
                 .map(str::to_string);
             let reason = by_code.or_else(|| {
-                field(e, &["ReasonText", "ExitReasonText", "ReasonString", "Description"]).and_then(clean_reason)
+                field(
+                    e,
+                    &[
+                        "ReasonText",
+                        "ExitReasonText",
+                        "ReasonString",
+                        "Description",
+                    ],
+                )
+                .and_then(clean_reason)
             });
-            Some((true, reason.map(|reason| Wake { t_ms: e.t_ms, rank: 1, reason })))
+            Some((
+                true,
+                reason.map(|reason| Wake {
+                    t_ms: e.t_ms,
+                    rank: 1,
+                    reason,
+                }),
+            ))
         }
         42 | 107 | 506 => Some((true, None)),
         _ => None,
@@ -446,7 +522,9 @@ fn merge_wake(cur: &mut Option<Wake>, new: Wake) {
 
 /// Read the battery (mWh when the firmware reports it), else the snapshot's percent.
 fn read_battery(fallback: Option<Battery>) -> BatRead {
-    use windows_sys::Win32::System::Power::{CallNtPowerInformation, SystemBatteryState, SYSTEM_BATTERY_STATE};
+    use windows_sys::Win32::System::Power::{
+        CallNtPowerInformation, SystemBatteryState, SYSTEM_BATTERY_STATE,
+    };
     let fb = BatRead {
         present: fallback.is_some(),
         on_ac: fallback.is_some_and(|b| b.on_ac),
@@ -470,10 +548,15 @@ fn read_battery(fallback: Option<Battery>) -> BatRead {
         st
     };
     if st.BatteryPresent == 0 {
-        return BatRead { present: false, on_ac: st.AcOnLine != 0, ..Default::default() };
+        return BatRead {
+            present: false,
+            on_ac: st.AcOnLine != 0,
+            ..Default::default()
+        };
     }
     let known = |v: u32| v != 0 && v != u32::MAX;
-    let (mwh, max_mwh) = if known(st.MaxCapacity) && st.RemainingCapacity != u32::MAX
+    let (mwh, max_mwh) = if known(st.MaxCapacity)
+        && st.RemainingCapacity != u32::MAX
         && st.RemainingCapacity <= st.MaxCapacity.saturating_add(st.MaxCapacity / 10)
     {
         (Some(st.RemainingCapacity), Some(st.MaxCapacity))
@@ -484,7 +567,13 @@ fn read_battery(fallback: Option<Battery>) -> BatRead {
         (Some(r), Some(m)) => Some((r as f32 / m as f32 * 100.0).min(100.0)),
         _ => fb.pct,
     };
-    BatRead { present: true, on_ac: st.AcOnLine != 0, mwh, max_mwh, pct }
+    BatRead {
+        present: true,
+        on_ac: st.AcOnLine != 0,
+        mwh,
+        max_mwh,
+        pct,
+    }
 }
 
 /// Test stand-in: reports failure, touches nothing.
@@ -509,8 +598,8 @@ fn hibernate_async() -> Option<Receiver<bool>> {
 fn hibernate_blocking() -> bool {
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, LUID};
     use windows_sys::Win32::Security::{
-        AdjustTokenPrivileges, LookupPrivilegeValueW, LUID_AND_ATTRIBUTES, SE_PRIVILEGE_ENABLED, SE_SHUTDOWN_NAME,
-        TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
+        AdjustTokenPrivileges, LookupPrivilegeValueW, LUID_AND_ATTRIBUTES, SE_PRIVILEGE_ENABLED,
+        SE_SHUTDOWN_NAME, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
     };
     use windows_sys::Win32::System::Power::{IsPwrHibernateAllowed, SetSuspendState};
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
@@ -522,12 +611,23 @@ fn hibernate_blocking() -> bool {
     // SAFETY: token handle is ours and closed below; the privilege struct is fully initialised.
     unsafe {
         let mut tok: HANDLE = std::ptr::null_mut();
-        if OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &mut tok) != 0 {
-            let mut luid = LUID { LowPart: 0, HighPart: 0 };
+        if OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            &mut tok,
+        ) != 0
+        {
+            let mut luid = LUID {
+                LowPart: 0,
+                HighPart: 0,
+            };
             if LookupPrivilegeValueW(std::ptr::null(), SE_SHUTDOWN_NAME, &mut luid) != 0 {
                 let tp = TOKEN_PRIVILEGES {
                     PrivilegeCount: 1,
-                    Privileges: [LUID_AND_ATTRIBUTES { Luid: luid, Attributes: SE_PRIVILEGE_ENABLED }],
+                    Privileges: [LUID_AND_ATTRIBUTES {
+                        Luid: luid,
+                        Attributes: SE_PRIVILEGE_ENABLED,
+                    }],
                 };
                 AdjustTokenPrivileges(tok, 0, &tp, 0, std::ptr::null_mut(), std::ptr::null_mut());
             }
@@ -592,7 +692,11 @@ impl Sleep {
             dirty: false,
             reader: read_battery,
             // Unit tests must never hibernate the machine running them.
-            hibernate: if cfg!(test) { no_hibernate } else { hibernate_async },
+            hibernate: if cfg!(test) {
+                no_hibernate
+            } else {
+                hibernate_async
+            },
         }
     }
 
@@ -616,7 +720,9 @@ impl Sleep {
                 // stayed awake; on a desktop that is every time the screen sleeps. Once a day.
                 let no_drain = night.drain_per_h().is_none();
                 let day = time::day(now);
-                if let Some(n) = notice_for(night).filter(|_| !no_drain || self.awake_toast_day != day) {
+                if let Some(n) =
+                    notice_for(night).filter(|_| !no_drain || self.awake_toast_day != day)
+                {
                     if no_drain {
                         self.awake_toast_day = day;
                     }
@@ -633,7 +739,9 @@ impl Sleep {
         let reader = self.reader;
         let disp_off = !self.disp_on && !c.display_on;
         let (lid_closed, bag_guard, cores) = (self.lid_closed, self.bag_guard, self.cores);
-        let Some(start) = self.cur.as_ref().map(|s| s.start_ms) else { return };
+        let Some(start) = self.cur.as_ref().map(|s| s.start_ms) else {
+            return;
+        };
         // Real return without a DisplayOn message (e.g. after S3 on some PCs): screen on
         // and keyboard / mouse input after the night began.
         let input_at = now.saturating_sub(c.input_idle_ms);
@@ -643,7 +751,11 @@ impl Sleep {
         }
         let Some(s) = self.cur.as_mut() else { return };
         let wall = now.saturating_sub(s.last_tick_ms);
-        let gap = if s.ticked { wall.max((c.snap.elapsed * 1000.0) as u64) } else { wall };
+        let gap = if s.ticked {
+            wall.max((c.snap.elapsed * 1000.0) as u64)
+        } else {
+            wall
+        };
         s.interval_ms = (c.interval_ms as u64).max(1000);
         s.ticked = true;
         s.last_tick_ms = now;
@@ -671,7 +783,16 @@ impl Sleep {
             }
         }
         // Never on a PC without a battery (a desktop has nothing to save).
-        if s.bat0.present && bag_guard_due(bag_guard, lid_closed, s.on_ac, s.guard_tried, s.max_mwh, &s.reads) {
+        if s.bat0.present
+            && bag_guard_due(
+                bag_guard,
+                lid_closed,
+                s.on_ac,
+                s.guard_tried,
+                s.max_mwh,
+                &s.reads,
+            )
+        {
             s.guard_tried = true;
             crate::util::diag("Bag Guard: fast drain with the lid closed. Hibernating.");
             match (self.hibernate)() {
@@ -704,7 +825,9 @@ impl Sleep {
     }
 
     pub fn on_event(&mut self, e: &SysEvent) {
-        let Some((slept, wake)) = wake_info(e) else { return };
+        let Some((slept, wake)) = wake_info(e) else {
+            return;
+        };
         if let Some(s) = self.cur.as_mut() {
             if e.t_ms + SAME_WAKE_MS >= s.start_ms {
                 s.slept |= slept;
@@ -717,7 +840,9 @@ impl Sleep {
         if self.last_now > self.attach_until {
             return;
         }
-        let Some(n) = self.nights.last_mut() else { return };
+        let Some(n) = self.nights.last_mut() else {
+            return;
+        };
         if e.t_ms + SAME_WAKE_MS < n.start_ms || e.t_ms > n.end_ms + ATTACH_MS {
             return;
         }
@@ -789,7 +914,11 @@ impl Sleep {
         if total < MIN_NIGHT_MS {
             return;
         }
-        let b1 = if s.bat0.present { (self.reader)(self.last_bat) } else { BatRead::default() };
+        let b1 = if s.bat0.present {
+            (self.reader)(self.last_bat)
+        } else {
+            BatRead::default()
+        };
         let both = |a: Option<u32>, b: Option<u32>| a.is_some() && b.is_some();
         let mwh_ok = both(s.bat0.mwh, b1.mwh);
         let pct_ok = s.bat0.pct.is_some() && b1.pct.is_some();
@@ -801,7 +930,11 @@ impl Sleep {
             on_ac: s.on_ac || b1.on_ac,
             mwh0: if mwh_ok { s.bat0.mwh } else { None },
             mwh1: if mwh_ok { b1.mwh } else { None },
-            mwh_max: if mwh_ok { b1.max_mwh.or(s.max_mwh) } else { None },
+            mwh_max: if mwh_ok {
+                b1.max_mwh.or(s.max_mwh)
+            } else {
+                None
+            },
             pct0: if pct_ok { s.bat0.pct } else { None },
             pct1: if pct_ok { b1.pct } else { None },
             culprit: s.culprit(),
@@ -846,7 +979,9 @@ impl Sleep {
     }
 
     pub fn load(&mut self, j: &Json) {
-        let Some(arr) = j.get("nights").and_then(Json::as_arr) else { return };
+        let Some(arr) = j.get("nights").and_then(Json::as_arr) else {
+            return;
+        };
         let mut v: Vec<Night> = arr.iter().filter_map(night_from).collect();
         v.sort_by_key(|n| n.start_ms);
         let skip = v.len().saturating_sub(MAX_NIGHTS);
@@ -856,7 +991,9 @@ impl Sleep {
     /// This PC has a battery: the latest snapshot says so, or (before the first sample)
     /// the latest night had one. Follows a battery that appears or goes away.
     pub fn has_battery(&self) -> bool {
-        self.battery.or_else(|| self.nights.last().map(|n| n.battery)).unwrap_or(false)
+        self.battery
+            .or_else(|| self.nights.last().map(|n| n.battery))
+            .unwrap_or(false)
     }
 
     pub fn panel(&self, _now_ms: u64) -> Panel {
@@ -867,7 +1004,11 @@ impl Sleep {
                 title: "Sleep Verdict",
                 tone: Tone::Learning,
                 headline: empty_headline(battery).into(),
-                lines: if battery { vec![guard_line(self.bag_guard).into()] } else { Vec::new() },
+                lines: if battery {
+                    vec![guard_line(self.bag_guard).into()]
+                } else {
+                    Vec::new()
+                },
                 visual: None,
                 chart: None,
                 items: vec![],
@@ -885,10 +1026,24 @@ impl Sleep {
             if let Some(t) = n.guard_ms {
                 detail += &format!(" \u{b7} Bag Guard hibernated at {}", time::hhmm(t));
             }
-            Item { t_ms: n.start_ms, tone, title, detail }
+            Item {
+                t_ms: n.start_ms,
+                tone,
+                title,
+                detail,
+            }
         };
         let items = self.nights.iter().rev().map(item).collect();
-        Panel { key: "sleep", title: "Sleep Verdict", tone, headline, lines, visual: None, chart, items }
+        Panel {
+            key: "sleep",
+            title: "Sleep Verdict",
+            tone,
+            headline,
+            lines,
+            visual: None,
+            chart,
+            items,
+        }
     }
 }
 
@@ -923,7 +1078,10 @@ pub fn night_lines(n: &Night, battery: bool, guard_on: bool) -> Vec<String> {
         let asleep = n.total_ms().saturating_sub(u64::from(n.awake_s) * 1000);
         lines.push(format!("Asleep {} of {}.", dur(asleep), dur(n.total_ms())));
     }
-    lines.push(format!("Awake {}% of the time.", n.awake_pct().round() as u32));
+    lines.push(format!(
+        "Awake {}% of the time.",
+        n.awake_pct().round() as u32
+    ));
     if let Some(w) = &n.wake {
         lines.push(format!("Woke by: {}.", w.reason));
     }
@@ -948,7 +1106,10 @@ pub fn night_lines(n: &Night, battery: bool, guard_on: bool) -> Vec<String> {
 /// One bar per night, coloured by its verdict: battery drain per hour when any night
 /// has a drain figure, else (a desktop, or always on power) the share of time awake.
 pub fn nights_chart(nights: &[Night]) -> Option<Chart> {
-    let drain: Vec<&Night> = nights.iter().filter(|n| n.drain_per_h().is_some()).collect();
+    let drain: Vec<&Night> = nights
+        .iter()
+        .filter(|n| n.drain_per_h().is_some())
+        .collect();
     let (label, unit, used): (&str, &'static str, Vec<&Night>) = if !drain.is_empty() {
         ("Drain per hour, last 14 nights", "%/h", drain)
     } else {
@@ -958,10 +1119,23 @@ pub fn nights_chart(nights: &[Night]) -> Option<Chart> {
         return None;
     }
     let per_h = unit == "%/h";
-    let points = used.iter().map(|n| if per_h { n.drain_per_h().unwrap_or(0.0) } else { n.awake_pct() }).collect();
+    let points = used
+        .iter()
+        .map(|n| {
+            if per_h {
+                n.drain_per_h().unwrap_or(0.0)
+            } else {
+                n.awake_pct()
+            }
+        })
+        .collect();
     let tones = used.iter().map(|n| verdict(n).0).collect();
     // "Last night" only when the newest bar is the latest night.
-    let newest = if used.last().map(|n| n.start_ms) == nights.last().map(|n| n.start_ms) { "Last night" } else { "Newest" };
+    let newest = if used.last().map(|n| n.start_ms) == nights.last().map(|n| n.start_ms) {
+        "Last night"
+    } else {
+        "Newest"
+    };
     let left = if used.len() > 1 { "Older" } else { "" };
     Some(Chart {
         label: label.into(),
@@ -993,8 +1167,16 @@ fn night_json(n: &Night) -> Json {
     opt(&mut v, "m0", n.mwh0.map(f64::from));
     opt(&mut v, "m1", n.mwh1.map(f64::from));
     opt(&mut v, "mx", n.mwh_max.map(f64::from));
-    opt(&mut v, "p0", n.pct0.map(|p| (p as f64 * 10.0).round() / 10.0));
-    opt(&mut v, "p1", n.pct1.map(|p| (p as f64 * 10.0).round() / 10.0));
+    opt(
+        &mut v,
+        "p0",
+        n.pct0.map(|p| (p as f64 * 10.0).round() / 10.0),
+    );
+    opt(
+        &mut v,
+        "p1",
+        n.pct1.map(|p| (p as f64 * 10.0).round() / 10.0),
+    );
     opt(&mut v, "bg", n.guard_ms.map(|t| t as f64));
     if let Some((name, s)) = &n.culprit {
         v.push(("cn", Json::Str(name.clone())));
@@ -1009,8 +1191,16 @@ fn night_json(n: &Night) -> Json {
 }
 
 fn night_from(j: &Json) -> Option<Night> {
-    let u32f = |k| num(j, k).filter(|x| *x >= 0.0 && *x <= u32::MAX as f64).map(|x| x as u32);
-    let pct = |k| num(j, k).filter(|x| (0.0..=100.0).contains(x)).map(|x| x as f32);
+    let u32f = |k| {
+        num(j, k)
+            .filter(|x| *x >= 0.0 && *x <= u32::MAX as f64)
+            .map(|x| x as u32)
+    };
+    let pct = |k| {
+        num(j, k)
+            .filter(|x| (0.0..=100.0).contains(x))
+            .map(|x| x as f32)
+    };
     let flag = |k| matches!(j.get(k), Some(Json::Bool(true)));
     let start_ms = num(j, "s").filter(|x| *x > 0.0)? as u64;
     let end_ms = num(j, "e").filter(|x| *x > 0.0)? as u64;
@@ -1018,14 +1208,20 @@ fn night_from(j: &Json) -> Option<Night> {
         return None;
     }
     let culprit = match (j.get("cn").and_then(Json::as_str), num(j, "cs")) {
-        (Some(n), Some(s)) if !n.is_empty() && s >= 0.0 => Some((n.chars().take(64).collect(), s as f32)),
+        (Some(n), Some(s)) if !n.is_empty() && s >= 0.0 => {
+            Some((n.chars().take(64).collect(), s as f32))
+        }
         _ => None,
     };
-    let wake = j.get("wk").and_then(Json::as_str).filter(|s| !s.is_empty()).map(|r| Wake {
-        t_ms: num(j, "wt").unwrap_or(0.0).max(0.0) as u64,
-        rank: num(j, "wr").unwrap_or(0.0).clamp(0.0, 2.0) as u8,
-        reason: r.chars().take(64).collect(),
-    });
+    let wake = j
+        .get("wk")
+        .and_then(Json::as_str)
+        .filter(|s| !s.is_empty())
+        .map(|r| Wake {
+            t_ms: num(j, "wt").unwrap_or(0.0).max(0.0) as u64,
+            rank: num(j, "wr").unwrap_or(0.0).clamp(0.0, 2.0) as u8,
+            reason: r.chars().take(64).collect(),
+        });
     let total_s = ((end_ms - start_ms) / 1000) as u32;
     Some(Night {
         start_ms,
@@ -1066,7 +1262,13 @@ mod tests {
         if !present {
             return BatRead::default();
         }
-        BatRead { present, on_ac, mwh: Some(m), max_mwh: Some(mx), pct: Some(m as f32 / mx as f32 * 100.0) }
+        BatRead {
+            present,
+            on_ac,
+            mwh: Some(m),
+            max_mwh: Some(mx),
+            pct: Some(m as f32 / mx as f32 * 100.0),
+        }
     }
 
     fn fake_hib() -> Option<Receiver<bool>> {
@@ -1095,7 +1297,11 @@ mod tests {
             elapsed: elapsed_s,
             top_cpu: procs
                 .iter()
-                .map(|(n, c)| ProcStat { name: n.to_string(), cpu: *c, ..Default::default() })
+                .map(|(n, c)| ProcStat {
+                    name: n.to_string(),
+                    cpu: *c,
+                    ..Default::default()
+                })
                 .collect(),
             ..Default::default()
         };
@@ -1168,7 +1374,10 @@ mod tests {
         let mut s = sleep();
         s.on_power(Power::Suspend, T0);
         s.on_power(Power::Resume, T0 + 3 * H);
-        assert!(s.cur.is_some(), "resume alone with the display off does not end the night");
+        assert!(
+            s.cur.is_some(),
+            "resume alone with the display off does not end the night"
+        );
         s.on_power(Power::DisplayOn, T0 + 3 * H + 2000);
         let n = s.nights.last().unwrap();
         assert!(n.slept);
@@ -1188,33 +1397,60 @@ mod tests {
     #[test]
     fn verdict_texts() {
         let good = night(7 * H + 42 * MIN, 80.0, 77.0, 4.0);
-        assert_eq!(verdict(&good), (Tone::Good, "Slept 7h 42m. Lost 3%. Good.".into()));
+        assert_eq!(
+            verdict(&good),
+            (Tone::Good, "Slept 7h 42m. Lost 3%. Good.".into())
+        );
 
         let mut bad = night(2 * H, 90.0, 49.0, 71.0);
         bad.culprit = Some(("SearchIndexer".into(), 900.0));
         assert_eq!(
             verdict(&bad),
-            (Tone::Bad, "Lost 41% in 2h. Awake 71% of the time. SearchIndexer was busy.".into())
+            (
+                Tone::Bad,
+                "Lost 41% in 2h. Awake 71% of the time. SearchIndexer was busy.".into()
+            )
         );
 
         let insomnia = night(5 * H, 90.0, 72.0, 60.0);
-        assert_eq!(verdict(&insomnia), (Tone::Warn, "Lost 18% in 5h. It stayed awake 60% of the time.".into()));
+        assert_eq!(
+            verdict(&insomnia),
+            (
+                Tone::Warn,
+                "Lost 18% in 5h. It stayed awake 60% of the time.".into()
+            )
+        );
 
         let mut ac = night(7 * H + 42 * MIN, 80.0, 100.0, 4.0);
         ac.on_ac = true;
-        assert_eq!(verdict(&ac), (Tone::Info, "Slept 7h 42m on power. Awake 4% of the time.".into()));
+        assert_eq!(
+            verdict(&ac),
+            (
+                Tone::Info,
+                "Slept 7h 42m on power. Awake 4% of the time.".into()
+            )
+        );
 
         let mut desk = night(7 * H + 42 * MIN, 0.0, 0.0, 4.0);
         desk.battery = false;
         desk.pct0 = None;
         desk.pct1 = None;
-        assert_eq!(verdict(&desk), (Tone::Info, "Slept 7h 42m. Awake 4% of the time.".into()));
-        assert!(notice_for(&desk).is_none(), "no toast without drain unless mostly awake");
+        assert_eq!(
+            verdict(&desk),
+            (Tone::Info, "Slept 7h 42m. Awake 4% of the time.".into())
+        );
+        assert!(
+            notice_for(&desk).is_none(),
+            "no toast without drain unless mostly awake"
+        );
 
         let n = notice_for(&bad).unwrap();
         assert_eq!(n.title, "Battery drained while asleep");
         assert_eq!(notice_for(&good).unwrap().title, "Sleep verdict");
-        assert!(notice_for(&night(15 * MIN, 90.0, 50.0, 90.0)).is_none(), "too short to toast");
+        assert!(
+            notice_for(&night(15 * MIN, 90.0, 50.0, 90.0)).is_none(),
+            "too short to toast"
+        );
     }
 
     #[test]
@@ -1236,7 +1472,10 @@ mod tests {
         let end = T0 + H;
         s.on_power(Power::DisplayOn, end);
         assert!(s.dirty());
-        assert!(ticks(&mut s, end, end + 110_000).is_empty(), "waits for the wake event");
+        assert!(
+            ticks(&mut s, end, end + 110_000).is_empty(),
+            "waits for the wake event"
+        );
         let out = ticks(&mut s, end + 110_000, end + 4 * MIN);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].title, "Battery drained while asleep");
@@ -1258,7 +1497,10 @@ mod tests {
             data: vec![("WakeSourceText".into(), "Power Button".into())],
         };
         s.on_event(&e);
-        assert_eq!(s.nights.last().unwrap().wake.as_ref().unwrap().reason, "Power button");
+        assert_eq!(
+            s.nights.last().unwrap().wake.as_ref().unwrap().reason,
+            "Power button"
+        );
         let out = tick(&mut s, end + 5000);
         assert_eq!(out.len(), 1, "wake reason arrived, no need to wait");
         assert!(tick(&mut s, end + 10_000).is_empty());
@@ -1272,8 +1514,15 @@ mod tests {
             ..Default::default()
         };
         s.on_event(&late);
-        assert_eq!(s.nights.last().unwrap().wake.as_ref().unwrap().reason, "Power button");
-        assert!(s.panel(end).lines.iter().any(|l| l == "Woke by: Power button."));
+        assert_eq!(
+            s.nights.last().unwrap().wake.as_ref().unwrap().reason,
+            "Power button"
+        );
+        assert!(s
+            .panel(end)
+            .lines
+            .iter()
+            .any(|l| l == "Woke by: Power button."));
     }
 
     #[test]
@@ -1287,10 +1536,18 @@ mod tests {
         let kp = "Microsoft-Windows-Kernel-Power";
         let r = |e: SysEvent| wake_info(&e).and_then(|(_, w)| w).map(|w| w.reason);
         assert_eq!(r(ev(kp, 507, "Reason", "31")).as_deref(), Some("keyboard"));
-        assert_eq!(r(ev(kp, 507, "reason", "0x1")).as_deref(), Some("Power button"));
+        assert_eq!(
+            r(ev(kp, 507, "reason", "0x1")).as_deref(),
+            Some("Power button")
+        );
         assert_eq!(r(ev(kp, 507, "Reason", "999")), None);
         let pt = "Microsoft-Windows-Power-Troubleshooter";
-        let eth = ev(pt, 1, "WakeSourceText", "Device -Intel(R) Ethernet Connection");
+        let eth = ev(
+            pt,
+            1,
+            "WakeSourceText",
+            "Device -Intel(R) Ethernet Connection",
+        );
         assert_eq!(r(eth).as_deref(), Some("network adapter"));
         assert_eq!(r(ev(pt, 1, "WakeSourceText", "Unknown")), None);
         assert!(wake_info(&ev(kp, 42, "x", "y")).unwrap().0);
@@ -1307,7 +1564,16 @@ mod tests {
         let mut t = T0;
         for _ in 0..240 {
             t += 5000;
-            tick_with(&mut s, t, 5.0, &[("ResourceMonitor", 50.0), ("SearchIndexer", 20.0), ("Idle", 90.0)]);
+            tick_with(
+                &mut s,
+                t,
+                5.0,
+                &[
+                    ("ResourceMonitor", 50.0),
+                    ("SearchIndexer", 20.0),
+                    ("Idle", 90.0),
+                ],
+            );
         }
         s.on_power(Power::DisplayOn, T0 + H);
         assert!(!s.wants_procs());
@@ -1319,17 +1585,46 @@ mod tests {
     #[test]
     fn bag_guard_decision() {
         // 50 Wh battery, 1% per minute = 60 %/h.
-        let fast: Vec<(u64, u32)> = (0..11).map(|i| (T0 + i * MIN, 40_000 - i as u32 * 500)).collect();
+        let fast: Vec<(u64, u32)> = (0..11)
+            .map(|i| (T0 + i * MIN, 40_000 - i as u32 * 500))
+            .collect();
         assert!(bag_guard_due(true, true, false, false, Some(50_000), &fast));
-        assert!(!bag_guard_due(false, true, false, false, Some(50_000), &fast), "opt-in");
-        assert!(!bag_guard_due(true, false, false, false, Some(50_000), &fast), "lid open");
-        assert!(!bag_guard_due(true, true, true, false, Some(50_000), &fast), "on AC");
-        assert!(!bag_guard_due(true, true, false, true, Some(50_000), &fast), "once per night");
-        assert!(!bag_guard_due(true, true, false, false, None, &fast), "no mWh");
-        assert!(!bag_guard_due(true, true, false, false, Some(50_000), &fast[..5]), "window too short");
+        assert!(
+            !bag_guard_due(false, true, false, false, Some(50_000), &fast),
+            "opt-in"
+        );
+        assert!(
+            !bag_guard_due(true, false, false, false, Some(50_000), &fast),
+            "lid open"
+        );
+        assert!(
+            !bag_guard_due(true, true, true, false, Some(50_000), &fast),
+            "on AC"
+        );
+        assert!(
+            !bag_guard_due(true, true, false, true, Some(50_000), &fast),
+            "once per night"
+        );
+        assert!(
+            !bag_guard_due(true, true, false, false, None, &fast),
+            "no mWh"
+        );
+        assert!(
+            !bag_guard_due(true, true, false, false, Some(50_000), &fast[..5]),
+            "window too short"
+        );
         // 0.1% per minute = 6 %/h: below the line.
-        let slow: Vec<(u64, u32)> = (0..11).map(|i| (T0 + i * MIN, 40_000 - i as u32 * 50)).collect();
-        assert!(!bag_guard_due(true, true, false, false, Some(50_000), &slow));
+        let slow: Vec<(u64, u32)> = (0..11)
+            .map(|i| (T0 + i * MIN, 40_000 - i as u32 * 50))
+            .collect();
+        assert!(!bag_guard_due(
+            true,
+            true,
+            false,
+            false,
+            Some(50_000),
+            &slow
+        ));
     }
 
     #[test]
@@ -1353,7 +1648,11 @@ mod tests {
         s.on_power(Power::DisplayOn, t + 2000);
         let n = s.nights.last().unwrap();
         assert_eq!(n.guard_ms, Some(T0 + 9 * MIN));
-        assert!(s.panel(t).lines.iter().any(|l| l.starts_with("Bag Guard hibernated at")));
+        assert!(s
+            .panel(t)
+            .lines
+            .iter()
+            .any(|l| l.starts_with("Bag Guard hibernated at")));
     }
 
     #[test]
@@ -1361,7 +1660,11 @@ mod tests {
         let mut s = sleep();
         let mut n = night(2 * H, 90.0, 49.0, 71.0);
         n.culprit = Some(("SearchIndexer".into(), 900.0));
-        n.wake = Some(Wake { t_ms: T0 + 2 * H, rank: 2, reason: "Power button".into() });
+        n.wake = Some(Wake {
+            t_ms: T0 + 2 * H,
+            rank: 2,
+            reason: "Power button".into(),
+        });
         n.mwh0 = Some(45_000);
         n.mwh1 = Some(24_500);
         n.mwh_max = Some(50_000);
@@ -1389,7 +1692,10 @@ mod tests {
         s.battery = Some(true);
         let p = s.panel(T0);
         assert_eq!(p.tone, Tone::Learning);
-        assert_eq!(p.headline, "No sleep recorded yet. Close the lid or let the screen turn off.");
+        assert_eq!(
+            p.headline,
+            "No sleep recorded yet. Close the lid or let the screen turn off."
+        );
         assert_eq!(p.lines, ["Bag Guard is off."]);
         let mut s = sleep();
         s.battery = Some(true);
@@ -1415,9 +1721,22 @@ mod tests {
     }
 
     fn assert_no_battery_words(p: &Panel) {
-        let c = p.chart.as_ref().map(|c| c.label.clone()).unwrap_or_default();
-        let it = p.items.iter().flat_map(|i| [i.title.clone(), i.detail.clone()]);
-        for l in p.lines.iter().cloned().chain([p.headline.clone(), c]).chain(it) {
+        let c = p
+            .chart
+            .as_ref()
+            .map(|c| c.label.clone())
+            .unwrap_or_default();
+        let it = p
+            .items
+            .iter()
+            .flat_map(|i| [i.title.clone(), i.detail.clone()]);
+        for l in p
+            .lines
+            .iter()
+            .cloned()
+            .chain([p.headline.clone(), c])
+            .chain(it)
+        {
             let l = l.to_ascii_lowercase();
             for w in ["battery", "lid", "drain", "lost", "bag guard", "on power"] {
                 assert!(!l.contains(w), "{:?} in {:?}", w, l);
@@ -1431,7 +1750,10 @@ mod tests {
         s.battery = Some(false);
         s.bag_guard = true;
         let p = s.panel(T0);
-        assert_eq!(p.headline, "No sleep recorded yet. Put the PC to sleep to record one.");
+        assert_eq!(
+            p.headline,
+            "No sleep recorded yet. Put the PC to sleep to record one."
+        );
         assert!(p.lines.is_empty());
         assert_no_battery_words(&p);
         // A night on a desktop (AC reported, no battery): time asleep, awake share, wake reason.
@@ -1440,17 +1762,27 @@ mod tests {
         n.on_ac = true;
         n.pct0 = None;
         n.pct1 = None;
-        n.wake = Some(Wake { t_ms: n.end_ms, rank: 2, reason: "Power button".into() });
+        n.wake = Some(Wake {
+            t_ms: n.end_ms,
+            rank: 2,
+            reason: "Power button".into(),
+        });
         n.culprit = Some(("SearchIndexer".into(), 40.0));
         s.nights.push(n);
         let p = s.panel(T0);
         assert_eq!(p.headline, "Slept 7h 42m. Awake 4% of the time.");
         assert_eq!(p.lines[0], "Asleep 7h 24m of 7h 42m.");
         assert!(p.lines.iter().any(|l| l == "Woke by: Power button."));
-        assert!(p.lines.iter().any(|l| l == "Busiest while awake: SearchIndexer, 40 s of CPU."));
+        assert!(p
+            .lines
+            .iter()
+            .any(|l| l == "Busiest while awake: SearchIndexer, 40 s of CPU."));
         assert_no_battery_words(&p);
         let c = p.chart.unwrap();
-        assert_eq!((c.label.as_str(), c.unit, c.max), ("Time awake per night", "%", 100.0));
+        assert_eq!(
+            (c.label.as_str(), c.unit, c.max),
+            ("Time awake per night", "%", 100.0)
+        );
         assert_eq!(c.points.len(), 1);
         assert_eq!(c.x_labels, ["", "", "Last night"]);
     }
@@ -1466,17 +1798,37 @@ mod tests {
 
     #[test]
     fn empty_headlines() {
-        assert_eq!(empty_headline(true), "No sleep recorded yet. Close the lid or let the screen turn off.");
-        assert_eq!(empty_headline(false), "No sleep recorded yet. Put the PC to sleep to record one.");
+        assert_eq!(
+            empty_headline(true),
+            "No sleep recorded yet. Close the lid or let the screen turn off."
+        );
+        assert_eq!(
+            empty_headline(false),
+            "No sleep recorded yet. Put the PC to sleep to record one."
+        );
     }
 
     #[test]
     fn desktop_lines_and_chart() {
         let mut n = desk(7 * H + 42 * MIN, 4.0);
-        n.wake = Some(Wake { t_ms: n.end_ms, rank: 2, reason: "Power button".into() });
-        assert_eq!(verdict(&n), (Tone::Info, "Slept 7h 42m. Awake 4% of the time.".into()));
+        n.wake = Some(Wake {
+            t_ms: n.end_ms,
+            rank: 2,
+            reason: "Power button".into(),
+        });
+        assert_eq!(
+            verdict(&n),
+            (Tone::Info, "Slept 7h 42m. Awake 4% of the time.".into())
+        );
         let l = night_lines(&n, false, true);
-        assert_eq!(l, ["Asleep 7h 24m of 7h 42m.", "Awake 4% of the time.", "Woke by: Power button."]);
+        assert_eq!(
+            l,
+            [
+                "Asleep 7h 24m of 7h 42m.",
+                "Awake 4% of the time.",
+                "Woke by: Power button."
+            ]
+        );
         let c = nights_chart(&[n.clone()]).unwrap();
         assert_eq!((c.label.as_str(), c.unit), ("Time awake per night", "%"));
         assert_eq!(c.x_labels, ["", "", "Last night"]);
@@ -1494,13 +1846,25 @@ mod tests {
     fn laptop_lines_and_chart() {
         let good = night(8 * H, 90.0, 87.0, 2.0);
         let l = night_lines(&good, true, false);
-        assert_eq!(l, ["Drain 0.4%/h.", "Awake 2% of the time.", "Bag Guard is off."]);
+        assert_eq!(
+            l,
+            [
+                "Drain 0.4%/h.",
+                "Awake 2% of the time.",
+                "Bag Guard is off."
+            ]
+        );
         let mut ac = night(8 * H, 80.0, 100.0, 2.0);
         ac.on_ac = true;
         ac.start_ms += 24 * H;
         ac.end_ms += 24 * H;
-        assert_eq!(night_lines(&ac, true, true)[0], "On power. No drain to show.");
-        assert!(night_lines(&ac, true, true).iter().any(|l| l == "Bag Guard is on."));
+        assert_eq!(
+            night_lines(&ac, true, true)[0],
+            "On power. No drain to show."
+        );
+        assert!(night_lines(&ac, true, true)
+            .iter()
+            .any(|l| l == "Bag Guard is on."));
         // The newest night has no drain: the newest bar is not "last night".
         let c = nights_chart(&[good.clone(), ac]).unwrap();
         assert_eq!(c.unit, "%/h");
@@ -1508,7 +1872,10 @@ mod tests {
         assert_eq!(c.x_labels, ["", "", "Newest"]);
         assert_eq!(c.tones, [Tone::Good]);
         // Battery gone since: no Bag Guard line, the old night's figures stay.
-        assert_eq!(night_lines(&good, false, true), ["Drain 0.4%/h.", "Awake 2% of the time."]);
+        assert_eq!(
+            night_lines(&good, false, true),
+            ["Drain 0.4%/h.", "Awake 2% of the time."]
+        );
     }
 
     #[test]
@@ -1519,7 +1886,11 @@ mod tests {
         assert!(s.has_battery(), "the last night had one");
         s.battery = Some(false);
         assert!(!s.has_battery(), "the battery went away");
-        assert!(!s.panel(T0).lines.iter().any(|l| l.starts_with("Bag Guard is")));
+        assert!(!s
+            .panel(T0)
+            .lines
+            .iter()
+            .any(|l| l.starts_with("Bag Guard is")));
         s.battery = Some(true);
         assert!(s.panel(T0).lines.iter().any(|l| l == "Bag Guard is off."));
     }

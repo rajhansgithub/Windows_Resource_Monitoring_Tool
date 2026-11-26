@@ -64,7 +64,11 @@ pub struct UsageStore {
 impl UsageStore {
     pub fn load() -> Self {
         let path = crate::util::data_dir().join("usage.csv");
-        let mut s = UsageStore { days: BTreeMap::new(), dirty: false, path };
+        let mut s = UsageStore {
+            days: BTreeMap::new(),
+            dirty: false,
+            path,
+        };
         match std::fs::read_to_string(&s.path) {
             Ok(txt) => s.parse_csv(txt.trim_start_matches('\u{FEFF}')),
             Err(_) => {
@@ -81,17 +85,27 @@ impl UsageStore {
     fn parse_csv(&mut self, txt: &str) {
         for line in txt.lines() {
             let mut it = line.split(',');
-            let (Some(d), Some(a), Some(b)) = (it.next(), it.next(), it.next()) else { continue };
-            let Some(k) = parse_date(d.trim()) else { continue };
-            let (Ok(a), Ok(b)) = (a.trim().parse(), b.trim().parse()) else { continue };
+            let (Some(d), Some(a), Some(b)) = (it.next(), it.next(), it.next()) else {
+                continue;
+            };
+            let Some(k) = parse_date(d.trim()) else {
+                continue;
+            };
+            let (Ok(a), Ok(b)) = (a.trim().parse(), b.trim().parse()) else {
+                continue;
+            };
             self.days.insert(k, Usage { sent: a, recv: b });
         }
     }
 
     /// Old .NET format: {"DailyStats":{"2026-02-21":{"BytesSent":1,"BytesReceived":2},...}}
     fn import_legacy(&mut self) {
-        let Some(dir) = crate::util::legacy_dir() else { return };
-        let Ok(txt) = std::fs::read_to_string(dir.join("network_usage.json")) else { return };
+        let Some(dir) = crate::util::legacy_dir() else {
+            return;
+        };
+        let Ok(txt) = std::fs::read_to_string(dir.join("network_usage.json")) else {
+            return;
+        };
         let mut rest = txt.as_str();
         while let Some(i) = rest.find('"') {
             rest = &rest[i + 1..];
@@ -111,7 +125,13 @@ impl UsageStore {
                     })
                     .unwrap_or(0)
             };
-            self.days.insert(k, Usage { sent: num("BytesSent"), recv: num("BytesReceived") });
+            self.days.insert(
+                k,
+                Usage {
+                    sent: num("BytesSent"),
+                    recv: num("BytesReceived"),
+                },
+            );
             rest = &rest[end..];
         }
     }
@@ -120,7 +140,10 @@ impl UsageStore {
         if sent == 0 && recv == 0 {
             return;
         }
-        self.days.entry(today()).or_default().add(Usage { sent, recv });
+        self.days
+            .entry(today())
+            .or_default()
+            .add(Usage { sent, recv });
         self.dirty = true;
     }
 
@@ -131,7 +154,10 @@ impl UsageStore {
         let mut o = String::with_capacity(self.days.len() * 32);
         for (k, u) in &self.days {
             let (y, m, d) = ymd(*k);
-            o.push_str(&format!("{:04}-{:02}-{:02},{},{}\n", y, m, d, u.sent, u.recv));
+            o.push_str(&format!(
+                "{:04}-{:02}-{:02},{},{}\n",
+                y, m, d, u.sent, u.recv
+            ));
         }
         if crate::util::write_atomic(&self.path, o.as_bytes()).is_ok() {
             self.dirty = false;
@@ -180,7 +206,8 @@ fn parse_date(s: &str) -> Option<Day> {
     let y: u32 = it.next()?.parse().ok()?;
     let m: u32 = it.next()?.parse().ok()?;
     let d: u32 = it.next()?.parse().ok()?;
-    (it.next().is_none() && (1..=12).contains(&m) && (1..=31).contains(&d) && y > 1900).then(|| day(y, m, d))
+    (it.next().is_none() && (1..=12).contains(&m) && (1..=31).contains(&d) && y > 1900)
+        .then(|| day(y, m, d))
 }
 
 #[cfg(test)]
@@ -190,7 +217,10 @@ mod tests {
     fn dates() {
         assert_eq!(prev_day(day(2024, 3, 1)), day(2024, 2, 29));
         assert_eq!(prev_day(day(2026, 1, 1)), day(2025, 12, 31));
-        assert_eq!(UsageStore::cycle_start(15, day(2026, 1, 3)), day(2025, 12, 15));
+        assert_eq!(
+            UsageStore::cycle_start(15, day(2026, 1, 3)),
+            day(2025, 12, 15)
+        );
         assert_eq!(parse_date("2026-02-21"), Some(20260221));
         assert_eq!(parse_date("DailyStats"), None);
     }

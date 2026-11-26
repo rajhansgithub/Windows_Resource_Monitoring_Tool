@@ -100,8 +100,16 @@ pub fn last_hour() -> [String; 3] {
 /// The x-axis labels of a per-day chart from local day `first` to `last` ("today"
 /// when `last` is the day of `now_ms`).
 pub fn day_span(first: u32, last: u32, now_ms: u64) -> [String; 3] {
-    let end = if last == time::day(now_ms) { "today".into() } else { time::day_label(last) };
-    let start = if first == last { String::new() } else { time::day_label(first) };
+    let end = if last == time::day(now_ms) {
+        "today".into()
+    } else {
+        time::day_label(last)
+    };
+    let start = if first == last {
+        String::new()
+    } else {
+        time::day_label(first)
+    };
     [start, String::new(), end]
 }
 
@@ -123,11 +131,18 @@ pub enum Role {
 pub enum Visual {
     /// One bar split into parts that add up to a whole, with a legend
     /// ("Apps 7.2 GB"). Parts are (label, value, colour); zero parts stay in the legend.
-    Split { parts: Vec<(&'static str, f32, Role)>, unit: &'static str },
+    Split {
+        parts: Vec<(&'static str, f32, Role)>,
+        unit: &'static str,
+    },
     /// Ring gauge (open at the bottom): the ceiling (percent of max speed allowed; None = this PC
     /// does not report one), current use in percent and the reason for the ceiling
     /// ("none" when nothing limits it).
-    Gauge { ceiling: Option<f32>, used: f32, reason: String },
+    Gauge {
+        ceiling: Option<f32>,
+        used: f32,
+        reason: String,
+    },
 }
 
 /// Everything an Insights page needs to draw one feature.
@@ -193,8 +208,10 @@ pub enum Power {
 }
 
 // Power setting GUIDs we register for (see `register_power`).
-pub const GUID_CONSOLE_DISPLAY_STATE: GUID = GUID::from_u128(0x6fe69556_704a_47a0_8f24_c28d936fda47);
-pub const GUID_LIDSWITCH_STATE_CHANGE: GUID = GUID::from_u128(0xba3e0f4d_b817_4094_a2d1_d56379e6a0f3);
+pub const GUID_CONSOLE_DISPLAY_STATE: GUID =
+    GUID::from_u128(0x6fe69556_704a_47a0_8f24_c28d936fda47);
+pub const GUID_LIDSWITCH_STATE_CHANGE: GUID =
+    GUID::from_u128(0xba3e0f4d_b817_4094_a2d1_d56379e6a0f3);
 pub const GUID_ACDC_POWER_SOURCE: GUID = GUID::from_u128(0x5d3e9a59_e9d5_4b00_a6bd_ff34ff516548);
 
 fn guid_eq(a: &GUID, b: &GUID) -> bool {
@@ -210,7 +227,11 @@ pub fn power_from_setting(g: &GUID, data: u32) -> Option<Power> {
             _ => Power::DisplayOn,
         })
     } else if guid_eq(g, &GUID_LIDSWITCH_STATE_CHANGE) {
-        Some(if data == 0 { Power::LidClosed } else { Power::LidOpen })
+        Some(if data == 0 {
+            Power::LidClosed
+        } else {
+            Power::LidOpen
+        })
     } else if guid_eq(g, &GUID_ACDC_POWER_SOURCE) {
         // 0 = AC, 1 = DC (battery), 2 = short-term (UPS).
         Some(Power::Ac(data == 0))
@@ -244,7 +265,10 @@ pub fn input_idle_ms() -> u64 {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
     // SAFETY: valid, sized out pointer.
     unsafe {
-        let mut li = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+        let mut li = LASTINPUTINFO {
+            cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+            dwTime: 0,
+        };
         if GetLastInputInfo(&mut li) == 0 {
             return 0;
         }
@@ -313,7 +337,10 @@ impl Insights {
     /// The app should collect top-process lists this tick (an incident or an awake burst
     /// is in progress and needs a culprit). Keeps process enumeration off otherwise.
     pub fn wants_procs(&self) -> bool {
-        self.enabled && (self.incidents.wants_procs() || self.sleep.wants_procs() || self.baseline.wants_procs())
+        self.enabled
+            && (self.incidents.wants_procs()
+                || self.sleep.wants_procs()
+                || self.baseline.wants_procs())
     }
 
     /// Called once per sample, right after `Sensors::sample`.
@@ -333,7 +360,11 @@ impl Insights {
             self.held_eps = held_eps;
             self.dirty = true;
         }
-        if self.incidents.dirty() || self.sleep.dirty() || self.baseline.dirty() || self.ghost.dirty() {
+        if self.incidents.dirty()
+            || self.sleep.dirty()
+            || self.baseline.dirty()
+            || self.ghost.dirty()
+        {
             self.dirty = true;
         }
         if self.dirty && c.now_ms.saturating_sub(self.last_save_ms) >= SAVE_EVERY_MS {
@@ -433,7 +464,9 @@ impl Insights {
         if let Some(x) = j.get("ghost") {
             self.ghost.load(x);
         }
-        if let Some(x) = j.get("held") { self.held.load(x); }
+        if let Some(x) = j.get("held") {
+            self.held.load(x);
+        }
     }
 }
 
@@ -463,7 +496,9 @@ pub mod time {
 
     /// "12 Nov" for a local day number from `day()`.
     pub fn day_label(day: u32) -> String {
-        const M: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        const M: [&str; 12] = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
         let (_, mo, d) = civil(day as i64);
         format!("{} {}", d, M[(mo - 1) as usize])
     }
@@ -490,7 +525,12 @@ pub mod time {
             let mut tz: TIME_ZONE_INFORMATION = std::mem::zeroed();
             let r = GetTimeZoneInformation(&mut tz);
             // 2 = TIME_ZONE_ID_DAYLIGHT
-            let bias = tz.Bias + if r == 2 { tz.DaylightBias } else { tz.StandardBias };
+            let bias = tz.Bias
+                + if r == 2 {
+                    tz.DaylightBias
+                } else {
+                    tz.StandardBias
+                };
             -(bias as i64) * 60_000
         }
     }

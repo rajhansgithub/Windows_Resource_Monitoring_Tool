@@ -44,10 +44,10 @@
 //! * The layout (controls and cards of the current page) is rebuilt from the
 //!   draft after every change; it is a few dozen rectangles.
 
-use crate::app::{app, default_accent, effective_dark, Cmd, C_CRIT, C_WARN};
-use crate::fmt::SpeedUnit;
 use crate::achievements::room::{self, Room};
 use crate::achievements::State as AchState;
+use crate::app::{app, default_accent, effective_dark, Cmd, C_CRIT, C_WARN};
+use crate::fmt::SpeedUnit;
 use crate::insights::view::{self, View};
 use crate::insights::{unix_ms, Panel};
 use crate::nav::{self, Entry, History, Page, Placement};
@@ -58,7 +58,9 @@ use crate::util::*;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::time::Instant;
 use windows_sys::Win32::Foundation::*;
-use windows_sys::Win32::Graphics::Dwm::{DwmExtendFrameIntoClientArea, DwmGetColorizationColor, DwmSetWindowAttribute};
+use windows_sys::Win32::Graphics::Dwm::{
+    DwmExtendFrameIntoClientArea, DwmGetColorizationColor, DwmSetWindowAttribute,
+};
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
@@ -66,9 +68,9 @@ use windows_sys::Win32::UI::Controls::Dialogs::*;
 use windows_sys::Win32::UI::Controls::MARGINS;
 use windows_sys::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, TrackMouseEvent, TME_HOVER, TME_LEAVE, TRACKMOUSEEVENT, VK_BROWSER_BACK, VK_CONTROL,
-    VK_DOWN, VK_END, VK_ESCAPE, VK_F4, VK_F6, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB,
-    VK_UP,
+    GetKeyState, ReleaseCapture, SetCapture, TrackMouseEvent, TME_HOVER, TME_LEAVE,
+    TRACKMOUSEEVENT, VK_BROWSER_BACK, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_F4, VK_F6,
+    VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -201,6 +203,7 @@ const ID_BIG: i32 = 909;
 const ID_BIG_CLOSE: i32 = 910;
 const ID_BIG_PREV: i32 = 911;
 const ID_BIG_NEXT: i32 = 912;
+const ID_BIG_HEAD: i32 = 913;
 const ID_ROOM: i32 = 1000;
 const ID_SINGLE: i32 = 1100;
 
@@ -222,13 +225,36 @@ const G_PLUS: char = '\u{E710}';
 const G_HAMBURGER: char = '\u{E700}';
 const G_BACK: char = '\u{E72B}';
 
-const INTERVALS: [(&str, u32); 4] = [("0.5 seconds", 500), ("1 second", 1000), ("2 seconds", 2000), ("5 seconds", 5000)];
-const MODES: [(&str, Mode); 2] = [("Dock to taskbar", Mode::Dock), ("Floating (drag anywhere)", Mode::Float)];
-const MAX_WIDTHS: [(&str, u32); 5] =
-    [("Auto (don't cover app icons)", 0), ("20% of taskbar", 20), ("30% of taskbar", 30), ("40% of taskbar", 40), ("50% of taskbar", 50)];
-const THEMES: [(&str, Theme); 3] = [("Match Windows", Theme::Auto), ("Dark", Theme::Dark), ("Light", Theme::Light)];
+const INTERVALS: [(&str, u32); 4] = [
+    ("0.5 seconds", 500),
+    ("1 second", 1000),
+    ("2 seconds", 2000),
+    ("5 seconds", 5000),
+];
+const MODES: [(&str, Mode); 2] = [
+    ("Dock to taskbar", Mode::Dock),
+    ("Floating (drag anywhere)", Mode::Float),
+];
+const MAX_WIDTHS: [(&str, u32); 5] = [
+    ("Auto (don't cover app icons)", 0),
+    ("20% of taskbar", 20),
+    ("30% of taskbar", 30),
+    ("40% of taskbar", 40),
+    ("50% of taskbar", 50),
+];
+const THEMES: [(&str, Theme); 3] = [
+    ("Match Windows", Theme::Auto),
+    ("Dark", Theme::Dark),
+    ("Light", Theme::Light),
+];
 /// Offered widget fonts; the first means "default" (empty setting).
-const FONTS: [&str; 5] = ["Default", "Segoe UI", "Cascadia Mono", "Consolas", "Bahnschrift"];
+const FONTS: [&str; 5] = [
+    "Default",
+    "Segoe UI",
+    "Cascadia Mono",
+    "Consolas",
+    "Bahnschrift",
+];
 
 // ------------------------------------------------------------------ state
 
@@ -324,7 +350,11 @@ struct Pal {
 impl Pal {
     fn new(dark: bool, mica: bool, accent: Rgba) -> Pal {
         let lum = (accent.0 as u32 * 299 + accent.1 as u32 * 587 + accent.2 as u32 * 114) / 1000;
-        let on_accent = if lum > 150 { hx(0x000000) } else { hx(0xFFFFFF) };
+        let on_accent = if lum > 150 {
+            hx(0x000000)
+        } else {
+            hx(0xFFFFFF)
+        };
         let shade = if dark { hx(0x000000) } else { hx(0xFFFFFF) };
         let (accent_hover, accent_press) = (accent.mix(shade, 0.1), accent.mix(shade, 0.2));
         if dark {
@@ -479,7 +509,9 @@ mod darkmode {
             if lib.is_null() {
                 return 0;
             }
-            let Some(f) = GetProcAddress(lib, b"RtlGetVersion\0".as_ptr()) else { return 0 };
+            let Some(f) = GetProcAddress(lib, b"RtlGetVersion\0".as_ptr()) else {
+                return 0;
+            };
             let f: unsafe extern "system" fn(*mut OSVERSIONINFOW) -> i32 = std::mem::transmute(f);
             let mut v: OSVERSIONINFOW = std::mem::zeroed();
             v.dwOSVersionInfoSize = std::mem::size_of::<OSVERSIONINFOW>() as u32;
@@ -495,7 +527,12 @@ mod darkmode {
         static A: OnceLock<Api> = OnceLock::new();
         A.get_or_init(|| unsafe {
             let build = build_number();
-            let mut a = Api { build, set_mode: None, allow_window: None, flush: None };
+            let mut a = Api {
+                build,
+                set_mode: None,
+                allow_window: None,
+                flush: None,
+            };
             if build < 17763 {
                 return a;
             }
@@ -504,9 +541,12 @@ mod darkmode {
                 return a;
             }
             // MAKEINTRESOURCE(ordinal)
-            a.allow_window = GetProcAddress(lib, 133usize as *const u8).map(|f| std::mem::transmute::<_, AllowWindow>(f));
-            a.set_mode = GetProcAddress(lib, 135usize as *const u8).map(|f| std::mem::transmute::<_, SetMode>(f));
-            a.flush = GetProcAddress(lib, 136usize as *const u8).map(|f| std::mem::transmute::<_, Flush>(f));
+            a.allow_window = GetProcAddress(lib, 133usize as *const u8)
+                .map(|f| std::mem::transmute::<_, AllowWindow>(f));
+            a.set_mode = GetProcAddress(lib, 135usize as *const u8)
+                .map(|f| std::mem::transmute::<_, SetMode>(f));
+            a.flush = GetProcAddress(lib, 136usize as *const u8)
+                .map(|f| std::mem::transmute::<_, Flush>(f));
             a
         })
     }
@@ -555,7 +595,6 @@ pub fn apply_menu_theme(theme: Theme, owner: HWND) {
     darkmode::allow_window(owner, true);
 }
 
-
 // ------------------------------------------------------------------ fonts
 
 struct Fonts {
@@ -571,7 +610,6 @@ struct Fonts {
     icon: HFONT,
     icon_sm: HFONT,
 }
-
 
 /// `want` if the system has it, else `fallback`.
 pub(crate) fn pick_face(want: &'static str, fallback: &'static str) -> &'static str {
@@ -592,7 +630,6 @@ pub(crate) fn pick_face(want: &'static str, fallback: &'static str) -> &'static 
         }
     }
 }
-
 
 impl Fonts {
     /// Grayscale anti-aliased fonts (the canvas needs a coverage mask).
@@ -615,11 +652,28 @@ impl Fonts {
     }
 
     fn view(&self) -> view::Fonts {
-        view::Fonts { body: self.body, small: self.small, tiny: self.tiny, semi: self.semi, cap: self.cap, head: self.head }
+        view::Fonts {
+            body: self.body,
+            small: self.small,
+            tiny: self.tiny,
+            semi: self.semi,
+            cap: self.cap,
+            head: self.head,
+        }
     }
 
     fn free(&self) {
-        for f in [self.body, self.small, self.tiny, self.semi, self.cap, self.head, self.title, self.icon, self.icon_sm] {
+        for f in [
+            self.body,
+            self.small,
+            self.tiny,
+            self.semi,
+            self.cap,
+            self.head,
+            self.title,
+            self.icon,
+            self.icon_sm,
+        ] {
             unsafe { DeleteObject(f) };
         }
     }
@@ -699,7 +753,12 @@ struct Control {
 /// One slot on the right-hand side of a card (page definition).
 enum Cell {
     /// `w` in DIP; 0 = sized to its content.
-    Ctl { id: i32, kind: Kind, w: i32, enabled: bool },
+    Ctl {
+        id: i32,
+        kind: Kind,
+        w: i32,
+        enabled: bool,
+    },
     /// Unit text after a control: shown text, text whose width is reserved.
     Unit(&'static str, &'static str),
     /// Live value of a slider ("100 %").
@@ -709,7 +768,12 @@ enum Cell {
 enum Def {
     Heading(&'static str),
     Note(&'static str),
-    Card { title: String, desc: &'static str, enabled: bool, cells: Vec<Cell> },
+    Card {
+        title: String,
+        desc: &'static str,
+        enabled: bool,
+        cells: Vec<Cell>,
+    },
     /// Overview card summarising panel `i` (opens its page).
     Summary(usize),
     /// The full Insights panel `i` (headline, chart, items).
@@ -743,11 +807,21 @@ enum NavRow {
 }
 
 fn card(title: &str, desc: &'static str, cells: Vec<Cell>) -> Def {
-    Def::Card { title: title.to_string(), desc, enabled: true, cells }
+    Def::Card {
+        title: title.to_string(),
+        desc,
+        enabled: true,
+        cells,
+    }
 }
 
 fn cell(id: i32, kind: Kind, w: i32) -> Cell {
-    Cell::Ctl { id, kind, w, enabled: true }
+    Cell::Ctl {
+        id,
+        kind,
+        w,
+        enabled: true,
+    }
 }
 
 fn toggle_card(title: &str, desc: &'static str, id: i32) -> Def {
@@ -802,16 +876,30 @@ fn animations_on() -> bool {
 // ------------------------------------------------------------------ drawing helpers
 
 fn inflate(r: Rect, d: i32) -> Rect {
-    Rect { l: r.l - d, t: r.t - d, r: r.r + d, b: r.b + d }
+    Rect {
+        l: r.l - d,
+        t: r.t - d,
+        r: r.r + d,
+        b: r.b + d,
+    }
 }
 
 fn shift(r: Rect, dy: i32) -> Rect {
-    Rect { t: r.t + dy, b: r.b + dy, ..r }
+    Rect {
+        t: r.t + dy,
+        b: r.b + dy,
+        ..r
+    }
 }
 
 /// Pill of size `w`×`h` centred on (cx, cy).
 fn pill(cv: &mut Canvas, cx: i32, cy: i32, w: i32, h: i32, c: Rgba) {
-    let r = Rect { l: cx - w / 2, t: cy - h / 2, r: cx - w / 2 + w, b: cy - h / 2 + h };
+    let r = Rect {
+        l: cx - w / 2,
+        t: cy - h / 2,
+        r: cx - w / 2 + w,
+        b: cy - h / 2 + h,
+    };
     cv.fill_round(r, h.min(w) as f32 / 2.0, c);
 }
 
@@ -1009,9 +1097,19 @@ impl Ui {
             repeat_n: 0,
             open_dd: None,
             cv: Canvas::new(),
-            anim: Anim { page: None, ind: None, pane: None, timer: false },
+            anim: Anim {
+                page: None,
+                ind: None,
+                pane: None,
+                timer: false,
+            },
             animate: animations_on(),
-            normal: Rect { l: 0, t: 0, r: 0, b: 0 },
+            normal: Rect {
+                l: 0,
+                t: 0,
+                r: 0,
+                b: 0,
+            },
             maximized: false,
             painted: false,
             ins_on: false,
@@ -1079,7 +1177,9 @@ impl Ui {
     // -------------------------------------------------------------- values
 
     fn metric_at(&self, pos: i32) -> Option<Metric> {
-        (pos >= 0).then(|| self.draft.order.get(pos as usize).copied()).flatten()
+        (pos >= 0)
+            .then(|| self.draft.order.get(pos as usize).copied())
+            .flatten()
     }
 
     fn flag(&self, id: i32) -> bool {
@@ -1100,13 +1200,17 @@ impl Ui {
             ID_INSIGHTS => d.insights,
             ID_INS_TOASTS => d.insight_toasts,
             ID_BAGGUARD => d.bag_guard,
-            _ if (ID_DSHOW..ID_DSHOW + MAX_DISPLAYS).contains(&id) => {
-                self.displays.get((id - ID_DSHOW) as usize).is_some_and(|(k, _, p)| d.wants_display(k, *p))
-            }
-            _ if (ID_DSTACK..ID_DSTACK + MAX_DISPLAYS).contains(&id) => {
-                self.displays.get((id - ID_DSTACK) as usize).is_some_and(|(k, ..)| d.stacked_for(k))
-            }
-            _ => self.metric_at(id - ID_MTOG).is_some_and(|m| d.show[m.idx()]),
+            _ if (ID_DSHOW..ID_DSHOW + MAX_DISPLAYS).contains(&id) => self
+                .displays
+                .get((id - ID_DSHOW) as usize)
+                .is_some_and(|(k, _, p)| d.wants_display(k, *p)),
+            _ if (ID_DSTACK..ID_DSTACK + MAX_DISPLAYS).contains(&id) => self
+                .displays
+                .get((id - ID_DSTACK) as usize)
+                .is_some_and(|(k, ..)| d.stacked_for(k)),
+            _ => self
+                .metric_at(id - ID_MTOG)
+                .is_some_and(|m| d.show[m.idx()]),
         }
     }
 
@@ -1141,19 +1245,31 @@ impl Ui {
             d.stacked = on;
             d.stacked_on.clear();
         } else if (ID_DSTACK..ID_DSTACK + MAX_DISPLAYS).contains(&id) {
-            let Some((k, ..)) = self.displays.get((id - ID_DSTACK) as usize) else { return false };
+            let Some((k, ..)) = self.displays.get((id - ID_DSTACK) as usize) else {
+                return false;
+            };
             d.set_stacked(k, on);
         } else if (ID_DSHOW..ID_DSHOW + MAX_DISPLAYS).contains(&id) {
-            let Some((key, ..)) = self.displays.get((id - ID_DSHOW) as usize) else { return false };
-            let mut keys: Vec<&str> =
-                self.displays.iter().filter(|(k, _, p)| d.wants_display(k, *p)).map(|(k, ..)| k.as_str()).collect();
+            let Some((key, ..)) = self.displays.get((id - ID_DSHOW) as usize) else {
+                return false;
+            };
+            let mut keys: Vec<&str> = self
+                .displays
+                .iter()
+                .filter(|(k, _, p)| d.wants_display(k, *p))
+                .map(|(k, ..)| k.as_str())
+                .collect();
             if on {
                 keys.push(key);
             } else {
                 keys.retain(|k| k != key);
             }
-            let all = self.displays.iter().all(|(k, ..)| keys.contains(&k.as_str()));
-            let primary_only = keys.len() == 1 && self.displays.iter().any(|(k, _, p)| *p && k == keys[0]);
+            let all = self
+                .displays
+                .iter()
+                .all(|(k, ..)| keys.contains(&k.as_str()));
+            let primary_only =
+                keys.len() == 1 && self.displays.iter().any(|(k, _, p)| *p && k == keys[0]);
             d.displays = if keys.is_empty() || primary_only {
                 "primary".into()
             } else if all {
@@ -1208,7 +1324,11 @@ impl Ui {
         let (lo, hi, step, _) = num_spec(id);
         let s = step * mult;
         let v = self.num_get(id);
-        let n = if dir > 0 { ((v / s + 1e-9).floor() + 1.0) * s } else { ((v / s - 1e-9).ceil() - 1.0) * s };
+        let n = if dir > 0 {
+            ((v / s + 1e-9).floor() + 1.0) * s
+        } else {
+            ((v / s - 1e-9).ceil() - 1.0) * s
+        };
         let n = n.clamp(lo, hi);
         if (n - v).abs() < 1e-9 {
             return false;
@@ -1269,8 +1389,14 @@ impl Ui {
                 (v, cur)
             }
             ID_UNIT => (
-                SpeedUnit::ALL.iter().map(|u| u.label().to_string()).collect(),
-                SpeedUnit::ALL.iter().position(|u| *u == d.unit).unwrap_or(0),
+                SpeedUnit::ALL
+                    .iter()
+                    .map(|u| u.label().to_string())
+                    .collect(),
+                SpeedUnit::ALL
+                    .iter()
+                    .position(|u| *u == d.unit)
+                    .unwrap_or(0),
             ),
             ID_THEME => (
                 THEMES.iter().map(|(t, _)| t.to_string()).collect(),
@@ -1281,7 +1407,11 @@ impl Ui {
                 let cur = if d.font.is_empty() {
                     0
                 } else {
-                    match FONTS.iter().skip(1).position(|f| f.eq_ignore_ascii_case(&d.font)) {
+                    match FONTS
+                        .iter()
+                        .skip(1)
+                        .position(|f| f.eq_ignore_ascii_case(&d.font))
+                    {
                         Some(i) => i + 1,
                         None => {
                             v.push(d.font.clone());
@@ -1297,11 +1427,17 @@ impl Ui {
                 let cur = if d.adapter.is_empty() {
                     0
                 } else {
-                    self.adapters.iter().position(|a| a.eq_ignore_ascii_case(&d.adapter)).map_or(0, |p| p + 1)
+                    self.adapters
+                        .iter()
+                        .position(|a| a.eq_ignore_ascii_case(&d.adapter))
+                        .map_or(0, |p| p + 1)
                 };
                 (v, cur)
             }
-            ID_DAY => ((1..=28).map(|n: u32| n.to_string()).collect(), (d.cap_reset_day.clamp(1, 28) - 1) as usize),
+            ID_DAY => (
+                (1..=28).map(|n: u32| n.to_string()).collect(),
+                (d.cap_reset_day.clamp(1, 28) - 1) as usize,
+            ),
             ID_MODE => (
                 MODES.iter().map(|(t, _)| t.to_string()).collect(),
                 MODES.iter().position(|(_, m)| *m == d.mode).unwrap_or(0),
@@ -1396,13 +1532,20 @@ impl Ui {
         (c.0 as u32) << 16 | (c.1 as u32) << 8 | c.2 as u32
     }
 
-
     // -------------------------------------------------------------- pages
 
     fn number_card(&self, title: &str, desc: &'static str, id: i32, unit: &'static str) -> Def {
         let (.., zero_off) = num_spec(id);
-        let shown = if zero_off && self.num_get(id) == 0.0 { "" } else { unit };
-        card(title, desc, vec![cell(id, Kind::Stepper, STEPPER_W), Cell::Unit(shown, unit)])
+        let shown = if zero_off && self.num_get(id) == 0.0 {
+            ""
+        } else {
+            unit
+        };
+        card(
+            title,
+            desc,
+            vec![cell(id, Kind::Stepper, STEPPER_W), Cell::Unit(shown, unit)],
+        )
     }
 
     /// Cards of a settings page (General .. Data) and About.
@@ -1412,23 +1555,47 @@ impl Ui {
             Page::General => {
                 let multi = self.displays.len() > 1;
                 let mut v = vec![
-                    card("Update interval", "How often the widget refreshes", vec![cell(ID_INTERVAL, Kind::Dropdown, 200)]),
-                    card("Network speed unit", "Show speeds in bits or bytes per second", vec![cell(ID_UNIT, Kind::Dropdown, 200)]),
+                    card(
+                        "Update interval",
+                        "How often the widget refreshes",
+                        vec![cell(ID_INTERVAL, Kind::Dropdown, 200)],
+                    ),
+                    card(
+                        "Network speed unit",
+                        "Show speeds in bits or bytes per second",
+                        vec![cell(ID_UNIT, Kind::Dropdown, 200)],
+                    ),
                     card(
                         "Text size",
                         "Scale of the text on the widget",
                         vec![cell(ID_SCALE, Kind::Slider, 180), Cell::Value(ID_SCALE)],
                     ),
-                    card("Theme", "Colours of the widget and this window", vec![cell(ID_THEME, Kind::Dropdown, 200)]),
+                    card(
+                        "Theme",
+                        "Colours of the widget and this window",
+                        vec![cell(ID_THEME, Kind::Dropdown, 200)],
+                    ),
                     card(
                         "Background opacity",
                         "How solid the widget background is",
                         vec![cell(ID_OPACITY, Kind::Slider, 180), Cell::Value(ID_OPACITY)],
                     ),
-                    card("Font", "Typeface used on the widget", vec![cell(ID_FONT, Kind::Dropdown, 200)]),
+                    card(
+                        "Font",
+                        "Typeface used on the widget",
+                        vec![cell(ID_FONT, Kind::Dropdown, 200)],
+                    ),
                     Def::Heading("Position"),
-                    card("Placement", "Docked next to the tray, or floating anywhere", vec![cell(ID_MODE, Kind::Dropdown, 220)]),
-                    card("Max width", "How much of the taskbar the widget may use", vec![cell(ID_MAXW, Kind::Dropdown, 220)]),
+                    card(
+                        "Placement",
+                        "Docked next to the tray, or floating anywhere",
+                        vec![cell(ID_MODE, Kind::Dropdown, 220)],
+                    ),
+                    card(
+                        "Max width",
+                        "How much of the taskbar the widget may use",
+                        vec![cell(ID_MAXW, Kind::Dropdown, 220)],
+                    ),
                     card(
                         "Reset position",
                         "Move the widget back to its starting place",
@@ -1439,14 +1606,30 @@ impl Ui {
                         "Measure the taskbar again if the widget covers app icons",
                         vec![cell(ID_RECHECK, Kind::Button("Re-check", false), BTN_W)],
                     ),
-                    toggle_card("Hide in full-screen apps", "Keep the widget out of the way of games and videos", ID_FULLSCREEN),
-                    toggle_card("Click-through", "Mouse clicks pass through the widget to the taskbar", ID_CLICKTHRU),
+                    toggle_card(
+                        "Hide in full-screen apps",
+                        "Keep the widget out of the way of games and videos",
+                        ID_FULLSCREEN,
+                    ),
+                    toggle_card(
+                        "Click-through",
+                        "Mouse clicks pass through the widget to the taskbar",
+                        ID_CLICKTHRU,
+                    ),
                 ];
                 if multi {
                     v.push(Def::Heading("Displays"));
-                    v.push(card("Show the widget on", "Needs \u{201C}Show my taskbar on all displays\u{201D}", vec![cell(ID_SHOWON, Kind::Dropdown, 220)]));
+                    v.push(card(
+                        "Show the widget on",
+                        "Needs \u{201C}Show my taskbar on all displays\u{201D}",
+                        vec![cell(ID_SHOWON, Kind::Dropdown, 220)],
+                    ));
                     for (i, (_, label, _)) in self.displays.iter().enumerate() {
-                        v.push(card(label, "Show the widget on this taskbar", vec![cell(ID_DSHOW + i as i32, Kind::Toggle, 0)]));
+                        v.push(card(
+                            label,
+                            "Show the widget on this taskbar",
+                            vec![cell(ID_DSHOW + i as i32, Kind::Toggle, 0)],
+                        ));
                     }
                     for (i, (key, ..)) in self.displays.iter().enumerate() {
                         let label = self.displays[i].1.split("  (").next().unwrap_or(key);
@@ -1458,16 +1641,44 @@ impl Ui {
                     }
                 }
                 v.push(Def::Heading("Behaviour"));
-                v.push(toggle_card("Sparklines", "Draw a small history graph behind each value", ID_SPARK));
-                v.push(toggle_card("Metric labels", "Show the name next to each value", ID_LABELS));
+                v.push(toggle_card(
+                    "Sparklines",
+                    "Draw a small history graph behind each value",
+                    ID_SPARK,
+                ));
+                v.push(toggle_card(
+                    "Metric labels",
+                    "Show the name next to each value",
+                    ID_LABELS,
+                ));
                 if !multi {
-                    v.push(toggle_card("Stacked rows", "Two metrics per column on the taskbar", ID_STACKED));
+                    v.push(toggle_card(
+                        "Stacked rows",
+                        "Two metrics per column on the taskbar",
+                        ID_STACKED,
+                    ));
                 }
                 v.extend([
-                    toggle_card("Auto-stack when crowded", "Switch to stacked rows when the widget would not fit", ID_AUTOSTACK),
-                    toggle_card("Update automatically", "Install new versions when they are released", ID_AUTOUPDATE),
-                    toggle_card("Start with Windows", "Launch Resource Monitor when you sign in", ID_AUTOSTART),
-                    toggle_card("Achievements", "Earn medals for real use. Nothing leaves this PC", ID_ACHIEVE),
+                    toggle_card(
+                        "Auto-stack when crowded",
+                        "Switch to stacked rows when the widget would not fit",
+                        ID_AUTOSTACK,
+                    ),
+                    toggle_card(
+                        "Update automatically",
+                        "Install new versions when they are released",
+                        ID_AUTOUPDATE,
+                    ),
+                    toggle_card(
+                        "Start with Windows",
+                        "Launch Resource Monitor when you sign in",
+                        ID_AUTOSTART,
+                    ),
+                    toggle_card(
+                        "Achievements",
+                        "Earn medals for real use. Nothing leaves this PC",
+                        ID_ACHIEVE,
+                    ),
                 ]);
                 v
             }
@@ -1480,8 +1691,18 @@ impl Ui {
                         m.menu_label(),
                         "",
                         vec![
-                            Cell::Ctl { id: ID_MUP + p, kind: Kind::Glyph(G_CHEVRON_UP), w: 32, enabled: pos > 0 },
-                            Cell::Ctl { id: ID_MDN + p, kind: Kind::Glyph(G_CHEVRON_DOWN), w: 32, enabled: pos + 1 < n },
+                            Cell::Ctl {
+                                id: ID_MUP + p,
+                                kind: Kind::Glyph(G_CHEVRON_UP),
+                                w: 32,
+                                enabled: pos > 0,
+                            },
+                            Cell::Ctl {
+                                id: ID_MDN + p,
+                                kind: Kind::Glyph(G_CHEVRON_DOWN),
+                                w: 32,
+                                enabled: pos + 1 < n,
+                            },
                             cell(ID_MTOG + p, Kind::Toggle, 0),
                         ],
                     ));
@@ -1498,7 +1719,12 @@ impl Ui {
                     card(
                         "Custom colours",
                         "Remove every custom colour",
-                        vec![Cell::Ctl { id: ID_RESETALL, kind: Kind::Button("Reset all colours", false), w: 0, enabled: !d.colors.is_empty() }],
+                        vec![Cell::Ctl {
+                            id: ID_RESETALL,
+                            kind: Kind::Button("Reset all colours", false),
+                            w: 0,
+                            enabled: !d.colors.is_empty(),
+                        }],
                     ),
                     Def::Heading("Metric colours"),
                 ];
@@ -1508,7 +1734,12 @@ impl Ui {
                         m.menu_label(),
                         "",
                         vec![
-                            Cell::Ctl { id: ID_CRESET + i as i32, kind: Kind::Link("Reset"), w: 0, enabled: custom },
+                            Cell::Ctl {
+                                id: ID_CRESET + i as i32,
+                                kind: Kind::Link("Reset"),
+                                w: 0,
+                                enabled: custom,
+                            },
                             cell(ID_SWATCH + i as i32, Kind::Swatch(*m), 48),
                         ],
                     ));
@@ -1518,19 +1749,87 @@ impl Ui {
             Page::Alerts => {
                 let on = d.alerts;
                 let mut v = vec![
-                    toggle_card("Alert notifications", "Show a tray notification when a limit is crossed", ID_ALERTS),
+                    toggle_card(
+                        "Alert notifications",
+                        "Show a tray notification when a limit is crossed",
+                        ID_ALERTS,
+                    ),
                     Def::Heading("Limits"),
-                    gated(self.number_card("CPU usage above", "Percent of total CPU. 0 turns this alert off", ID_A_CPU, "%"), on),
-                    gated(self.number_card("Memory usage above", "Percent of installed memory. 0 turns this alert off", ID_A_RAM, "%"), on),
-                    gated(self.number_card("For at least", "How long CPU or memory must stay above its limit", ID_A_SECS, "seconds"), on),
-                    gated(self.number_card("System drive free space below", "0 turns this alert off", ID_A_DISK, "%"), on),
-                    gated(self.number_card("Battery at or below", "Only while not charging. 0 turns this alert off", ID_A_BAT, "%"), on),
-                    gated(toggle_card("Data cap alerts", "Alert at 90% and 100% of the monthly data cap", ID_A_CAP), on),
+                    gated(
+                        self.number_card(
+                            "CPU usage above",
+                            "Percent of total CPU. 0 turns this alert off",
+                            ID_A_CPU,
+                            "%",
+                        ),
+                        on,
+                    ),
+                    gated(
+                        self.number_card(
+                            "Memory usage above",
+                            "Percent of installed memory. 0 turns this alert off",
+                            ID_A_RAM,
+                            "%",
+                        ),
+                        on,
+                    ),
+                    gated(
+                        self.number_card(
+                            "For at least",
+                            "How long CPU or memory must stay above its limit",
+                            ID_A_SECS,
+                            "seconds",
+                        ),
+                        on,
+                    ),
+                    gated(
+                        self.number_card(
+                            "System drive free space below",
+                            "0 turns this alert off",
+                            ID_A_DISK,
+                            "%",
+                        ),
+                        on,
+                    ),
+                    gated(
+                        self.number_card(
+                            "Battery at or below",
+                            "Only while not charging. 0 turns this alert off",
+                            ID_A_BAT,
+                            "%",
+                        ),
+                        on,
+                    ),
+                    gated(
+                        toggle_card(
+                            "Data cap alerts",
+                            "Alert at 90% and 100% of the monthly data cap",
+                            ID_A_CAP,
+                        ),
+                        on,
+                    ),
                     Def::Heading("Colour thresholds"),
-                    self.number_card("Amber from", "Values turn amber from this percentage", ID_WARN, "%"),
-                    self.number_card("Red from", "Values turn red from this percentage", ID_CRIT, "%"),
+                    self.number_card(
+                        "Amber from",
+                        "Values turn amber from this percentage",
+                        ID_WARN,
+                        "%",
+                    ),
+                    self.number_card(
+                        "Red from",
+                        "Values turn red from this percentage",
+                        ID_CRIT,
+                        "%",
+                    ),
                     Def::Heading("Insights"),
-                    gated(toggle_card("Insight notifications", "Sleep verdict on wake, crashes and driver resets", ID_INS_TOASTS), d.insights),
+                    gated(
+                        toggle_card(
+                            "Insight notifications",
+                            "Sleep verdict on wake, crashes and driver resets",
+                            ID_INS_TOASTS,
+                        ),
+                        d.insights,
+                    ),
                 ];
                 // No battery, no battery alert (it could never fire).
                 if !self.battery {
@@ -1539,29 +1838,69 @@ impl Ui {
                 v
             }
             Page::Data => vec![
-                self.number_card("Monthly data cap", "In gigabytes. 0 turns the cap off", ID_CAP, "GB"),
-                card("Billing cycle resets on day", "Data is counted since the last reset day", vec![cell(ID_DAY, Kind::Dropdown, 120)]),
-                card("Network adapter", "Which adapter the data counters follow", vec![cell(ID_ADAPTER, Kind::Dropdown, 250)]),
+                self.number_card(
+                    "Monthly data cap",
+                    "In gigabytes. 0 turns the cap off",
+                    ID_CAP,
+                    "GB",
+                ),
+                card(
+                    "Billing cycle resets on day",
+                    "Data is counted since the last reset day",
+                    vec![cell(ID_DAY, Kind::Dropdown, 120)],
+                ),
+                card(
+                    "Network adapter",
+                    "Which adapter the data counters follow",
+                    vec![cell(ID_ADAPTER, Kind::Dropdown, 250)],
+                ),
                 card(
                     "Data usage report",
                     "Daily and monthly totals",
-                    vec![cell(ID_REPORT, Kind::Button("Open data usage report", false), 0)],
+                    vec![cell(
+                        ID_REPORT,
+                        Kind::Button("Open data usage report", false),
+                        0,
+                    )],
                 ),
             ],
             _ => vec![
-                Def::Note(concat!("Resource Monitor v", env!("CARGO_PKG_VERSION"), " by Emulsion Labs.")),
-                card("Emulsion Labs", "Visit the website", vec![cell(ID_WEBSITE, Kind::Button("Open website", false), 0)]),
+                Def::Note(concat!(
+                    "Resource Monitor v",
+                    env!("CARGO_PKG_VERSION"),
+                    " by Emulsion Labs."
+                )),
+                card(
+                    "Emulsion Labs",
+                    "Visit the website",
+                    vec![cell(ID_WEBSITE, Kind::Button("Open website", false), 0)],
+                ),
                 card(
                     "Updates",
-                    concat!("Version ", env!("CARGO_PKG_VERSION"), ". Look for a newer one now"),
-                    vec![cell(ID_UPDATES, Kind::Button("Check for updates", false), 0)],
+                    concat!(
+                        "Version ",
+                        env!("CARGO_PKG_VERSION"),
+                        ". Look for a newer one now"
+                    ),
+                    vec![cell(
+                        ID_UPDATES,
+                        Kind::Button("Check for updates", false),
+                        0,
+                    )],
                 ),
-                card("Settings file", "Edit settings.ini in Notepad", vec![cell(ID_EDITFILE, Kind::Button("Edit", false), BTN_W)]),
-                card("Data folder", "Settings, usage history and logs", vec![cell(ID_DATADIR, Kind::Button("Open", false), BTN_W)]),
+                card(
+                    "Settings file",
+                    "Edit settings.ini in Notepad",
+                    vec![cell(ID_EDITFILE, Kind::Button("Edit", false), BTN_W)],
+                ),
+                card(
+                    "Data folder",
+                    "Settings, usage history and logs",
+                    vec![cell(ID_DATADIR, Kind::Button("Open", false), BTN_W)],
+                ),
             ],
         }
     }
-
 
     fn page_defs(&self, page: Page) -> Vec<Def> {
         match page {
@@ -1583,7 +1922,11 @@ impl Ui {
 
     fn overview_defs(&self) -> Vec<Def> {
         let mut v = self.overview_top();
-        v.push(toggle_card("Insights", "Explain spikes, sleep, throttling and memory. Nothing leaves this PC", ID_INSIGHTS));
+        v.push(toggle_card(
+            "Insights",
+            "Explain spikes, sleep, throttling and memory. Nothing leaves this PC",
+            ID_INSIGHTS,
+        ));
         v.push(Def::Heading("This PC"));
         for i in 0..5 {
             v.push(Def::Summary(i));
@@ -1592,7 +1935,12 @@ impl Ui {
         v.push(card(
             "Clear history",
             "Forget every incident, night and daily baseline",
-            vec![Cell::Ctl { id: ID_INS_CLEAR, kind: Kind::Button("Clear", false), w: BTN_W, enabled: self.draft.insights }],
+            vec![Cell::Ctl {
+                id: ID_INS_CLEAR,
+                kind: Kind::Button("Clear", false),
+                w: BTN_W,
+                enabled: self.draft.insights,
+            }],
         ));
         v
     }
@@ -1604,10 +1952,16 @@ impl Ui {
         if on && self.ach.is_some() {
             v.push(Def::Room);
         } else {
-            v.push(Def::Note("Medals, XP and levels for real use of this PC. Nothing leaves this PC."));
+            v.push(Def::Note(
+                "Medals, XP and levels for real use of this PC. Nothing leaves this PC.",
+            ));
         }
         if !on {
-            v.push(toggle_card("Track achievements", "Achievements are off. Turn them on to earn medals", ID_ACHIEVE));
+            v.push(toggle_card(
+                "Track achievements",
+                "Achievements are off. Turn them on to earn medals",
+                ID_ACHIEVE,
+            ));
         }
         v
     }
@@ -1617,7 +1971,11 @@ impl Ui {
         // Bag Guard only on a PC with a battery; it never acts without one.
         if page == Page::Sleep && self.battery {
             v.push(gated(
-                toggle_card("Bag Guard", "Hibernate a lid-shut laptop that keeps draining on battery", ID_BAGGUARD),
+                toggle_card(
+                    "Bag Guard",
+                    "Hibernate a lid-shut laptop that keeps draining on battery",
+                    ID_BAGGUARD,
+                ),
                 self.draft.insights,
             ));
         }
@@ -1628,7 +1986,11 @@ impl Ui {
                 }
                 v.push(Def::Panel(i));
             }
-            _ => v.push(toggle_card("Insights is off", "Turn it on to explain spikes, sleep, throttling and memory", ID_INSIGHTS)),
+            _ => v.push(toggle_card(
+                "Insights is off",
+                "Turn it on to explain spikes, sleep, throttling and memory",
+                ID_INSIGHTS,
+            )),
         }
         v
     }
@@ -1662,8 +2024,14 @@ impl Ui {
     fn col(&self) -> (i32, i32) {
         let l = self.content_x() + self.sc(PAGE_PAD);
         // Achievements (the Server Room) fills the window; the other pages keep a readable column
-        let max = if self.page == Page::Achievements { self.sc(4000) } else { self.sc(CONTENT_MAX) };
-        let r = (self.cw - self.sc(PAGE_PAD)).min(l + max).max(l + self.sc(240));
+        let max = if self.page == Page::Achievements {
+            self.sc(4000)
+        } else {
+            self.sc(CONTENT_MAX)
+        };
+        let r = (self.cw - self.sc(PAGE_PAD))
+            .min(l + max)
+            .max(l + self.sc(240));
         (l, r)
     }
 
@@ -1694,7 +2062,11 @@ impl Ui {
     /// Top of the pane footer (About, the chip slot).
     fn footer_top(&self) -> i32 {
         let n = nav::FOOTER.len() as i32;
-        self.ch - self.sc(NAV_INSET) - n * self.sc(NAV_ITEM_H) - (n - 1) * self.sc(NAV_GAP) - self.footer_chip_h()
+        self.ch
+            - self.sc(NAV_INSET)
+            - n * self.sc(NAV_ITEM_H)
+            - (n - 1) * self.sc(NAV_GAP)
+            - self.footer_chip_h()
     }
 
     /// The scrolling menu band of the pane (client y).
@@ -1711,10 +2083,14 @@ impl Ui {
     fn ctl_width(&self, kind: Kind, w: i32) -> i32 {
         match kind {
             Kind::Toggle => {
-                let lw = self.measure(self.fonts.body, "On").max(self.measure(self.fonts.body, "Off"));
+                let lw = self
+                    .measure(self.fonts.body, "On")
+                    .max(self.measure(self.fonts.body, "Off"));
                 self.sc(40 + 12) + lw
             }
-            Kind::Button(t, _) if w == 0 => (self.measure(self.fonts.body, t) + self.sc(32)).max(self.sc(120)),
+            Kind::Button(t, _) if w == 0 => {
+                (self.measure(self.fonts.body, t) + self.sc(32)).max(self.sc(120))
+            }
             Kind::Link(t) if w == 0 => self.measure(self.fonts.body, t) + self.sc(16),
             _ => self.sc(w),
         }
@@ -1730,26 +2106,61 @@ impl Ui {
         let pw = self.pane_w();
         let labels = self.labels();
         let (ih, gap, ins) = (self.sc(NAV_ITEM_H), self.sc(NAV_GAP), self.sc(NAV_INSET));
-        let item = |t: i32| Rect { l: ins, t, r: pw - ins, b: t + ih };
-        let hb = Rect { l: ins, t: ins, r: ins + self.sc(40), b: ins + ih };
-        controls.push(Control { id: ID_HAMBURGER, kind: Kind::Icon(G_HAMBURGER), rect: hb, layer: Layer::Fixed, enabled: true });
+        let item = |t: i32| Rect {
+            l: ins,
+            t,
+            r: pw - ins,
+            b: t + ih,
+        };
+        let hb = Rect {
+            l: ins,
+            t: ins,
+            r: ins + self.sc(40),
+            b: ins + ih,
+        };
+        controls.push(Control {
+            id: ID_HAMBURGER,
+            kind: Kind::Icon(G_HAMBURGER),
+            rect: hb,
+            layer: Layer::Fixed,
+            enabled: true,
+        });
         let mut y = 0;
         for e in nav::MENU {
             match e {
                 Entry::Item(p) => {
-                    controls.push(Control { id: nav_id(p), kind: Kind::Nav(p), rect: item(y), layer: Layer::Menu, enabled: true });
+                    controls.push(Control {
+                        id: nav_id(p),
+                        kind: Kind::Nav(p),
+                        rect: item(y),
+                        layer: Layer::Menu,
+                        enabled: true,
+                    });
                     y += ih + gap;
                 }
                 // Headers hide in compact mode; separators stay.
                 Entry::Header(t) if labels => {
                     let h = self.sc(NAV_HEAD_H);
-                    rows.push(NavRow::Header(Rect { l: ins, t: y, r: pw - ins, b: y + h }, t));
+                    rows.push(NavRow::Header(
+                        Rect {
+                            l: ins,
+                            t: y,
+                            r: pw - ins,
+                            b: y + h,
+                        },
+                        t,
+                    ));
                     y += h;
                 }
                 Entry::Header(_) => {}
                 Entry::Separator => {
                     let h = self.sc(NAV_SEP_H);
-                    rows.push(NavRow::Separator(Rect { l: ins + self.sc(8), t: y, r: pw - ins - self.sc(8), b: y + h }));
+                    rows.push(NavRow::Separator(Rect {
+                        l: ins + self.sc(8),
+                        t: y,
+                        r: pw - ins - self.sc(8),
+                        b: y + h,
+                    }));
                     y += h;
                 }
             }
@@ -1757,12 +2168,29 @@ impl Ui {
         self.nav_h = y;
         if self.footer_chip_h() > 0 {
             let t = self.footer_top();
-            let chip = Rect { l: ins, t, r: pw - ins, b: t + room::chip_h(self.dpi, labels) };
-            controls.push(Control { id: ID_CHIP, kind: Kind::Chip, rect: chip, layer: Layer::Fixed, enabled: true });
+            let chip = Rect {
+                l: ins,
+                t,
+                r: pw - ins,
+                b: t + room::chip_h(self.dpi, labels),
+            };
+            controls.push(Control {
+                id: ID_CHIP,
+                kind: Kind::Chip,
+                rect: chip,
+                layer: Layer::Fixed,
+                enabled: true,
+            });
         }
         let mut t = self.footer_top() + self.footer_chip_h();
         for p in nav::FOOTER {
-            controls.push(Control { id: nav_id(p), kind: Kind::Nav(p), rect: item(t), layer: Layer::Fixed, enabled: true });
+            controls.push(Control {
+                id: nav_id(p),
+                kind: Kind::Nav(p),
+                rect: item(t),
+                layer: Layer::Fixed,
+                enabled: true,
+            });
             t += ih + gap;
         }
         self.rows = rows;
@@ -1772,9 +2200,20 @@ impl Ui {
         let (l, r) = self.col();
         let bs = self.sc(32);
         let by = (self.sc(HEADER_H) - bs) / 2 + self.sc(2);
-        let back = Rect { l, t: by, r: l + bs, b: by + bs };
+        let back = Rect {
+            l,
+            t: by,
+            r: l + bs,
+            b: by + bs,
+        };
         let can_back = self.history.can_go_back();
-        controls.push(Control { id: ID_BACK, kind: Kind::Icon(G_BACK), rect: back, layer: Layer::Fixed, enabled: can_back });
+        controls.push(Control {
+            id: ID_BACK,
+            kind: Kind::Icon(G_BACK),
+            rect: back,
+            layer: Layer::Fixed,
+            enabled: can_back,
+        });
 
         // Page.
         let (row_h, ctl_h) = (self.sc(ROW_H), self.sc(CTL_H));
@@ -1789,66 +2228,155 @@ impl Ui {
                         y += self.sc(HEAD_TOP) - self.sc(ROW_GAP);
                     }
                     let h = self.sc(HEAD_H);
-                    blocks.push(Block::Heading(Rect { l, t: y, r, b: y + h }, t));
+                    blocks.push(Block::Heading(
+                        Rect {
+                            l,
+                            t: y,
+                            r,
+                            b: y + h,
+                        },
+                        t,
+                    ));
                     y += h;
                 }
                 Def::Note(t) => {
-                    let h = if t.is_empty() { self.sc(12) } else { self.sc(NOTE_H) };
-                    blocks.push(Block::Note(Rect { l, t: y, r, b: y + h }, t));
+                    let h = if t.is_empty() {
+                        self.sc(12)
+                    } else {
+                        self.sc(NOTE_H)
+                    };
+                    blocks.push(Block::Note(
+                        Rect {
+                            l,
+                            t: y,
+                            r,
+                            b: y + h,
+                        },
+                        t,
+                    ));
                     y += h;
                 }
                 Def::Summary(i) => {
-                    let Some(pg) = Page::of_panel(i) else { continue };
-                    let rect = Rect { l, t: y, r, b: y + self.sc(SUMMARY_H) };
-                    controls.push(Control { id: ID_SUMMARY + i as i32, kind: Kind::Summary(pg), rect, layer: Layer::Page, enabled: true });
+                    let Some(pg) = Page::of_panel(i) else {
+                        continue;
+                    };
+                    let rect = Rect {
+                        l,
+                        t: y,
+                        r,
+                        b: y + self.sc(SUMMARY_H),
+                    };
+                    controls.push(Control {
+                        id: ID_SUMMARY + i as i32,
+                        kind: Kind::Summary(pg),
+                        rect,
+                        layer: Layer::Page,
+                        enabled: true,
+                    });
                     y = rect.b + self.sc(ROW_GAP);
                 }
                 Def::Room => {
                     if let Some(st) = &self.ach {
                         let f = self.fonts.view();
                         let (vt, vb) = self.view();
-                        y = self.room.layout(st, self.mdc, &f, self.dpi, l, r, y, vb - vt);
+                        y = self
+                            .room
+                            .layout(st, self.mdc, &f, self.dpi, l, r, y, vb - vt);
                         room_on = true;
                         for (i, rect) in self.room.hit_rects() {
-                            controls.push(Control { id: ID_ROOM + i as i32, kind: Kind::Unit(i as u16), rect, layer: Layer::Page, enabled: true });
+                            controls.push(Control {
+                                id: ID_ROOM + i as i32,
+                                kind: Kind::Unit(i as u16),
+                                rect,
+                                layer: Layer::Page,
+                                enabled: true,
+                            });
                         }
                         if !self.room.coin_rect.is_empty() {
-                            controls.push(Control { id: ID_COIN, kind: Kind::Coin, rect: self.room.coin_rect, layer: Layer::Page, enabled: true });
+                            controls.push(Control {
+                                id: ID_COIN,
+                                kind: Kind::Coin,
+                                rect: self.room.coin_rect,
+                                layer: Layer::Page,
+                                enabled: true,
+                            });
                         }
                         for (i, (_, rect)) in self.room.single_rects.iter().enumerate() {
-                            controls.push(Control { id: ID_SINGLE + i as i32, kind: Kind::Single(i as u16), rect: *rect, layer: Layer::Page, enabled: true });
+                            controls.push(Control {
+                                id: ID_SINGLE + i as i32,
+                                kind: Kind::Single(i as u16),
+                                rect: *rect,
+                                layer: Layer::Page,
+                                enabled: true,
+                            });
                         }
                         if !self.room.polish_btn.is_empty() {
-                            controls.push(Control { id: ID_POLISH, kind: Kind::Button("Polish", false), rect: self.room.polish_btn, layer: Layer::Page, enabled: true });
+                            controls.push(Control {
+                                id: ID_POLISH,
+                                kind: Kind::Button("Polish", false),
+                                rect: self.room.polish_btn,
+                                layer: Layer::Page,
+                                enabled: true,
+                            });
                         }
                         let big = [
                             (ID_BIG, "View large", self.room.big_btn, true),
+                            (ID_BIG_HEAD, "View medals", self.room.head_btn, false),
                             (ID_BIG_CLOSE, "Back to racks", self.room.close_btn, false),
                             (ID_BIG_PREV, "Previous", self.room.prev_btn, false),
                             (ID_BIG_NEXT, "Next", self.room.next_btn, false),
                         ];
                         for (id, label, rect, accent) in big {
                             if !rect.is_empty() {
-                                controls.push(Control { id, kind: Kind::Button(label, accent), rect, layer: Layer::Page, enabled: true });
+                                controls.push(Control {
+                                    id,
+                                    kind: Kind::Button(label, accent),
+                                    rect,
+                                    layer: Layer::Page,
+                                    enabled: true,
+                                });
                             }
                         }
                         y += self.sc(ROW_GAP);
                     }
                 }
                 Def::Goal => {
-                    let rect = Rect { l, t: y, r, b: y + room::goal_card_h(self.dpi) };
-                    controls.push(Control { id: ID_GOAL, kind: Kind::Goal, rect, layer: Layer::Page, enabled: true });
+                    let rect = Rect {
+                        l,
+                        t: y,
+                        r,
+                        b: y + room::goal_card_h(self.dpi),
+                    };
+                    controls.push(Control {
+                        id: ID_GOAL,
+                        kind: Kind::Goal,
+                        rect,
+                        layer: Layer::Page,
+                        enabled: true,
+                    });
                     y = rect.b + self.sc(ROW_GAP);
                 }
                 Def::Panel(i) => {
                     if let Some(p) = self.panels.get(i) {
                         let f = self.fonts.view();
-                        y = self.pview.layout(p, self.mdc, &f, self.dpi, l, r, y, unix_ms());
+                        y = self
+                            .pview
+                            .layout(p, self.mdc, &f, self.dpi, l, r, y, unix_ms());
                         self.panel_idx = Some(i);
                     }
                 }
-                Def::Card { title, desc, enabled, cells } => {
-                    let rect = Rect { l, t: y, r, b: y + row_h };
+                Def::Card {
+                    title,
+                    desc,
+                    enabled,
+                    cells,
+                } => {
+                    let rect = Rect {
+                        l,
+                        t: y,
+                        r,
+                        b: y + row_h,
+                    };
                     let cy = y + row_h / 2;
                     let (ct, cb) = (cy - ctl_h / 2, cy - ctl_h / 2 + ctl_h);
                     let mut x = r - self.sc(CARD_PAD);
@@ -1856,21 +2384,55 @@ impl Ui {
                     let mut row = Vec::new();
                     for c in cells.iter().rev() {
                         let w = match c {
-                            Cell::Ctl { id, kind, w, enabled: e } => {
+                            Cell::Ctl {
+                                id,
+                                kind,
+                                w,
+                                enabled: e,
+                            } => {
                                 let w = self.ctl_width(*kind, *w);
-                                let rc = Rect { l: x - w, t: ct, r: x, b: cb };
-                                row.push(Control { id: *id, kind: *kind, rect: rc, layer: Layer::Page, enabled: enabled && *e });
+                                let rc = Rect {
+                                    l: x - w,
+                                    t: ct,
+                                    r: x,
+                                    b: cb,
+                                };
+                                row.push(Control {
+                                    id: *id,
+                                    kind: *kind,
+                                    rect: rc,
+                                    layer: Layer::Page,
+                                    enabled: enabled && *e,
+                                });
                                 w
                             }
                             Cell::Unit(shown, reserve) => {
                                 let w = self.measure(self.fonts.body, reserve);
-                                labels.push((Rect { l: x - w, t: ct, r: x, b: cb }, shown.to_string()));
+                                labels.push((
+                                    Rect {
+                                        l: x - w,
+                                        t: ct,
+                                        r: x,
+                                        b: cb,
+                                    },
+                                    shown.to_string(),
+                                ));
                                 w
                             }
                             Cell::Value(id) => {
                                 let s = self.value_text(*id);
-                                let w = self.measure(self.fonts.body, "100 %").max(self.measure(self.fonts.body, &s));
-                                labels.push((Rect { l: x - w, t: ct, r: x, b: cb }, s));
+                                let w = self
+                                    .measure(self.fonts.body, "100 %")
+                                    .max(self.measure(self.fonts.body, &s));
+                                labels.push((
+                                    Rect {
+                                        l: x - w,
+                                        t: ct,
+                                        r: x,
+                                        b: cb,
+                                    },
+                                    s,
+                                ));
                                 w
                             }
                         };
@@ -1878,7 +2440,14 @@ impl Ui {
                     }
                     row.reverse(); // tab order: left to right
                     controls.extend(row);
-                    blocks.push(Block::Card { rect, text_r: x, title, desc, enabled, labels });
+                    blocks.push(Block::Card {
+                        rect,
+                        text_r: x,
+                        title,
+                        desc,
+                        enabled,
+                        labels,
+                    });
                     y += row_h + self.sc(ROW_GAP);
                 }
             }
@@ -1913,14 +2482,28 @@ impl Ui {
 
     fn stepper_parts(&self, r: Rect) -> (Rect, Rect) {
         let (bw, pad) = (self.sc(28), self.sc(4));
-        let plus = Rect { l: r.r - pad - bw, t: r.t + pad, r: r.r - pad, b: r.b - pad };
-        let minus = Rect { l: plus.l - self.sc(2) - bw, r: plus.l - self.sc(2), ..plus };
+        let plus = Rect {
+            l: r.r - pad - bw,
+            t: r.t + pad,
+            r: r.r - pad,
+            b: r.b - pad,
+        };
+        let minus = Rect {
+            l: plus.l - self.sc(2) - bw,
+            r: plus.l - self.sc(2),
+            ..plus
+        };
         (minus, plus)
     }
 
     fn toggle_track(&self, r: Rect) -> Rect {
         let cy = (r.t + r.b) / 2;
-        Rect { l: r.r - self.sc(40), t: cy - self.sc(10), r: r.r, b: cy - self.sc(10) + self.sc(20) }
+        Rect {
+            l: r.r - self.sc(40),
+            t: cy - self.sc(10),
+            r: r.r,
+            b: cy - self.sc(10) + self.sc(20),
+        }
     }
 
     /// Ends of the slider's travel (thumb centre positions).
@@ -1930,7 +2513,11 @@ impl Ui {
 
     /// The point is over the pane (the full pane while the overlay is open).
     fn over_pane(&self, x: i32) -> bool {
-        x < if self.overlay { self.pane_w() } else { self.content_x() }
+        x < if self.overlay {
+            self.pane_w()
+        } else {
+            self.content_x()
+        }
     }
 
     fn hit(&self, x: i32, y: i32) -> Option<(i32, Part)> {
@@ -1944,7 +2531,9 @@ impl Ui {
             let visible = match c.layer {
                 Layer::Page => !pane && y >= vt && y < vb,
                 Layer::Menu => pane && y >= mt && y < mb,
-                Layer::Fixed => pane == matches!(c.kind, Kind::Nav(_) | Kind::Chip | Kind::Icon(G_HAMBURGER)),
+                Layer::Fixed => {
+                    pane == matches!(c.kind, Kind::Nav(_) | Kind::Chip | Kind::Icon(G_HAMBURGER))
+                }
             };
             if !visible {
                 continue;
@@ -1987,13 +2576,28 @@ impl Ui {
             return None;
         }
         let (vt, vb) = self.view();
-        let track = Rect { l: self.cw - self.sc(16), t: vt + self.sc(4), r: self.cw - self.sc(2), b: vb - self.sc(4) };
-        let th = (track.h() * (vb - vt) / self.content_h.max(1)).max(self.sc(32)).min(track.h());
+        let track = Rect {
+            l: self.cw - self.sc(16),
+            t: vt + self.sc(4),
+            r: self.cw - self.sc(2),
+            b: vb - self.sc(4),
+        };
+        let th = (track.h() * (vb - vt) / self.content_h.max(1))
+            .max(self.sc(32))
+            .min(track.h());
         let ty = track.t + ((track.h() - th) as f32 * (self.scroll / max as f32)).round() as i32;
         let wide = self.sb_hover || matches!(self.drag, Drag::Thumb(_));
         let w = if wide { self.sc(6) } else { self.sc(4) };
         let r = track.r - self.sc(2);
-        Some((track, Rect { l: r - w, t: ty, r, b: ty + th }))
+        Some((
+            track,
+            Rect {
+                l: r - w,
+                t: ty,
+                r,
+                b: ty + th,
+            },
+        ))
     }
 
     // -------------------------------------------------------------- motion
@@ -2021,7 +2625,8 @@ impl Ui {
             self.scroll += d * 0.3;
             busy = true;
         }
-        let done = |t: Option<Instant>, dur: f32| t.is_none_or(|t| t.elapsed().as_secs_f32() >= dur);
+        let done =
+            |t: Option<Instant>, dur: f32| t.is_none_or(|t| t.elapsed().as_secs_f32() >= dur);
         if done(self.anim.page, PAGE_ANIM_S) {
             self.anim.page = None;
         } else {
@@ -2107,7 +2712,11 @@ impl Ui {
         let inside = pt.x >= 0 && pt.y >= 0 && pt.x < self.cw && pt.y < self.ch;
         let free = inside && self.drag == Drag::None;
         self.hover = if free { self.hit(pt.x, pt.y) } else { None };
-        self.chart_hover = if free { self.chart_at(pt.x, pt.y) } else { None };
+        self.chart_hover = if free {
+            self.chart_at(pt.x, pt.y)
+        } else {
+            None
+        };
     }
 
     // -------------------------------------------------------------- navigation
@@ -2197,11 +2806,16 @@ impl Ui {
 
     /// Ids a keyboard user walks with Up / Down in the pane.
     fn nav_ids(&self) -> Vec<i32> {
-        std::iter::once(ID_HAMBURGER).chain(nav::nav_order().map(nav_id)).collect()
+        std::iter::once(ID_HAMBURGER)
+            .chain(nav::nav_order().map(nav_id))
+            .collect()
     }
 
     fn in_nav(&self, id: i32) -> bool {
-        id == ID_HAMBURGER || self.control(id).is_some_and(|c| matches!(c.kind, Kind::Nav(_)))
+        id == ID_HAMBURGER
+            || self
+                .control(id)
+                .is_some_and(|c| matches!(c.kind, Kind::Nav(_)))
     }
 
     /// Controls in Tab order: hamburger, the selected navigation item, back,
@@ -2212,7 +2826,12 @@ impl Ui {
         if self.control(ID_BACK).is_some_and(|c| c.enabled) {
             v.push(ID_BACK);
         }
-        v.extend(self.controls.iter().filter(|c| c.enabled && c.layer == Layer::Page).map(|c| c.id));
+        v.extend(
+            self.controls
+                .iter()
+                .filter(|c| c.enabled && c.layer == Layer::Page)
+                .map(|c| c.id),
+        );
         v
     }
 
@@ -2229,7 +2848,13 @@ impl Ui {
         let order = self.focus_order();
         let n = order.len() as i32;
         // A non-selected pane item (reached with the arrows) counts as the selected one.
-        let cur = self.focus.map(|f| if self.in_nav(f) && f != ID_HAMBURGER { nav_id(self.page) } else { f });
+        let cur = self.focus.map(|f| {
+            if self.in_nav(f) && f != ID_HAMBURGER {
+                nav_id(self.page)
+            } else {
+                f
+            }
+        });
         let next = match cur.and_then(|f| order.iter().position(|x| *x == f)) {
             Some(i) => (i as i32 + dir).rem_euclid(n),
             None if dir > 0 => 0,
@@ -2241,7 +2866,11 @@ impl Ui {
     /// F6: between the pane and the content.
     fn switch_region(&mut self) {
         if self.focus.is_some_and(|f| self.in_nav(f)) {
-            let first = self.controls.iter().find(|c| c.enabled && c.layer == Layer::Page).map(|c| c.id);
+            let first = self
+                .controls
+                .iter()
+                .find(|c| c.enabled && c.layer == Layer::Page)
+                .map(|c| c.id);
             self.set_focus(first.or(self.control(ID_BACK).filter(|c| c.enabled).map(|c| c.id)));
         } else {
             self.set_focus(Some(nav_id(self.page)));
@@ -2275,11 +2904,18 @@ impl Ui {
         let rad = self.sc(6) as f32;
         // Page transition: content slides up `PAGE_SLIDE` while it fades in.
         let fade = self.anim.page.map(|t| Self::progress(t, PAGE_ANIM_S));
-        let slide = fade.map_or(0, |e| ((1.0 - e) * self.sc(PAGE_SLIDE) as f32).round() as i32);
+        let slide = fade.map_or(0, |e| {
+            ((1.0 - e) * self.sc(PAGE_SLIDE) as f32).round() as i32
+        });
         let dy = vt - self.scroll_px() + slide;
 
         // Page content, clipped to the band under the header.
-        cv.set_clip(Some(Rect { l: cx0, t: vt, r: self.cw, b: vb }));
+        cv.set_clip(Some(Rect {
+            l: cx0,
+            t: vt,
+            r: self.cw,
+            b: vb,
+        }));
         for b in &self.blocks {
             match b {
                 Block::Heading(r, t) => {
@@ -2298,14 +2934,25 @@ impl Ui {
                     let s = cv.ellipsize(f.body, t, r.w() - self.sc(4));
                     cv.text(f.body, &s, r.l + self.sc(2), r.t + self.sc(2), p.dim);
                 }
-                Block::Card { rect, text_r, title, desc, enabled, labels } => {
+                Block::Card {
+                    rect,
+                    text_r,
+                    title,
+                    desc,
+                    enabled,
+                    labels,
+                } => {
                     let r = shift(*rect, dy);
                     if r.b < vt || r.t > vb {
                         continue;
                     }
                     cv.fill_round(r, rad, p.card);
                     cv.stroke_round(r, rad, p.card_border);
-                    let (c_main, c_dim) = if *enabled { (p.fg, p.dim) } else { (p.off, p.off) };
+                    let (c_main, c_dim) = if *enabled {
+                        (p.fg, p.dim)
+                    } else {
+                        (p.off, p.off)
+                    };
                     let tx = r.l + self.sc(CARD_PAD);
                     let max_w = (text_r - tx - self.sc(8)).max(self.sc(24));
                     let cy = (r.t + r.b) / 2;
@@ -2329,13 +2976,17 @@ impl Ui {
             }
         }
         if let Some(pn) = self.panel_idx.and_then(|i| self.panels.get(i)) {
-            self.pview.draw(cv, pn, &f.view(), &p.view(), dy, vt, vb, self.chart_hover);
+            self.pview
+                .draw(cv, pn, &f.view(), &p.view(), dy, vt, vb, self.chart_hover);
         }
         if self.room_on {
-            let hot = self.hover.and_then(|(id, _)| self.control(id)).and_then(|c| match c.kind {
-                Kind::Unit(i) => Some(i as usize),
-                _ => None,
-            });
+            let hot = self
+                .hover
+                .and_then(|(id, _)| self.control(id))
+                .and_then(|c| match c.kind {
+                    Kind::Unit(i) => Some(i as usize),
+                    _ => None,
+                });
             self.room.draw(cv, &f.view(), &p.view(), dy, vt, vb, hot);
         }
         for c in self.controls.iter().filter(|c| c.layer == Layer::Page) {
@@ -2347,7 +2998,12 @@ impl Ui {
         }
 
         // Page header: back button and title.
-        cv.set_clip(Some(Rect { l: cx0, t: 0, r: self.cw, b: vt }));
+        cv.set_clip(Some(Rect {
+            l: cx0,
+            t: 0,
+            r: self.cw,
+            b: vt,
+        }));
         let mut tx = self.col().0;
         let mut tcy = vt / 2 + slide;
         if let Some(c) = self.control(ID_BACK) {
@@ -2360,14 +3016,28 @@ impl Ui {
         text_mid(cv, f.title, &title, tx, tcy - self.sc(2), p.fg);
         cv.set_clip(None);
         if let Some(e) = fade {
-            cv.fade_rect(Rect { l: cx0, t: 0, r: self.cw, b: self.ch }, e, p.bg);
+            cv.fade_rect(
+                Rect {
+                    l: cx0,
+                    t: 0,
+                    r: self.cw,
+                    b: self.ch,
+                },
+                e,
+                p.bg,
+            );
         }
 
         // Overlay scroll bar.
         if let Some((track, thumb)) = self.scrollbar() {
             let wide = self.sb_hover || matches!(self.drag, Drag::Thumb(_));
             if wide {
-                let tr = Rect { l: thumb.l - self.sc(1), r: thumb.r + self.sc(1), t: track.t, b: track.b };
+                let tr = Rect {
+                    l: thumb.l - self.sc(1),
+                    r: thumb.r + self.sc(1),
+                    t: track.t,
+                    b: track.b,
+                };
                 cv.fill_round(tr, tr.w() as f32 / 2.0, p.sb_track);
             }
             cv.fill_round(thumb, thumb.w() as f32 / 2.0, p.sb);
@@ -2389,17 +3059,46 @@ impl Ui {
             }
             for i in 0..self.sc(8) {
                 let al = (0x28 * (self.sc(8) - i) / self.sc(8)) as u8;
-                cv.fill_rect(Rect { l: pw + i, t: 0, r: pw + i + 1, b: self.ch }, ka(if p.dark { al * 2 } else { al }));
+                cv.fill_rect(
+                    Rect {
+                        l: pw + i,
+                        t: 0,
+                        r: pw + i + 1,
+                        b: self.ch,
+                    },
+                    ka(if p.dark { al * 2 } else { al }),
+                );
             }
-            cv.fill_rect(Rect { l: 0, t: 0, r: pw, b: self.ch }, p.pane);
-            cv.fill_rect(Rect { l: pw - 1, t: 0, r: pw, b: self.ch }, p.card_border);
+            cv.fill_rect(
+                Rect {
+                    l: 0,
+                    t: 0,
+                    r: pw,
+                    b: self.ch,
+                },
+                p.pane,
+            );
+            cv.fill_rect(
+                Rect {
+                    l: pw - 1,
+                    t: 0,
+                    r: pw,
+                    b: self.ch,
+                },
+                p.card_border,
+            );
         }
         let clip_r = pw;
         let (mt, mb) = self.menu_band();
         let my = mt - self.nav_scroll;
 
         // Menu rows and items, clipped to the menu band.
-        cv.set_clip(Some(Rect { l: 0, t: mt, r: clip_r, b: mb }));
+        cv.set_clip(Some(Rect {
+            l: 0,
+            t: mt,
+            r: clip_r,
+            b: mb,
+        }));
         for row in &self.rows {
             match *row {
                 NavRow::Header(r, t) => {
@@ -2410,7 +3109,15 @@ impl Ui {
                 NavRow::Separator(r) => {
                     let r = shift(r, my);
                     let y = (r.t + r.b) / 2;
-                    cv.fill_rect(Rect { l: r.l, t: y, r: r.r, b: y + 1 }, p.line);
+                    cv.fill_rect(
+                        Rect {
+                            l: r.l,
+                            t: y,
+                            r: r.r,
+                            b: y + 1,
+                        },
+                        p.line,
+                    );
                 }
             }
         }
@@ -2424,13 +3131,30 @@ impl Ui {
         self.draw_indicator(cv, Some((mt, mb)), true);
 
         // Hamburger and footer.
-        cv.set_clip(Some(Rect { l: 0, t: 0, r: clip_r, b: self.ch }));
+        cv.set_clip(Some(Rect {
+            l: 0,
+            t: 0,
+            r: clip_r,
+            b: self.ch,
+        }));
         if self.nav_max_scroll() > 0 || self.footer_chip_h() > 0 {
             let y = self.footer_top() - self.sc(NAV_SEP_H) / 2 - 1;
             let ins = self.sc(NAV_INSET + 8);
-            cv.fill_rect(Rect { l: ins, t: y, r: self.pane_w() - ins, b: y + 1 }, p.line);
+            cv.fill_rect(
+                Rect {
+                    l: ins,
+                    t: y,
+                    r: self.pane_w() - ins,
+                    b: y + 1,
+                },
+                p.line,
+            );
         }
-        for c in self.controls.iter().filter(|c| c.layer == Layer::Fixed && c.id != ID_BACK) {
+        for c in self
+            .controls
+            .iter()
+            .filter(|c| c.layer == Layer::Fixed && c.id != ID_BACK)
+        {
             self.draw_control(cv, c, c.rect);
         }
         self.draw_indicator(cv, None, false);
@@ -2439,7 +3163,9 @@ impl Ui {
 
     /// The accent pill left of the selected item, sliding between items.
     fn draw_indicator(&self, cv: &mut Canvas, band: Option<(i32, i32)>, menu: bool) {
-        let Some(c) = self.control(nav_id(self.page)) else { return };
+        let Some(c) = self.control(nav_id(self.page)) else {
+            return;
+        };
         if (c.layer == Layer::Menu) != menu {
             return;
         }
@@ -2455,16 +3181,35 @@ impl Ui {
         }
         let (pw, ph) = (self.sc(3), self.sc(16));
         let t = cy - ph / 2;
-        cv.fill_round(Rect { l: r.l, t, r: r.l + pw, b: t + ph }, pw as f32 / 2.0, self.pal.accent);
+        cv.fill_round(
+            Rect {
+                l: r.l,
+                t,
+                r: r.l + pw,
+                b: t + ph,
+            },
+            pw as f32 / 2.0,
+            self.pal.accent,
+        );
     }
 
     /// Tone of an Insights page (for its dot), when Insights is on.
     fn page_tone(&self, pg: Page) -> Option<crate::insights::Tone> {
         let i = pg.panel()?;
-        self.ins_on.then(|| self.panels.get(i).map(|x| x.tone)).flatten()
+        self.ins_on
+            .then(|| self.panels.get(i).map(|x| x.tone))
+            .flatten()
     }
 
-    fn draw_nav_item(&self, cv: &mut Canvas, _c: &Control, r: Rect, pg: Page, hover: bool, pressed: bool) {
+    fn draw_nav_item(
+        &self,
+        cv: &mut Canvas,
+        _c: &Control,
+        r: Rect,
+        pg: Page,
+        hover: bool,
+        pressed: bool,
+    ) {
         let p = self.pal;
         let f = &self.fonts;
         let cy = (r.t + r.b) / 2;
@@ -2488,7 +3233,11 @@ impl Ui {
         if self.labels() {
             let dot = self.sc(8);
             let dx = r.r - self.sc(14);
-            let right = if tone.is_some() { dx - dot - self.sc(8) } else { r.r - self.sc(8) };
+            let right = if tone.is_some() {
+                dx - dot - self.sc(8)
+            } else {
+                r.r - self.sc(8)
+            };
             let label = cv.ellipsize(f.body, pg.title(), right - (r.l + self.sc(44)));
             text_mid(cv, f.body, &label, r.l + self.sc(44), cy, p.fg);
             if let Some(tc) = tone {
@@ -2517,11 +3266,25 @@ impl Ui {
             cv.fill_round(r, rad, p.subtle_hover);
         }
         cv.stroke_round(r, rad, p.card_border);
-        let panel = pg.panel().filter(|_| self.ins_on).and_then(|i| self.panels.get(i));
-        let (c_main, c_dim, c_icon) = if panel.is_some() { (p.fg, p.dim, p.accent) } else { (p.off, p.off, p.off) };
+        let panel = pg
+            .panel()
+            .filter(|_| self.ins_on)
+            .and_then(|i| self.panels.get(i));
+        let (c_main, c_dim, c_icon) = if panel.is_some() {
+            (p.fg, p.dim, p.accent)
+        } else {
+            (p.off, p.off, p.off)
+        };
         let pad = self.sc(CARD_PAD);
         let cy = (r.t + r.b) / 2;
-        glyph(cv, f.icon, pg.glyph(), r.l + pad + self.sc(12), r.t + pad + self.sc(10), c_icon);
+        glyph(
+            cv,
+            f.icon,
+            pg.glyph(),
+            r.l + pad + self.sc(12),
+            r.t + pad + self.sc(10),
+            c_icon,
+        );
         glyph(cv, f.icon_sm, G_CHEVRON_RIGHT, r.r - self.sc(24), cy, c_dim);
         let tx = r.l + pad + self.sc(36);
         let right = r.r - self.sc(48);
@@ -2533,13 +3296,28 @@ impl Ui {
             let pw = self.sc(10 + 8 + 6 + 12) + tw;
             let px = right - pw;
             // Centred on the card, in line with the chevron.
-            view::draw_pill(cv, &f.view(), &p.view(), self.dpi, px, cy - self.sc(12), pn.tone);
+            view::draw_pill(
+                cv,
+                &f.view(),
+                &p.view(),
+                self.dpi,
+                px,
+                cy - self.sc(12),
+                pn.tone,
+            );
             title_r = px - self.sc(12);
         }
-        let t = cv.ellipsize(f.semi, panel.map_or(pg.title(), |pn| pn.title), title_r - tx);
+        let t = cv.ellipsize(
+            f.semi,
+            panel.map_or(pg.title(), |pn| pn.title),
+            title_r - tx,
+        );
         cv.text(f.semi, &t, tx, ty, c_main);
         let (headline, fact) = match panel {
-            Some(pn) => (pn.headline.as_str(), pn.lines.first().map_or("", |s| s.as_str())),
+            Some(pn) => (
+                pn.headline.as_str(),
+                pn.lines.first().map_or("", |s| s.as_str()),
+            ),
             None => ("Insights is off", "Turn on Insights above to see this."),
         };
         let bh = cv.measure(f.body, "Ag").1;
@@ -2552,8 +3330,12 @@ impl Ui {
 
     /// Compact pane: the hovered item's name, beside it.
     fn draw_tip(&self, cv: &mut Canvas) {
-        let Some(pg) = self.tip.filter(|_| !self.labels()) else { return };
-        let Some(c) = self.control(nav_id(pg)) else { return };
+        let Some(pg) = self.tip.filter(|_| !self.labels()) else {
+            return;
+        };
+        let Some(c) = self.control(nav_id(pg)) else {
+            return;
+        };
         let r = self.client_rect(c);
         let p = self.pal;
         let f = &self.fonts;
@@ -2561,7 +3343,12 @@ impl Ui {
         let (bw, bh) = (tw + self.sc(16), th + self.sc(10));
         let l = r.r + self.sc(8);
         let t = ((r.t + r.b) / 2 - bh / 2).clamp(0, (self.ch - bh).max(0));
-        let br = Rect { l, t, r: l + bw, b: t + bh };
+        let br = Rect {
+            l,
+            t,
+            r: l + bw,
+            b: t + bh,
+        };
         cv.fill_round(br, self.sc(4) as f32, p.bubble);
         cv.stroke_round(br, self.sc(4) as f32, p.ctl_border);
         cv.text(f.body, pg.title(), l + self.sc(8), t + self.sc(5), p.fg);
@@ -2614,7 +3401,16 @@ impl Ui {
             }
             Kind::Chip => {
                 if let Some(st) = &self.ach {
-                    room::draw_chip(cv, &f.view(), &p.view(), self.dpi, r, st, self.labels(), hover || pressed);
+                    room::draw_chip(
+                        cv,
+                        &f.view(),
+                        &p.view(),
+                        self.dpi,
+                        r,
+                        st,
+                        self.labels(),
+                        hover || pressed,
+                    );
                 }
                 ring_r = (r, self.sc(6) as f32);
             }
@@ -2650,16 +3446,37 @@ impl Ui {
                     };
                     cv.fill_round(track, trad, fill);
                     let kx = track.r - self.sc(10) - (kw - kh) / 2;
-                    pill(cv, kx, cy, kw, kh, if en { p.on_accent } else { p.knob_dis });
+                    pill(
+                        cv,
+                        kx,
+                        cy,
+                        kw,
+                        kh,
+                        if en { p.on_accent } else { p.knob_dis },
+                    );
                 } else {
-                    cv.fill_round(track, trad, if hover && en { p.tog_fill_hover } else { p.tog_fill });
+                    cv.fill_round(
+                        track,
+                        trad,
+                        if hover && en {
+                            p.tog_fill_hover
+                        } else {
+                            p.tog_fill
+                        },
+                    );
                     cv.stroke_round(track, trad, if en { p.tog_stroke } else { p.tog_dis });
                     let kx = track.l + self.sc(10) + (kw - kh) / 2;
                     pill(cv, kx, cy, kw, kh, if en { p.knob_off } else { p.tog_dis });
                 }
                 let label = if on { "On" } else { "Off" };
                 let (lw, lh) = cv.measure(f.body, label);
-                cv.text(f.body, label, track.l - self.sc(12) - lw, cy - lh / 2, text_c);
+                cv.text(
+                    f.body,
+                    label,
+                    track.l - self.sc(12) - lw,
+                    cy - lh / 2,
+                    text_c,
+                );
                 ring_r = (inflate(track, self.sc(3)), trad + self.sc(3) as f32);
             }
             Kind::Dropdown => {
@@ -2670,7 +3487,14 @@ impl Ui {
                 let s = cv.ellipsize(f.body, s, r.w() - self.sc(12 + 36));
                 text_mid(cv, f.body, &s, r.l + self.sc(12), cy, text_c);
                 let gy = if pressed { cy + self.sc(1) } else { cy };
-                glyph(cv, f.icon_sm, G_CHEVRON_DOWN, r.r - self.sc(20), gy, if en { p.dim } else { p.off });
+                glyph(
+                    cv,
+                    f.icon_sm,
+                    G_CHEVRON_DOWN,
+                    r.r - self.sc(20),
+                    gy,
+                    if en { p.dim } else { p.off },
+                );
             }
             Kind::Slider => {
                 let (lo, hi, ..) = slider_spec(c.id);
@@ -2679,15 +3503,33 @@ impl Ui {
                 let frac = (v - lo) as f32 / (hi - lo).max(1) as f32;
                 let cx = a + ((b - a) as f32 * frac).round() as i32;
                 let th = self.sc(4).max(2);
-                let rail = Rect { l: a - self.sc(2), t: cy - th / 2, r: b + self.sc(2), b: cy - th / 2 + th };
+                let rail = Rect {
+                    l: a - self.sc(2),
+                    t: cy - th / 2,
+                    r: b + self.sc(2),
+                    b: cy - th / 2 + th,
+                };
                 cv.fill_round(rail, th as f32 / 2.0, if en { p.rail } else { p.tog_dis });
                 let accent = if en { p.accent } else { p.off };
                 cv.fill_round(Rect { r: cx, ..rail }, th as f32 / 2.0, accent);
                 let dragging = self.drag == Drag::Slider(c.id);
                 let d = self.sc(20);
                 pill(cv, cx, cy, d, d, p.thumb);
-                cv.stroke_round(Rect { l: cx - d / 2, t: cy - d / 2, r: cx - d / 2 + d, b: cy - d / 2 + d }, d as f32 / 2.0, p.thumb_rim);
-                let dot = if dragging || (hover && en) { self.sc(14) } else { self.sc(12) };
+                cv.stroke_round(
+                    Rect {
+                        l: cx - d / 2,
+                        t: cy - d / 2,
+                        r: cx - d / 2 + d,
+                        b: cy - d / 2 + d,
+                    },
+                    d as f32 / 2.0,
+                    p.thumb_rim,
+                );
+                let dot = if dragging || (hover && en) {
+                    self.sc(14)
+                } else {
+                    self.sc(12)
+                };
                 pill(cv, cx, cy, dot, dot, accent);
             }
             Kind::Stepper => {
@@ -2704,16 +3546,36 @@ impl Ui {
                 };
                 cv.fill_round(r, rad4, fill);
                 cv.stroke_round(r, rad4, p.ctl_border);
-                text_mid(cv, f.body, &self.num_text(c.id), r.l + self.sc(12), cy, text_c);
+                text_mid(
+                    cv,
+                    f.body,
+                    &self.num_text(c.id),
+                    r.l + self.sc(12),
+                    cy,
+                    text_c,
+                );
                 let (lo, hi, ..) = num_spec(c.id);
                 let v = self.num_get(c.id);
                 let (mr, pr) = self.stepper_parts(r);
-                for (br, g, can, h, pd) in [(mr, G_MINUS, v > lo, hm, pm), (pr, G_PLUS, v < hi, hp, pp)] {
+                for (br, g, can, h, pd) in
+                    [(mr, G_MINUS, v > lo, hm, pm), (pr, G_PLUS, v < hi, hp, pp)]
+                {
                     let live = en && can;
                     if live && (h || pd) {
-                        cv.fill_round(br, rad4 - 1.0, if pd { p.subtle_press } else { p.subtle_hover });
+                        cv.fill_round(
+                            br,
+                            rad4 - 1.0,
+                            if pd { p.subtle_press } else { p.subtle_hover },
+                        );
                     }
-                    glyph(cv, f.icon_sm, g, (br.l + br.r) / 2, cy, if live { p.dim } else { p.off });
+                    glyph(
+                        cv,
+                        f.icon_sm,
+                        g,
+                        (br.l + br.r) / 2,
+                        cy,
+                        if live { p.dim } else { p.off },
+                    );
                 }
             }
             Kind::Button(text, accent) => {
@@ -2763,7 +3625,12 @@ impl Ui {
                 }
                 let (sw, sh) = (self.sc(32), self.sc(20));
                 let cx = (r.l + r.r) / 2;
-                let s = Rect { l: cx - sw / 2, t: cy - sh / 2, r: cx - sw / 2 + sw, b: cy - sh / 2 + sh };
+                let s = Rect {
+                    l: cx - sw / 2,
+                    t: cy - sh / 2,
+                    r: cx - sw / 2 + sw,
+                    b: cy - sh / 2 + sh,
+                };
                 cv.fill_round(s, rad4, hx(self.swatch_rgb(m)));
                 cv.stroke_round(s, rad4, p.swatch_rim);
                 ring_r = (r, rad4);
@@ -2890,9 +3757,10 @@ fn commit(hwnd: HWND) -> bool {
     true
 }
 
-
 fn pick_colour(hwnd: HWND, m: Metric) {
-    let Some((cur, mut cust)) = ui().map(|u| (u.swatch_rgb(m), u.cust)) else { return };
+    let Some((cur, mut cust)) = ui().map(|u| (u.swatch_rgb(m), u.cust)) else {
+        return;
+    };
     let mut cc: CHOOSECOLORW = unsafe { std::mem::zeroed() };
     cc.lStructSize = std::mem::size_of::<CHOOSECOLORW>() as u32;
     cc.hwndOwner = hwnd;
@@ -2921,8 +3789,16 @@ fn move_metric(hwnd: HWND, pos: usize, dir: i32) {
     changed(hwnd);
     let Some(u) = ui() else { return };
     // Keep the focus on the row that moved.
-    let (same, other) = if dir < 0 { (ID_MUP + to, ID_MDN + to) } else { (ID_MDN + to, ID_MUP + to) };
-    let id = if u.control(same).is_some_and(|c| c.enabled) { same } else { other };
+    let (same, other) = if dir < 0 {
+        (ID_MUP + to, ID_MDN + to)
+    } else {
+        (ID_MDN + to, ID_MUP + to)
+    };
+    let id = if u.control(same).is_some_and(|c| c.enabled) {
+        same
+    } else {
+        other
+    };
     if u.focus.is_some() {
         u.focus = Some(id);
         u.ensure_visible(id);
@@ -2946,7 +3822,11 @@ fn open_dropdown(hwnd: HWND, id: i32) {
         let menu = CreatePopupMenu();
         for (i, o) in opts.iter().enumerate() {
             // The day list reads better as 4 columns of 7.
-            let brk = if id == ID_DAY && i > 0 && i % 7 == 0 { MF_MENUBARBREAK } else { 0 };
+            let brk = if id == ID_DAY && i > 0 && i % 7 == 0 {
+                MF_MENUBARBREAK
+            } else {
+                0
+            };
             let w = wide(o);
             AppendMenuW(menu, MF_STRING | brk, i + 1, w.as_ptr());
         }
@@ -2957,10 +3837,22 @@ fn open_dropdown(hwnd: HWND, id: i32) {
         ClientToScreen(hwnd, &mut br);
         let tpm = TPMPARAMS {
             cbSize: std::mem::size_of::<TPMPARAMS>() as u32,
-            rcExclude: RECT { left: tl.x, top: tl.y, right: br.x, bottom: br.y },
+            rcExclude: RECT {
+                left: tl.x,
+                top: tl.y,
+                right: br.x,
+                bottom: br.y,
+            },
         };
         // Nested message loop: `u` is not used again below.
-        let cmd = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_VERTICAL, tl.x, br.y, hwnd, &tpm);
+        let cmd = TrackPopupMenuEx(
+            menu,
+            TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_VERTICAL,
+            tl.x,
+            br.y,
+            hwnd,
+            &tpm,
+        );
         DestroyMenu(menu);
         cmd
     };
@@ -2973,7 +3865,11 @@ fn open_dropdown(hwnd: HWND, id: i32) {
             u.draft.mode = *m;
             u.layout();
             invalidate(hwnd);
-            run(if *m == Mode::Float { Cmd::Float } else { Cmd::Dock });
+            run(if *m == Mode::Float {
+                Cmd::Float
+            } else {
+                Cmd::Dock
+            });
         } else {
             invalidate(hwnd);
         }
@@ -2992,7 +3888,6 @@ fn run(cmd: Cmd) {
         a.run(cmd);
     }
 }
-
 
 /// Navigate to `p` (recording it for Back) and load its Insights data.
 fn go(p: Page) {
@@ -3055,7 +3950,9 @@ pub fn ach_changed(a: &crate::app::App) {
 /// Click / Space / Enter on a control.
 fn activate(hwnd: HWND, id: i32) {
     let Some(u) = ui() else { return };
-    let Some(kind) = u.control(id).filter(|c| c.enabled).map(|c| c.kind) else { return };
+    let Some(kind) = u.control(id).filter(|c| c.enabled).map(|c| c.kind) else {
+        return;
+    };
     let metrics = Metric::ALL.len() as i32;
     match kind {
         Kind::Nav(p) => {
@@ -3077,7 +3974,11 @@ fn activate(hwnd: HWND, id: i32) {
             }
         }
         Kind::Goal => {
-            let sel = u.ach.as_ref().and_then(crate::achievements::next_goal).and_then(|g| Room::index_of(g.id));
+            let sel = u
+                .ach
+                .as_ref()
+                .and_then(crate::achievements::next_goal)
+                .and_then(|g| Room::index_of(g.id));
             go(Page::Achievements);
             if let (Some(u), Some(i)) = (ui(), sel) {
                 u.room.close_big();
@@ -3145,8 +4046,9 @@ fn activate(hwnd: HWND, id: i32) {
                 run(Cmd::EditSettings);
             }
             ID_DATADIR => run(Cmd::DataFolder),
-            ID_BIG => {
-                if u.room.open_big() {
+            ID_BIG | ID_BIG_HEAD => {
+                let st = u.ach.clone();
+                if st.is_some_and(|st| u.room.open_big(&st)) {
                     u.scroll_to(0, false);
                     u.layout();
                     u.focus = Some(ID_BIG_CLOSE);
@@ -3258,12 +4160,13 @@ fn adjust(hwnd: HWND, id: i32, kind: Kind, dir: i32, big: bool, edge: bool) {
     }
 }
 
-
 fn on_key(hwnd: HWND, key: u16) {
     let ctrl = unsafe { GetKeyState(VK_CONTROL as i32) } < 0;
     let shift = unsafe { GetKeyState(VK_SHIFT as i32) } < 0;
     let Some(u) = ui() else { return };
-    let focus = u.focus.and_then(|f| u.control(f).filter(|c| c.enabled).map(|c| (c.id, c.kind)));
+    let focus = u
+        .focus
+        .and_then(|f| u.control(f).filter(|c| c.enabled).map(|c| (c.id, c.kind)));
     let in_nav = u.focus.is_some_and(|f| u.in_nav(f));
     match key {
         VK_TAB if ctrl => {
@@ -3317,7 +4220,11 @@ fn on_key(hwnd: HWND, key: u16) {
             }
         }
         VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN | VK_PRIOR | VK_NEXT | VK_HOME | VK_END => {
-            let dir = if matches!(key, VK_RIGHT | VK_UP | VK_PRIOR | VK_END) { 1 } else { -1 };
+            let dir = if matches!(key, VK_RIGHT | VK_UP | VK_PRIOR | VK_END) {
+                1
+            } else {
+                -1
+            };
             // For steppers Up is "more" and Page Up is a big step.
             let big = matches!(key, VK_PRIOR | VK_NEXT);
             let edge = matches!(key, VK_HOME | VK_END);
@@ -3341,7 +4248,11 @@ fn on_key(hwnd: HWND, key: u16) {
                 }
                 Some((id, Kind::Dropdown)) if matches!(key, VK_UP | VK_DOWN) => {
                     let (opts, cur) = u.dd_options(id);
-                    let next = if key == VK_UP { cur.saturating_sub(1) } else { (cur + 1).min(opts.len().saturating_sub(1)) };
+                    let next = if key == VK_UP {
+                        cur.saturating_sub(1)
+                    } else {
+                        (cur + 1).min(opts.len().saturating_sub(1))
+                    };
                     u.focus_visible = true;
                     if u.dd_select(id, next) {
                         changed(hwnd);
@@ -3387,7 +4298,11 @@ fn on_wheel(hwnd: HWND, delta: i32, sx: i32, sy: i32) {
     // A focused slider / stepper under the mouse takes the wheel.
     if let Some((id, _)) = u.hit(pt.x, pt.y) {
         if u.focus == Some(id) {
-            if let Some(kind) = u.control(id).map(|c| c.kind).filter(|k| matches!(k, Kind::Slider | Kind::Stepper)) {
+            if let Some(kind) = u
+                .control(id)
+                .map(|c| c.kind)
+                .filter(|k| matches!(k, Kind::Slider | Kind::Stepper))
+            {
                 adjust(hwnd, id, kind, if delta > 0 { 1 } else { -1 }, false, false);
                 return;
             }
@@ -3398,8 +4313,17 @@ fn on_wheel(hwnd: HWND, delta: i32, sx: i32, sy: i32) {
 }
 
 fn track_mouse(hwnd: HWND, hover: bool) -> bool {
-    let flags = if hover { TME_LEAVE | TME_HOVER } else { TME_LEAVE };
-    let mut t = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: flags, hwndTrack: hwnd, dwHoverTime: u32::MAX /* HOVER_DEFAULT */ };
+    let flags = if hover {
+        TME_LEAVE | TME_HOVER
+    } else {
+        TME_LEAVE
+    };
+    let mut t = TRACKMOUSEEVENT {
+        cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+        dwFlags: flags,
+        hwndTrack: hwnd,
+        dwHoverTime: u32::MAX, /* HOVER_DEFAULT */
+    };
     unsafe { TrackMouseEvent(&mut t) != 0 }
 }
 
@@ -3437,7 +4361,9 @@ fn on_mouse_move(hwnd: HWND, x: i32, y: i32) {
         if hover != u.hover {
             u.tip = None;
             // Compact pane: ask for WM_MOUSEHOVER to show the item's name.
-            let nav = hover.and_then(|(id, _)| u.control(id)).is_some_and(|c| matches!(c.kind, Kind::Nav(_)));
+            let nav = hover
+                .and_then(|(id, _)| u.control(id))
+                .is_some_and(|c| matches!(c.kind, Kind::Nav(_)));
             if nav && !u.labels() {
                 track_mouse(hwnd, true);
             }
@@ -3451,10 +4377,13 @@ fn on_mouse_move(hwnd: HWND, x: i32, y: i32) {
 
 fn on_mouse_hover(hwnd: HWND) {
     let Some(u) = ui() else { return };
-    let pg = u.hover.and_then(|(id, _)| u.control(id)).and_then(|c| match c.kind {
-        Kind::Nav(p) => Some(p),
-        _ => None,
-    });
+    let pg = u
+        .hover
+        .and_then(|(id, _)| u.control(id))
+        .and_then(|c| match c.kind {
+            Kind::Nav(p) => Some(p),
+            _ => None,
+        });
     if pg.is_some() && !u.labels() && u.tip != pg {
         u.tip = pg;
         invalidate(hwnd);
@@ -3481,7 +4410,11 @@ fn on_button_down(hwnd: HWND, x: i32, y: i32) {
             } else {
                 let (vt, vb) = u.view();
                 let page = (vb - vt - u.sc(WHEEL_STEP)).max(u.sc(WHEEL_STEP));
-                let t = if y < thumb.t { u.target - page } else { u.target + page };
+                let t = if y < thumb.t {
+                    u.target - page
+                } else {
+                    u.target + page
+                };
                 u.scroll_to(t, true);
             }
             unsafe { SetCapture(hwnd) };
@@ -3604,7 +4537,12 @@ pub(crate) fn enable_mica(hwnd: HWND) -> bool {
         if !ok {
             return false;
         }
-        let m = MARGINS { cxLeftWidth: -1, cxRightWidth: -1, cyTopHeight: -1, cyBottomHeight: -1 };
+        let m = MARGINS {
+            cxLeftWidth: -1,
+            cxRightWidth: -1,
+            cyTopHeight: -1,
+            cyBottomHeight: -1,
+        };
         DwmExtendFrameIntoClientArea(hwnd, &m) >= 0
     }
 }
@@ -3616,9 +4554,15 @@ fn apply_theme(hwnd: HWND) {
     darkmode::set_app_mode(u.theme);
     darkmode::allow_window(hwnd, u.dark);
     style_window(hwnd, u.dark);
-    unsafe { RedrawWindow(hwnd, std::ptr::null(), std::ptr::null_mut(), RDW_INVALIDATE | RDW_FRAME) };
+    unsafe {
+        RedrawWindow(
+            hwnd,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            RDW_INVALIDATE | RDW_FRAME,
+        )
+    };
 }
-
 
 // ------------------------------------------------------------------ window
 
@@ -3635,7 +4579,10 @@ pub fn register(hinst: HINSTANCE) {
             ..std::mem::zeroed()
         };
         if RegisterClassExW(&wc) == 0 {
-            diag(&format!("main window: RegisterClassExW failed ({})", GetLastError()));
+            diag(&format!(
+                "main window: RegisterClassExW failed ({})",
+                GetLastError()
+            ));
         }
     }
 }
@@ -3645,13 +4592,23 @@ const STYLE: u32 = WS_OVERLAPPEDWINDOW;
 /// Work area of the monitor nearest to `r`.
 fn work_area_near(r: Rect) -> Option<Rect> {
     unsafe {
-        let rc = RECT { left: r.l, top: r.t, right: r.r, bottom: r.b };
+        let rc = RECT {
+            left: r.l,
+            top: r.t,
+            right: r.r,
+            bottom: r.b,
+        };
         let mon = MonitorFromRect(&rc, MONITOR_DEFAULTTONEAREST);
         let mut mi: MONITORINFO = std::mem::zeroed();
         mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
         (GetMonitorInfoW(mon, &mut mi) != 0).then(|| {
             let w = mi.rcWork;
-            Rect { l: w.left, t: w.top, r: w.right, b: w.bottom }
+            Rect {
+                l: w.left,
+                t: w.top,
+                r: w.right,
+                b: w.bottom,
+            }
         })
     }
 }
@@ -3666,11 +4623,24 @@ fn initial_rect(a: &crate::app::App, dpi: u32) -> (Rect, bool) {
         }
     }
     let tb = a.primary_taskbar();
-    let work = tb.map(|t| t.work).unwrap_or(Rect { l: 0, t: 0, r: 1280, b: 720 });
+    let work = tb.map(|t| t.work).unwrap_or(Rect {
+        l: 0,
+        t: 0,
+        r: 1280,
+        b: 720,
+    });
     let sc = |v: i32| (v * dpi as i32 + 48) / 96;
-    let mut rc = RECT { left: 0, top: 0, right: sc(DEF_W), bottom: sc(DEF_H) };
+    let mut rc = RECT {
+        left: 0,
+        top: 0,
+        right: sc(DEF_W),
+        bottom: sc(DEF_H),
+    };
     unsafe { AdjustWindowRectExForDpi(&mut rc, STYLE, 0, 0, dpi) };
-    (nav::centre_in(rc.right - rc.left, rc.bottom - rc.top, work), false)
+    (
+        nav::centre_in(rc.right - rc.left, rc.bottom - rc.top, work),
+        false,
+    )
 }
 
 /// Open the main window on `page`, or bring the existing one to the front
@@ -3703,17 +4673,34 @@ pub fn open(a: &mut crate::app::App, page: Page) {
             } else {
                 format!("{} \u{2013} {}", ad.alias, ad.description)
             };
-            labels.push(if ad.connected { l } else { format!("{} (not connected)", l) });
+            labels.push(if ad.connected {
+                l
+            } else {
+                format!("{} (not connected)", l)
+            });
             adapters.push(ad.alias);
         }
-        if !draft.adapter.is_empty() && !adapters.iter().any(|x| x.eq_ignore_ascii_case(&draft.adapter)) {
+        if !draft.adapter.is_empty()
+            && !adapters
+                .iter()
+                .any(|x| x.eq_ignore_ascii_case(&draft.adapter))
+        {
             adapters.push(draft.adapter.clone());
             labels.push(format!("{} (not available)", draft.adapter));
         }
 
         let dpi = a.primary_taskbar().map_or(96, |t| t.dpi).max(96);
         let (rect, max) = initial_rect(a, dpi);
-        let mut state = Box::new(Ui::new(dpi, a.m.dark, a.m.s.theme, draft, adapters, labels, a.displays(), page));
+        let mut state = Box::new(Ui::new(
+            dpi,
+            a.m.dark,
+            a.m.s.theme,
+            draft,
+            adapters,
+            labels,
+            a.displays(),
+            page,
+        ));
         let (on, panels) = view::fetch(a, unix_ms());
         state.battery = view::has_battery(a);
         state.take_panels(on, panels);
@@ -3824,7 +4811,13 @@ fn save_placement(hwnd: HWND) {
     let Some(u) = ui() else { return };
     let max = unsafe { IsZoomed(hwnd) != 0 } || (unsafe { IsIconic(hwnd) != 0 } && u.maximized);
     let n = u.normal;
-    let place = (n.w() > 0 && n.h() > 0).then_some(Placement { x: n.l, y: n.t, w: n.w(), h: n.h(), max });
+    let place = (n.w() > 0 && n.h() > 0).then_some(Placement {
+        x: n.l,
+        y: n.t,
+        w: n.w(),
+        h: n.h(),
+        max,
+    });
     let page = u.page.key();
     let Some(a) = app() else { return };
     if a.m.s.window != place || a.m.s.window_page != page {
@@ -3862,7 +4855,6 @@ unsafe fn setting_name(l: LPARAM) -> String {
     }
     String::from_utf16_lossy(&v)
 }
-
 
 const WM_DWMCOLORIZATIONCOLORCHANGED: u32 = 0x0320;
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -3910,10 +4902,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         WM_GETMINMAXINFO => {
             let dpi = GetDpiForWindow(hwnd).max(96);
             let sc = |v: i32| (v * dpi as i32 + 48) / 96;
-            let mut rc = RECT { left: 0, top: 0, right: sc(MIN_W), bottom: sc(MIN_H) };
+            let mut rc = RECT {
+                left: 0,
+                top: 0,
+                right: sc(MIN_W),
+                bottom: sc(MIN_H),
+            };
             AdjustWindowRectExForDpi(&mut rc, STYLE, 0, 0, dpi);
             let mm = &mut *(l as *mut MINMAXINFO);
-            mm.ptMinTrackSize = POINT { x: rc.right - rc.left, y: rc.bottom - rc.top };
+            mm.ptMinTrackSize = POINT {
+                x: rc.right - rc.left,
+                y: rc.bottom - rc.top,
+            };
             0
         }
         WM_ERASEBKGND => 1,
@@ -3949,7 +4949,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         WM_MOUSELEAVE => {
             if let Some(u) = ui() {
                 u.tracking = false;
-                if u.drag == Drag::None && (u.hover.is_some() || u.sb_hover || u.chart_hover.is_some() || u.tip.is_some()) {
+                if u.drag == Drag::None
+                    && (u.hover.is_some()
+                        || u.sb_hover
+                        || u.chart_hover.is_some()
+                        || u.tip.is_some())
+                {
                     u.hover = None;
                     u.sb_hover = false;
                     u.chart_hover = None;
@@ -4043,7 +5048,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                 u.set_dpi(dpi);
             }
             // WM_SIZE re-lays out with the new fonts.
-            SetWindowPos(hwnd, std::ptr::null_mut(), r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                r.left,
+                r.top,
+                r.right - r.left,
+                r.bottom - r.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
             if let Some(u) = ui() {
                 let mut rc: RECT = std::mem::zeroed();
                 GetClientRect(hwnd, &mut rc);

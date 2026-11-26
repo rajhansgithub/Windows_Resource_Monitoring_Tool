@@ -29,7 +29,10 @@ pub struct SysEvent {
 
 impl SysEvent {
     pub fn get(&self, k: &str) -> Option<&str> {
-        self.data.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str())
+        self.data
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.as_str())
     }
 }
 
@@ -90,7 +93,10 @@ impl Listener {
 
 impl Drop for Listener {
     fn drop(&mut self) {
-        for (h, _ctx) in [self.system.take(), self.application.take()].into_iter().flatten() {
+        for (h, _ctx) in [self.system.take(), self.application.take()]
+            .into_iter()
+            .flatten()
+        {
             // SAFETY: handle from EvtSubscribe, closed once. EvtClose on a subscription waits
             // for a running callback to return, so `_ctx` is dropped only after that.
             unsafe { EvtClose(h) };
@@ -118,7 +124,10 @@ fn subscribe(hwnd: isize, channel: &'static str, query: &str) -> Option<(EVT_HAN
     if h == 0 {
         // SAFETY: plain thread-local error read.
         let err = unsafe { GetLastError() };
-        crate::util::diag(&format!("insights: cannot watch the {} event log (error {})", channel, err));
+        crate::util::diag(&format!(
+            "insights: cannot watch the {} event log (error {})",
+            channel, err
+        ));
         return None;
     }
     Some((h, ctx))
@@ -130,11 +139,13 @@ fn replay_boot_events(hwnd: isize) {
     let up_ms = unsafe { windows_sys::Win32::System::SystemInformation::GetTickCount64() };
     let ms = up_ms.saturating_add(10 * 60_000).min(86_400_000);
     let xpath = BOOT_QUERY.replace("{ms}", &ms.to_string());
-    let _ = std::thread::Builder::new().name("insights-boot-events".into()).spawn(move || {
-        for e in query("System", &xpath, 8) {
-            post(hwnd, e);
-        }
-    });
+    let _ = std::thread::Builder::new()
+        .name("insights-boot-events".into())
+        .spawn(move || {
+            for e in query("System", &xpath, 8) {
+                post(hwnd, e);
+            }
+        });
 }
 
 /// Hand an event to the UI thread; frees it if the window is gone.
@@ -174,7 +185,15 @@ fn render(ev: EVT_HANDLE) -> Option<String> {
         let bytes = (buf.len() * 2) as u32;
         // SAFETY: buffer is `bytes` long; out pointers are valid.
         let ok = unsafe {
-            EvtRender(0, ev, EvtRenderEventXml, bytes, buf.as_mut_ptr() as *mut _, &mut used, &mut props)
+            EvtRender(
+                0,
+                ev,
+                EvtRenderEventXml,
+                bytes,
+                buf.as_mut_ptr() as *mut _,
+                &mut used,
+                &mut props,
+            )
         };
         if ok != 0 {
             let n = (used as usize / 2).min(buf.len());
@@ -199,7 +218,14 @@ pub fn query(channel: &str, xpath: &str, max: usize) -> Vec<SysEvent> {
     }
     let (ch, q) = (wide(channel), wide(xpath));
     // SAFETY: NUL-terminated strings; local session (0).
-    let rs = unsafe { EvtQuery(0, ch.as_ptr(), q.as_ptr(), EvtQueryChannelPath | EvtQueryReverseDirection) };
+    let rs = unsafe {
+        EvtQuery(
+            0,
+            ch.as_ptr(),
+            q.as_ptr(),
+            EvtQueryChannelPath | EvtQueryReverseDirection,
+        )
+    };
     if rs == 0 {
         return out;
     }
@@ -207,7 +233,17 @@ pub fn query(channel: &str, xpath: &str, max: usize) -> Vec<SysEvent> {
     'outer: while out.len() < max {
         let mut got = 0u32;
         // SAFETY: `batch` holds 16 handles; wait at most 5 s for a batch.
-        if unsafe { EvtNext(rs, batch.len() as u32, batch.as_mut_ptr(), 5000, 0, &mut got) } == 0 {
+        if unsafe {
+            EvtNext(
+                rs,
+                batch.len() as u32,
+                batch.as_mut_ptr(),
+                5000,
+                0,
+                &mut got,
+            )
+        } == 0
+        {
             break; // ERROR_NO_MORE_ITEMS or a real error: either way we are done.
         }
         let got = (got as usize).min(batch.len());
@@ -244,10 +280,19 @@ const MAX_VALUE: usize = 512;
 /// `channel` is used when the XML has no `<Channel>`. Returns None when it is not an event.
 pub fn parse_event_xml(xml: &str, channel: &str) -> Option<SysEvent> {
     let sys = section(xml, "System")?;
-    let provider = tag_open(sys, "Provider").and_then(|t| attr(t, "Name")).map(unescape).unwrap_or_default();
+    let provider = tag_open(sys, "Provider")
+        .and_then(|t| attr(t, "Name"))
+        .map(unescape)
+        .unwrap_or_default();
     let id = text_of(sys, "EventID")?.trim().parse::<u32>().ok()?;
-    let t_ms = tag_open(sys, "TimeCreated").and_then(|t| attr(t, "SystemTime")).and_then(iso_to_unix_ms).unwrap_or(0);
-    let channel = text_of(sys, "Channel").map(unescape).filter(|c| !c.is_empty()).unwrap_or_else(|| channel.to_string());
+    let t_ms = tag_open(sys, "TimeCreated")
+        .and_then(|t| attr(t, "SystemTime"))
+        .and_then(iso_to_unix_ms)
+        .unwrap_or(0);
+    let channel = text_of(sys, "Channel")
+        .map(unescape)
+        .filter(|c| !c.is_empty())
+        .unwrap_or_else(|| channel.to_string());
     let mut data = Vec::new();
     if let Some(ed) = section(xml, "EventData") {
         let mut unnamed = 0usize;
@@ -266,9 +311,17 @@ pub fn parse_event_xml(xml: &str, channel: &str) -> Option<SysEvent> {
         });
     }
     if let Some(ud) = section(xml, "UserData") {
-        leaves(ud, |tag, _open, text| push_pair(&mut data, tag.to_string(), text));
+        leaves(ud, |tag, _open, text| {
+            push_pair(&mut data, tag.to_string(), text)
+        });
     }
-    Some(SysEvent { channel, provider, id, t_ms, data })
+    Some(SysEvent {
+        channel,
+        provider,
+        id,
+        t_ms,
+        data,
+    })
 }
 
 fn push_pair(data: &mut Vec<(String, String)>, name: String, text: &str) {
@@ -368,7 +421,10 @@ fn leaves<'a>(xml: &'a str, mut f: impl FnMut(&'a str, &'a str, &'a str)) {
         } else if tag.starts_with("<?") || tag.starts_with("<!") {
             // declaration / comment: skip
         } else {
-            let name = tag[1..].split(|c: char| c == ' ' || c == '/' || c == '>' || c.is_whitespace()).next().unwrap_or("");
+            let name = tag[1..]
+                .split(|c: char| c == ' ' || c == '/' || c == '>' || c.is_whitespace())
+                .next()
+                .unwrap_or("");
             if tag.ends_with("/>") {
                 cur = None;
                 f(name, tag, "");
@@ -402,7 +458,9 @@ fn unescape(s: &str) -> String {
             "gt" => Some('>'),
             "quot" => Some('"'),
             "apos" => Some('\''),
-            _ if ent.starts_with("#x") => u32::from_str_radix(&ent[2..], 16).ok().and_then(char::from_u32),
+            _ if ent.starts_with("#x") => u32::from_str_radix(&ent[2..], 16)
+                .ok()
+                .and_then(char::from_u32),
             _ if ent.starts_with('#') => ent[1..].parse::<u32>().ok().and_then(char::from_u32),
             _ => None,
         };
@@ -424,7 +482,13 @@ fn unescape(s: &str) -> String {
 /// "2024-05-01T12:34:56.1234567Z" (UTC) -> unix ms.
 fn iso_to_unix_ms(s: &str) -> Option<u64> {
     let b = s.as_bytes();
-    if b.len() < 19 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' {
+    if b.len() < 19
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || b[10] != b'T'
+        || b[13] != b':'
+        || b[16] != b':'
+    {
         return None;
     }
     let num = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
@@ -435,7 +499,11 @@ fn iso_to_unix_ms(s: &str) -> Option<u64> {
     }
     let mut ms = 0i64;
     if b.get(19) == Some(&b'.') {
-        let frac: String = s[20..].chars().take_while(|c| c.is_ascii_digit()).take(3).collect();
+        let frac: String = s[20..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .take(3)
+            .collect();
         if !frac.is_empty() {
             ms = frac.parse::<i64>().ok()? * 10i64.pow(3 - frac.len() as u32);
         }
@@ -529,7 +597,11 @@ mod tests {
     #[test]
     fn garbage_is_rejected() {
         assert!(parse_event_xml("", "System").is_none());
-        assert!(parse_event_xml("<Event><System><EventID>abc</EventID></System></Event>", "S").is_none());
+        assert!(parse_event_xml(
+            "<Event><System><EventID>abc</EventID></System></Event>",
+            "S"
+        )
+        .is_none());
         assert!(parse_event_xml("<Event><System><EventID>5", "S").is_none());
         assert_eq!(iso_to_unix_ms("nope"), None);
         assert_eq!(unescape("a &amp; b &#65; &bogus; &"), "a & b A &bogus; &");

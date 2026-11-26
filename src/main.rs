@@ -57,7 +57,13 @@ fn main() {
             if !h.is_null() {
                 // Let the running instance bring its windows to the front.
                 AllowSetForegroundWindow(ASFW_ANY);
-                let w = if insights { 3 } else if achievements { 2 } else { report as usize };
+                let w = if insights {
+                    3
+                } else if achievements {
+                    2
+                } else {
+                    report as usize
+                };
                 PostMessageW(h, app::WM_APP_ACTIVATE, w, 0);
             }
             return;

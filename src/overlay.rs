@@ -93,7 +93,14 @@ struct Face {
 
 impl Default for Face {
     fn default() -> Self {
-        Face { font: std::ptr::null_mut(), name: String::new(), px: 0, line_h: 1, spark_h: 4, sticky: [0; Metric::ALL.len()] }
+        Face {
+            font: std::ptr::null_mut(),
+            name: String::new(),
+            px: 0,
+            line_h: 1,
+            spark_h: 4,
+            sticky: [0; Metric::ALL.len()],
+        }
     }
 }
 
@@ -127,7 +134,10 @@ struct Geo {
 }
 
 fn has_spark(m: Metric) -> bool {
-    !matches!(m, Metric::TodayUp | Metric::TodayDown | Metric::TopProc | Metric::Battery)
+    !matches!(
+        m,
+        Metric::TodayUp | Metric::TodayDown | Metric::TopProc | Metric::Battery
+    )
 }
 
 pub fn register(hinst: HINSTANCE, wndproc: WNDPROC) {
@@ -216,7 +226,11 @@ impl Overlay {
     pub fn set_click_through(&self, on: bool) {
         unsafe {
             let ex = GetWindowLongW(self.hwnd, GWL_EXSTYLE) as u32;
-            let ex = if on { ex | WS_EX_TRANSPARENT } else { ex & !WS_EX_TRANSPARENT };
+            let ex = if on {
+                ex | WS_EX_TRANSPARENT
+            } else {
+                ex & !WS_EX_TRANSPARENT
+            };
             SetWindowLongW(self.hwnd, GWL_EXSTYLE, ex as i32);
         }
     }
@@ -230,7 +244,11 @@ impl Overlay {
     /// Create/resize face `i` and refresh its metrics.
     fn ensure_face(&mut self, i: usize, px: u32, scale: f32, face_name: &str) {
         let f = &mut self.faces[i];
-        let name = if face_name.is_empty() { ui_face() } else { face_name };
+        let name = if face_name.is_empty() {
+            ui_face()
+        } else {
+            face_name
+        };
         if px != f.px || f.font.is_null() || f.name != name {
             unsafe {
                 if !f.font.is_null() {
@@ -245,7 +263,12 @@ impl Overlay {
         }
         let (_, lh) = self.canvas.measure(f.font, "Ag");
         let f = &mut self.faces[i];
-        f.line_h = if lh == 0 { (px as f32 * 1.25) as i32 } else { lh - (scale).round() as i32 }.max(1);
+        f.line_h = if lh == 0 {
+            (px as f32 * 1.25) as i32
+        } else {
+            lh - (scale).round() as i32
+        }
+        .max(1);
         f.spark_h = (f.line_h - (4.0 * scale).round() as i32).max(4);
     }
 
@@ -260,10 +283,22 @@ impl Overlay {
                     self.shown = true;
                     return;
                 }
-                let after = if self.owner.is_null() { HWND_TOPMOST } else { HWND_TOP };
+                let after = if self.owner.is_null() {
+                    HWND_TOPMOST
+                } else {
+                    HWND_TOP
+                };
                 // Embedded: stay above the taskbar's own content (siblings).
                 // Floating: stay above other always-on-top windows.
-                SetWindowPos(self.hwnd, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+                SetWindowPos(
+                    self.hwnd,
+                    after,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+                );
             } else if self.shown {
                 ShowWindow(self.hwnd, SW_HIDE);
             }
@@ -330,9 +365,19 @@ impl Overlay {
         };
         let used_rows = cols.iter().map(|c| c.len()).max().unwrap_or(1);
         let pitch = pitch_for(used_rows, line_h);
-        let hh = if dock { thickness.max(line_h + 2) } else { used_rows as i32 * pitch + 2 * g.pad };
+        let hh = if dock {
+            thickness.max(line_h + 2)
+        } else {
+            used_rows as i32 * pitch + 2 * g.pad
+        };
         let vw = |r: Metric| face.sticky[r.idx()];
-        let spark_part = |r: Metric| if sparks && has_spark(r) { g.gap + g.spark_w } else { 0 };
+        let spark_part = |r: Metric| {
+            if sparks && has_spark(r) {
+                g.gap + g.spark_w
+            } else {
+                0
+            }
+        };
         let mut cells = Vec::with_capacity(rows.len());
         let mut x = g.pad;
         let mut idx = 0;
@@ -340,7 +385,10 @@ impl Overlay {
             let val_w = col.iter().map(|&r| vw(r)).max().unwrap_or(0);
             let sp = col.iter().map(|&r| spark_part(r)).max().unwrap_or(0);
             let lw = if labels {
-                col.iter().map(|&r| self.canvas.measure(font, short_label(r)).0).max().unwrap_or(0)
+                col.iter()
+                    .map(|&r| self.canvas.measure(font, short_label(r)).0)
+                    .max()
+                    .unwrap_or(0)
             } else {
                 0
             };
@@ -360,7 +408,9 @@ impl Overlay {
             }
             // Related metrics on one line (▲ then ▼) sit closer together.
             let near = p == Pack::Flat
-                && cols.get(ci + 1).is_some_and(|n| group(n[0]) == group(col[col.len() - 1]));
+                && cols
+                    .get(ci + 1)
+                    .is_some_and(|n| group(n[0]) == group(col[col.len() - 1]));
             let gp = if near { g.small_gap } else { g.col_gap };
             x += lab_part + val_w + sp;
             if ci + 1 < cols.len() {
@@ -379,7 +429,13 @@ impl Overlay {
             tb.dpi
         } else {
             let hmon = unsafe {
-                MonitorFromPoint(POINT { x: m.s.float_x, y: m.s.float_y }, MONITOR_DEFAULTTONEAREST)
+                MonitorFromPoint(
+                    POINT {
+                        x: m.s.float_x,
+                        y: m.s.float_y,
+                    },
+                    MONITOR_DEFAULTTONEAREST,
+                )
             };
             taskbar::monitor_dpi(hmon)
         };
@@ -388,7 +444,11 @@ impl Overlay {
         let ts = m.s.text_scale as f32 / 100.0;
         let sc = |v: f32| (v * scale).round() as i32;
 
-        let thickness = if tb.edge.horizontal() { tb.rect.h() } else { tb.rect.w() };
+        let thickness = if tb.edge.horizontal() {
+            tb.rect.h()
+        } else {
+            tb.rect.w()
+        };
         // One-line text is 1.5x the old 13px base; stacked text is as large as
         // two rows allow on this taskbar.
         let big = (19.5 * scale * ts).round() as u32;
@@ -443,8 +503,16 @@ impl Overlay {
             let cap_w = (self.faces[fi].px as f32 * 8.5).round() as i32;
             for (i, &r) in rows.iter().enumerate() {
                 let (v, _, tpl) = &values[i];
-                let tw = self.canvas.measure(font, tpl).0.max(self.canvas.measure(font, v).0);
-                let cap = if r == Metric::TopProc { cap_w } else { i32::MAX };
+                let tw = self
+                    .canvas
+                    .measure(font, tpl)
+                    .0
+                    .max(self.canvas.measure(font, v).0);
+                let cap = if r == Metric::TopProc {
+                    cap_w
+                } else {
+                    i32::MAX
+                };
                 let st = &mut self.faces[fi].sticky[r.idx()];
                 *st = (*st).max(tw).min(cap);
             }
@@ -459,24 +527,44 @@ impl Overlay {
             if !m.s.labels {
                 return 0;
             }
-            c.iter().map(|&r| self.canvas.measure(font, short_label(r)).0).max().unwrap_or(0)
+            c.iter()
+                .map(|&r| self.canvas.measure(font, short_label(r)).0)
+                .max()
+                .unwrap_or(0)
         };
         let vw = |r: Metric| self.faces[vf].sticky[r.idx()];
 
-        let geo = Geo { gap, col_gap, pad, spark_w, small_gap: sc(10.0) };
+        let geo = Geo {
+            gap,
+            col_gap,
+            pad,
+            spark_w,
+            small_gap: sc(10.0),
+        };
         let mut cells: Vec<Cell> = Vec::with_capacity(n);
         // "+N" marker for metrics that only fit in the hover panel.
         let mut more: Option<(String, i32, i32)> = None;
         let more_w = gap + self.canvas.measure(self.faces[1].font, "+88").0;
         let (w, h);
         if n == 0 {
-            (w, h) = (sc(24.0), if dock && horiz { thickness } else { self.faces[0].line_h + 2 * pad });
+            (w, h) = (
+                sc(24.0),
+                if dock && horiz {
+                    thickness
+                } else {
+                    self.faces[0].line_h + 2 * pad
+                },
+            );
         } else if horiz {
             // Try progressively more compact layouts until the widget fits the
             // free space next to the tray (budget), so it never covers app icons.
             // The user's choice for this display is always honoured; only with
             // auto_stack may a one-line widget fall back to stacked rows.
-            let start = if m.s.stacked_for(&tb.key()) && rpc > 1 { Pack::Groups } else { Pack::Flat };
+            let start = if m.s.stacked_for(&tb.key()) && rpc > 1 {
+                Pack::Groups
+            } else {
+                Pack::Flat
+            };
             let mut levels: Vec<(Pack, bool, bool)> = Vec::new();
             for (p, sp, lb) in [
                 (Pack::Flat, true, true),
@@ -487,7 +575,11 @@ impl Overlay {
                 (Pack::Full, false, false),
             ] {
                 let p = if rpc == 1 { Pack::Flat } else { p };
-                let allowed = if m.s.auto_stack { p >= start } else { p == start || (start == Pack::Groups && p == Pack::Full) };
+                let allowed = if m.s.auto_stack {
+                    p >= start
+                } else {
+                    p == start || (start == Pack::Groups && p == Pack::Full)
+                };
                 if !allowed || levels.contains(&(p, sp, lb)) {
                     continue;
                 }
@@ -499,8 +591,22 @@ impl Overlay {
             let mut vis = rows.len();
             if let Some(b) = budget {
                 while vis > 2 {
-                    let tightest = if start == Pack::Flat && !m.s.auto_stack { Pack::Flat } else { Pack::Full };
-                    let l = self.layout_h(&rows[..vis], tightest, rpc, false, m.s.labels, &geo, &pitch_for, dock, thickness);
+                    let tightest = if start == Pack::Flat && !m.s.auto_stack {
+                        Pack::Flat
+                    } else {
+                        Pack::Full
+                    };
+                    let l = self.layout_h(
+                        &rows[..vis],
+                        tightest,
+                        rpc,
+                        false,
+                        m.s.labels,
+                        &geo,
+                        &pitch_for,
+                        dock,
+                        thickness,
+                    );
                     if l.1 + if vis < rows.len() { more_w } else { 0 } <= b {
                         break;
                     }
@@ -509,8 +615,19 @@ impl Overlay {
             }
             let mut chosen = None;
             for &(p, sp, lb) in &levels {
-                let l = self.layout_h(&rows[..vis], p, rpc, sp && spark_w > 0, lb && m.s.labels, &geo, &pitch_for, dock, thickness);
-                let fits = budget.is_none_or(|b| l.1 + if vis < rows.len() { more_w } else { 0 } <= b);
+                let l = self.layout_h(
+                    &rows[..vis],
+                    p,
+                    rpc,
+                    sp && spark_w > 0,
+                    lb && m.s.labels,
+                    &geo,
+                    &pitch_for,
+                    dock,
+                    thickness,
+                );
+                let fits =
+                    budget.is_none_or(|b| l.1 + if vis < rows.len() { more_w } else { 0 } <= b);
                 chosen = Some(l);
                 if fits {
                     break;
@@ -532,13 +649,17 @@ impl Overlay {
             let lw = label_w(&rows);
             let lab_part = if lw > 0 { lw + gap } else { 0 };
             let with_label = lw > 0 && lab_part + max_v <= inner;
-            let with_spark =
-                spark_w > 0 && (if with_label { lab_part } else { 0 }) + max_v + gap + spark_w <= inner;
+            let with_spark = spark_w > 0
+                && (if with_label { lab_part } else { 0 }) + max_v + gap + spark_w <= inner;
             let mut y = pad;
             for (i, &r) in rows.iter().enumerate() {
                 let x = sc(4.0);
                 let sp = with_spark && has_spark(r);
-                let vr = if sp { width - sc(4.0) - gap - spark_w } else { width - sc(4.0) };
+                let vr = if sp {
+                    width - sc(4.0) - gap - spark_w
+                } else {
+                    width - sc(4.0)
+                };
                 let spark = sp.then(|| Rect {
                     l: vr + gap,
                     t: y + (line_h - spark_h) / 2,
@@ -554,19 +675,52 @@ impl Overlay {
 
         // ---- draw
         self.canvas.resize(w, h);
-        let fg = if m.dark { Rgba::rgb(245, 245, 245) } else { Rgba::rgb(18, 18, 18) };
-        let opacity = if dock { m.s.bg_opacity } else { m.s.bg_opacity.max(200) };
+        let fg = if m.dark {
+            Rgba::rgb(245, 245, 245)
+        } else {
+            Rgba::rgb(18, 18, 18)
+        };
+        let opacity = if dock {
+            m.s.bg_opacity
+        } else {
+            m.s.bg_opacity.max(200)
+        };
         // alpha 1 keeps the whole strip hoverable while staying invisible.
         self.canvas.clear(Rgba(0, 0, 0, 1));
         if opacity > 1 {
-            let bg = if m.dark { Rgba(28, 28, 28, opacity) } else { Rgba(248, 248, 248, opacity) };
+            let bg = if m.dark {
+                Rgba(28, 28, 28, opacity)
+            } else {
+                Rgba(248, 248, 248, opacity)
+            };
             let inset = if dock && horiz { sc(4.0) } else { 0 };
-            self.canvas.fill_round(Rect { l: 0, t: inset, r: w, b: h - inset }, sc(6.0) as f32, bg);
+            self.canvas.fill_round(
+                Rect {
+                    l: 0,
+                    t: inset,
+                    r: w,
+                    b: h - inset,
+                },
+                sc(6.0) as f32,
+                bg,
+            );
         }
         // Crisp 1px shadow behind text when there's no solid background behind it.
-        self.canvas.halo = (opacity < 120).then(|| if m.dark { Rgba(0, 0, 0, 150) } else { Rgba(255, 255, 255, 170) });
+        self.canvas.halo = (opacity < 120).then(|| {
+            if m.dark {
+                Rgba(0, 0, 0, 150)
+            } else {
+                Rgba(255, 255, 255, 170)
+            }
+        });
         if let Some((t, x, y)) = &more {
-            self.canvas.text(self.faces[1].font, t, *x, *y, fg.mix(Rgba(128, 128, 128, 255), 0.5));
+            self.canvas.text(
+                self.faces[1].font,
+                t,
+                *x,
+                *y,
+                fg.mix(Rgba(128, 128, 128, 255), 0.5),
+            );
         }
         for &(i, x, y, vl, vr, spark, with_label, fi) in &cells {
             let font = self.faces[fi].font;
@@ -575,7 +729,8 @@ impl Overlay {
             let ac = accent(r, m.dark);
             if with_label {
                 // Lightened accent: keeps the colour cue but reads like text.
-                self.canvas.text(font, short_label(r), x, y, ac.mix(fg, 0.3));
+                self.canvas
+                    .text(font, short_label(r), x, y, ac.mix(fg, 0.3));
             }
             let pct = m.pct_of(r);
             let vc = match (pct, lvl) {
@@ -587,7 +742,9 @@ impl Overlay {
             let max_w = self.faces[fi].sticky[r.idx()];
             let mut v = v.clone();
             if self.canvas.measure(font, &v).0 > max_w {
-                while v.chars().count() > 2 && self.canvas.measure(font, &format!("{}\u{2026}", v)).0 > max_w {
+                while v.chars().count() > 2
+                    && self.canvas.measure(font, &format!("{}\u{2026}", v)).0 > max_w
+                {
                     v.pop();
                 }
                 v.push('\u{2026}');
@@ -600,7 +757,8 @@ impl Overlay {
             if let Some(sr) = spark {
                 let data = m.series(r, 30);
                 let sc_col = pct.map_or(ac, |p| m.heat(ac, p));
-                self.canvas.fill_rect(sr, sc_col.with_a(if m.dark { 22 } else { 30 }));
+                self.canvas
+                    .fill_rect(sr, sc_col.with_a(if m.dark { 22 } else { 30 }));
                 self.canvas.spark(sr, &data, sc_col);
             }
         }
@@ -620,7 +778,13 @@ impl Overlay {
             }
         } else {
             let mon = taskbar::monitor_info(unsafe {
-                MonitorFromPoint(POINT { x: m.s.float_x, y: m.s.float_y }, MONITOR_DEFAULTTONEAREST)
+                MonitorFromPoint(
+                    POINT {
+                        x: m.s.float_x,
+                        y: m.s.float_y,
+                    },
+                    MONITOR_DEFAULTTONEAREST,
+                )
             })
             .map(|v| v.0)
             .unwrap_or(tb.monitor);
@@ -629,7 +793,12 @@ impl Overlay {
                 m.s.float_y.clamp(mon.t, (mon.b - h).max(mon.t)),
             )
         };
-        self.pos = Rect { l: x, t: y, r: x + w, b: y + h };
+        self.pos = Rect {
+            l: x,
+            t: y,
+            r: x + w,
+            b: y + h,
+        };
         if self.owner.is_null() {
             self.canvas.present(self.hwnd, x, y);
         } else {
@@ -638,7 +807,15 @@ impl Overlay {
             unsafe {
                 ScreenToClient(self.owner, &mut pt);
                 self.canvas.present_child(self.hwnd);
-                SetWindowPos(self.hwnd, HWND_TOP, pt.x, pt.y, w, h, SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+                SetWindowPos(
+                    self.hwnd,
+                    HWND_TOP,
+                    pt.x,
+                    pt.y,
+                    w,
+                    h,
+                    SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+                );
             }
         }
     }

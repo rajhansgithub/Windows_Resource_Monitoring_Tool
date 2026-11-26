@@ -174,7 +174,11 @@ impl Procs {
         };
         self.generation = self.generation.wrapping_add(1);
         let generation = self.generation;
-        let cpu_scale = if elapsed > 0.0 { 100.0 / (elapsed * 1e7 * self.cpus) } else { 0.0 };
+        let cpu_scale = if elapsed > 0.0 {
+            100.0 / (elapsed * 1e7 * self.cpus)
+        } else {
+            0.0
+        };
         let io_scale = if elapsed > 0.0 { 1.0 / elapsed } else { 0.0 };
 
         self.rows.clear();
@@ -189,7 +193,8 @@ impl Procs {
             let pid = p.unique_process_id as u32;
             if pid != 0 {
                 snap.proc_count += 1;
-                let cpu_100ns = (p.user_time.max(0) as u64).wrapping_add(p.kernel_time.max(0) as u64);
+                let cpu_100ns =
+                    (p.user_time.max(0) as u64).wrapping_add(p.kernel_time.max(0) as u64);
                 let io_bytes = (p.read_transfer_count.max(0) as u64)
                     .wrapping_add(p.write_transfer_count.max(0) as u64)
                     .wrapping_add(p.other_transfer_count.max(0) as u64);
@@ -208,7 +213,12 @@ impl Procs {
                     _ => {
                         self.prev.insert(
                             pid,
-                            Prev { create_time: p.create_time, cpu_100ns, io_bytes, generation },
+                            Prev {
+                                create_time: p.create_time,
+                                cpu_100ns,
+                                io_bytes,
+                                generation,
+                            },
                         );
                     }
                 }
@@ -217,7 +227,13 @@ impl Procs {
                 } else {
                     p.working_set_size as u64
                 };
-                self.rows.push(Row { offset, pid, cpu, io_bps, mem });
+                self.rows.push(Row {
+                    offset,
+                    pid,
+                    cpu,
+                    io_bps,
+                    mem,
+                });
             }
             if p.next_entry_offset == 0 {
                 break;
@@ -247,7 +263,14 @@ impl Procs {
     /// Image name of the entry at `offset`, without ".exe".
     fn image_name(&self, offset: usize, valid: usize) -> String {
         // SAFETY: `offset` was validated while scanning.
-        let p = unsafe { &*self.buf.as_ptr().cast::<u8>().add(offset).cast::<ProcessInfo>() };
+        let p = unsafe {
+            &*self
+                .buf
+                .as_ptr()
+                .cast::<u8>()
+                .add(offset)
+                .cast::<ProcessInfo>()
+        };
         let start = self.buf.as_ptr() as usize;
         let ptr = p.image_name_buffer as usize;
         let len = usize::from(p.image_name_length) / 2;
@@ -258,9 +281,10 @@ impl Procs {
         // SAFETY: range checked against the buffer above.
         let wide = unsafe { std::slice::from_raw_parts(ptr as *const u16, len) };
         let mut name = String::from_utf16_lossy(wide);
-        let stem = name.len().checked_sub(4).filter(|&i| {
-            name.is_char_boundary(i) && name[i..].eq_ignore_ascii_case(".exe")
-        });
+        let stem = name
+            .len()
+            .checked_sub(4)
+            .filter(|&i| name.is_char_boundary(i) && name[i..].eq_ignore_ascii_case(".exe"));
         if let Some(i) = stem {
             name.truncate(i);
         }

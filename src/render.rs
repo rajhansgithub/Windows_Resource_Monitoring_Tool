@@ -22,13 +22,22 @@ impl Rgba {
     /// Linear mix toward `o` by t (0..1).
     pub fn mix(self, o: Rgba, t: f32) -> Rgba {
         let f = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
-        Rgba(f(self.0, o.0), f(self.1, o.1), f(self.2, o.2), f(self.3, o.3))
+        Rgba(
+            f(self.0, o.0),
+            f(self.1, o.1),
+            f(self.2, o.2),
+            f(self.3, o.3),
+        )
     }
 }
 
 pub fn create_font(px: i32, weight: i32, face: &str, aa_gray: bool) -> HFONT {
     let f = wide(face);
-    let q = if aa_gray { ANTIALIASED_QUALITY } else { CLEARTYPE_QUALITY };
+    let q = if aa_gray {
+        ANTIALIASED_QUALITY
+    } else {
+        CLEARTYPE_QUALITY
+    };
     unsafe {
         CreateFontW(
             -px,
@@ -97,7 +106,12 @@ impl Dib {
                 return None;
             }
             let old = SelectObject(dc, bmp);
-            Some(Dib { dc, bmp, old, bits: bits as *mut u32 })
+            Some(Dib {
+                dc,
+                bmp,
+                old,
+                bits: bits as *mut u32,
+            })
         }
     }
 }
@@ -127,7 +141,14 @@ pub struct Canvas {
 
 impl Canvas {
     pub fn new() -> Self {
-        Canvas { w: 0, h: 0, halo: None, clip: None, px: None, mask: None }
+        Canvas {
+            w: 0,
+            h: 0,
+            halo: None,
+            clip: None,
+            px: None,
+            mask: None,
+        }
     }
 
     pub fn resize(&mut self, w: i32, h: i32) {
@@ -210,7 +231,9 @@ impl Canvas {
 
     fn buf(&mut self) -> &mut [u32] {
         match &self.px {
-            Some(d) => unsafe { std::slice::from_raw_parts_mut(d.bits, (self.w * self.h) as usize) },
+            Some(d) => unsafe {
+                std::slice::from_raw_parts_mut(d.bits, (self.w * self.h) as usize)
+            },
             None => &mut [],
         }
     }
@@ -286,7 +309,12 @@ impl Canvas {
     /// so translucent fills drawn over it don't pick up the border colour).
     pub fn stroke_round(&mut self, r: Rect, rad: f32, c: Rgba) {
         let rad = rad.min(r.w() as f32 / 2.0).min(r.h() as f32 / 2.0).max(0.0);
-        let inner = Rect { l: r.l + 1, t: r.t + 1, r: r.r - 1, b: r.b - 1 };
+        let inner = Rect {
+            l: r.l + 1,
+            t: r.t + 1,
+            r: r.r - 1,
+            b: r.b - 1,
+        };
         let irad = (rad - 1.0).max(0.0);
         let cov = |px: f32, py: f32, q: Rect, rd: f32| -> f32 {
             let cx = px.clamp(q.l as f32 + rd, q.r as f32 - rd);
@@ -301,7 +329,11 @@ impl Canvas {
             for x in bl..br {
                 let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
                 let outer = cov(px, py, r, rad);
-                let inn = if inner.is_empty() { 0.0 } else { cov(px, py, inner, irad) };
+                let inn = if inner.is_empty() {
+                    0.0
+                } else {
+                    cov(px, py, inner, irad)
+                };
                 let v = (outer - inn).clamp(0.0, 1.0);
                 if v > 0.0 {
                     Self::blend_px(&mut buf[(y * w + x) as usize], c, (v * 255.0) as u32);
@@ -311,7 +343,11 @@ impl Canvas {
     }
 
     pub fn measure(&self, font: HFONT, s: &str) -> (i32, i32) {
-        measure_dc(self.mask.as_ref().map_or(std::ptr::null_mut(), |m| m.dc), font, s)
+        measure_dc(
+            self.mask.as_ref().map_or(std::ptr::null_mut(), |m| m.dc),
+            font,
+            s,
+        )
     }
 
     /// Draw text with its top-left at (x, y). Returns advance width.
@@ -371,7 +407,11 @@ impl Canvas {
             for xx in cl..cr {
                 let cov = cov_at(xx, yy);
                 if cov != 0 {
-                    Self::blend_px(&mut buf[(yy * w + xx) as usize], c, lut[cov as usize] as u32);
+                    Self::blend_px(
+                        &mut buf[(yy * w + xx) as usize],
+                        c,
+                        lut[cov as usize] as u32,
+                    );
                 }
             }
         }
@@ -439,8 +479,14 @@ impl Canvas {
         let end = frac * tau;
         let caps = [(cx, cy - mid), (cx + mid * end.sin(), cy - mid * end.cos())];
         let buf = self.buf();
-        let (x0, x1) = (((cx - r - 1.0).floor() as i32).max(0), ((cx + r + 2.0).ceil() as i32).min(w));
-        let (y0, y1) = (((cy - r - 1.0).floor() as i32).max(0), ((cy + r + 2.0).ceil() as i32).min(h));
+        let (x0, x1) = (
+            ((cx - r - 1.0).floor() as i32).max(0),
+            ((cx + r + 2.0).ceil() as i32).min(w),
+        );
+        let (y0, y1) = (
+            ((cy - r - 1.0).floor() as i32).max(0),
+            ((cy + r + 2.0).ceil() as i32).min(h),
+        );
         for y in y0..y1 {
             for x in x0..x1 {
                 let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
@@ -481,7 +527,10 @@ impl Canvas {
         let tau = std::f32::consts::TAU;
         let span = (a1 - a0).clamp(0.0, tau);
         let half = thick / 2.0;
-        let caps = [(cx + r * a0.cos(), cy + r * a0.sin()), (cx + r * (a0 + span).cos(), cy + r * (a0 + span).sin())];
+        let caps = [
+            (cx + r * a0.cos(), cy + r * a0.sin()),
+            (cx + r * (a0 + span).cos(), cy + r * (a0 + span).sin()),
+        ];
         let ext = r + half + 1.0;
         let w = self.w;
         let (x0, y0, x1, y1) = self.bounds(
@@ -548,7 +597,10 @@ impl Canvas {
         let Some(d) = &self.px else { return };
         unsafe {
             GdiFlush();
-            let sz = SIZE { cx: self.w, cy: self.h };
+            let sz = SIZE {
+                cx: self.w,
+                cy: self.h,
+            };
             let src = POINT { x: 0, y: 0 };
             let blend = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,
@@ -556,7 +608,17 @@ impl Canvas {
                 SourceConstantAlpha: 255,
                 AlphaFormat: AC_SRC_ALPHA as u8,
             };
-            UpdateLayeredWindow(hwnd, std::ptr::null_mut(), std::ptr::null(), &sz, d.dc, &src, 0, &blend, ULW_ALPHA);
+            UpdateLayeredWindow(
+                hwnd,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                &sz,
+                d.dc,
+                &src,
+                0,
+                &blend,
+                ULW_ALPHA,
+            );
         }
     }
 
@@ -565,7 +627,10 @@ impl Canvas {
         unsafe {
             GdiFlush();
             let pt = POINT { x, y };
-            let sz = SIZE { cx: self.w, cy: self.h };
+            let sz = SIZE {
+                cx: self.w,
+                cy: self.h,
+            };
             let src = POINT { x: 0, y: 0 };
             let blend = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,
@@ -573,7 +638,17 @@ impl Canvas {
                 SourceConstantAlpha: 255,
                 AlphaFormat: AC_SRC_ALPHA as u8,
             };
-            UpdateLayeredWindow(hwnd, std::ptr::null_mut(), &pt, &sz, d.dc, &src, 0, &blend, ULW_ALPHA);
+            UpdateLayeredWindow(
+                hwnd,
+                std::ptr::null_mut(),
+                &pt,
+                &sz,
+                d.dc,
+                &src,
+                0,
+                &blend,
+                ULW_ALPHA,
+            );
         }
     }
 }
@@ -636,7 +711,16 @@ impl Painter {
             let bmp = CreateCompatibleBitmap(win_dc, w, h);
             let old = SelectObject(dc, bmp);
             SetBkMode(dc, TRANSPARENT as i32);
-            Painter { dc, hwnd, ps, win_dc, bmp, old, w, h }
+            Painter {
+                dc,
+                hwnd,
+                ps,
+                win_dc,
+                bmp,
+                old,
+                w,
+                h,
+            }
         }
     }
 
@@ -681,7 +765,13 @@ impl Painter {
             let old = SelectObject(self.dc, font);
             SetTextColor(self.dc, c.colorref());
             let mut rc: RECT = r.into();
-            DrawTextW(self.dc, ws.as_mut_ptr(), ws.len() as i32, &mut rc, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+            DrawTextW(
+                self.dc,
+                ws.as_mut_ptr(),
+                ws.len() as i32,
+                &mut rc,
+                DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX,
+            );
             SelectObject(self.dc, old);
         }
     }
