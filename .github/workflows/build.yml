@@ -147,7 +147,7 @@ jobs:
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
           $p = Start-Process target/release/ResourceMonitor.exe -ArgumentList "--insights" -PassThru
           Start-Sleep -Seconds 8
-          $h = [W3]::FindWindowW("ResourceMonitor.Main", [NullString]::Value)
+          $h = [W3]::FindWindowW("ResourceMonitor.Window", [NullString]::Value)
           function Grab($file) {
             $r = New-Object W3+R
             [void][W3]::GetWindowRect($h, [ref]$r)
