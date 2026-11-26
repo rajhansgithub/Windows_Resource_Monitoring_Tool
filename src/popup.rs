@@ -1221,7 +1221,10 @@ fn proc_name(a: &App, pid: u32) -> String {
         .chain(&s.top_mem)
         .chain(&s.top_io)
         .find(|p| p.pid == pid)
-        .map_or_else(|| format!("PID {}", pid), |p| p.name.clone())
+        .map(|p| p.name.clone())
+        // The Monitor page lists every process.
+        .or_else(|| a.detail().procs.iter().find(|p| p.pid == pid).map(|p| p.name.clone()))
+        .unwrap_or_else(|| format!("PID {}", pid))
 }
 
 fn image_path(pid: u32) -> Option<String> {

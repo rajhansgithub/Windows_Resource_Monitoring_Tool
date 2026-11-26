@@ -1462,7 +1462,7 @@ fn engine_label(t: &str) -> String {
             out.push(' ');
             continue;
         }
-        if i > 0 && c.is_ascii_uppercase() && !t[..i].ends_with(|p: char| p.is_ascii_uppercase() || p == '_') {
+        if i > 0 && c.is_ascii_uppercase() && t[..i].ends_with(|p: char| p.is_ascii_lowercase()) {
             out.push(' ');
         }
         out.push(c);
