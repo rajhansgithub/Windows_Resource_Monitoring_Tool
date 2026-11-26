@@ -399,6 +399,7 @@ impl Canvas {
         let rw = r.w();
         let rh = r.h() as f32;
         let fill = c.with_a((c.3 as u32 * 70 / 255) as u8);
+        let (cl, ct, cr, cb) = self.bounds(0, 0, w, h);
         let buf = self.buf();
         for i in 0..rw {
             // column i maps to sample index (right-aligned, one sample per 2px max)
@@ -408,12 +409,12 @@ impl Canvas {
             let v = (a + (bb - a) * pos.fract()).clamp(0.0, 1.0);
             let top = rh * (1.0 - v);
             let x = r.l + i;
-            if x < 0 || x >= w {
+            if x < cl || x >= cr {
                 continue;
             }
             for yy in 0..r.h() {
                 let y = r.t + yy;
-                if y < 0 || y >= h {
+                if y < ct || y >= cb {
                     continue;
                 }
                 // Mirrored: measure from the bottom edge so the same
@@ -440,15 +441,19 @@ impl Canvas {
         if frac <= 0.0 {
             return;
         }
-        let (w, h) = (self.w, self.h);
+        let w = self.w;
         let half = thick / 2.0;
         let mid = r - half;
         let tau = std::f32::consts::TAU;
         let end = frac * tau;
         let caps = [(cx, cy - mid), (cx + mid * end.sin(), cy - mid * end.cos())];
+        let (x0, y0, x1, y1) = self.bounds(
+            (cx - r - 1.0).floor() as i32,
+            (cy - r - 1.0).floor() as i32,
+            (cx + r + 2.0).ceil() as i32,
+            (cy + r + 2.0).ceil() as i32,
+        );
         let buf = self.buf();
-        let (x0, x1) = (((cx - r - 1.0).floor() as i32).max(0), ((cx + r + 2.0).ceil() as i32).min(w));
-        let (y0, y1) = (((cy - r - 1.0).floor() as i32).max(0), ((cy + r + 2.0).ceil() as i32).min(h));
         for y in y0..y1 {
             for x in x0..x1 {
                 let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);

@@ -257,6 +257,8 @@ pub enum PopupHit {
     Proc(u32),
     /// Top-process list tab: 0 CPU, 1 memory, 2 disk I/O.
     TopTab(u8),
+    /// Panel title: opens the Monitor page.
+    Monitor,
     /// A chart (hover tooltip only; clicks fall through to the card below).
     Chart,
 }
@@ -600,7 +602,7 @@ fn paint(a: &mut App, hwnd: HWND) {
 }
 
 /// Avatar colour for a process name: stable hue from the name, soft pastel.
-fn avatar_col(name: &str) -> Rgba {
+pub(crate) fn avatar_col(name: &str) -> Rgba {
     let h = name.bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32)) % 360;
     // hsl(h, 55%, 68%)
     let (s, l) = (0.55f32, 0.68f32);
@@ -622,7 +624,7 @@ fn avatar_col(name: &str) -> Rgba {
 
 /// 240° dial track plus the value arc (`frac` 0..1).
 #[allow(clippy::too_many_arguments)]
-fn dial(c: &mut Canvas, cx: f32, cy: f32, r: f32, thick: f32, frac: f32, col: Rgba, track: Rgba) {
+pub(crate) fn dial(c: &mut Canvas, cx: f32, cy: f32, r: f32, thick: f32, frac: f32, col: Rgba, track: Rgba) {
     c.stroke_arc(cx, cy, r, thick, DIAL_A0, DIAL_A0 + DIAL_SPAN, track);
     let f = frac.clamp(0.0, 1.0);
     if f > 0.004 {
@@ -631,7 +633,7 @@ fn dial(c: &mut Canvas, cx: f32, cy: f32, r: f32, thick: f32, frac: f32, col: Rg
 }
 
 /// Network rate on a log scale, 1 KB/s (empty) to 1 GB/s (full).
-fn log_frac(bytes_per_s: f64) -> f32 {
+pub(crate) fn log_frac(bytes_per_s: f64) -> f32 {
     ((bytes_per_s.max(1024.0) / 1024.0).log10() / 6.0).clamp(0.0, 1.0) as f32
 }
 
@@ -679,6 +681,7 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
     let mut y = pad;
     c.text(f.mid, "System", pad, y + sc(2.0), pal.fg);
     let min_x = pad + c.measure(f.mid, "System").0 + sc(14.0);
+    out.hits.push((Rect { l: pad, t: y, r: min_x - sc(4.0), b: y + sc(HEADER) }, PopupHit::Monitor));
     let chip_h = sc(22.0);
     let mut x = right;
     {
@@ -1156,7 +1159,7 @@ fn on_set_cursor(hwnd: HWND) -> bool {
     }
     let hand = matches!(
         hit_at(a, pt.x, pt.y, true),
-        Some(PopupHit::Range(_) | PopupHit::TopTab(_) | PopupHit::TaskMgr | PopupHit::ResMon | PopupHit::NetSettings | PopupHit::UsageReport)
+        Some(PopupHit::Range(_) | PopupHit::TopTab(_) | PopupHit::TaskMgr | PopupHit::ResMon | PopupHit::NetSettings | PopupHit::UsageReport | PopupHit::Monitor)
     );
     unsafe { SetCursor(LoadCursorW(std::ptr::null_mut(), if hand { IDC_HAND } else { IDC_ARROW })) };
     true
@@ -1173,17 +1176,10 @@ fn on_click(hwnd: HWND, l: LPARAM) {
             a.popup_top = i;
             unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
         }
-        Some(PopupHit::TaskMgr) => {
+        // CPU, memory, GPU, disk and network open the detailed Monitor page.
+        Some(PopupHit::TaskMgr | PopupHit::ResMon | PopupHit::NetSettings | PopupHit::Monitor) => {
             hide(a);
-            shell_open("taskmgr.exe", None);
-        }
-        Some(PopupHit::ResMon) => {
-            hide(a);
-            shell_open("resmon.exe", None);
-        }
-        Some(PopupHit::NetSettings) => {
-            hide(a);
-            shell_open("ms-settings:datausage", None);
+            crate::settings_ui::open(a, crate::nav::Page::Monitor);
         }
         Some(PopupHit::UsageReport) => {
             hide(a);
@@ -1225,7 +1221,10 @@ fn proc_name(a: &App, pid: u32) -> String {
         .chain(&s.top_mem)
         .chain(&s.top_io)
         .find(|p| p.pid == pid)
-        .map_or_else(|| format!("PID {}", pid), |p| p.name.clone())
+        .map(|p| p.name.clone())
+        // The Monitor page lists every process.
+        .or_else(|| a.detail().procs.iter().find(|p| p.pid == pid).map(|p| p.name.clone()))
+        .unwrap_or_else(|| format!("PID {}", pid))
 }
 
 fn image_path(pid: u32) -> Option<String> {
@@ -1249,7 +1248,7 @@ fn message(owner: HWND, text: &str, title: &str, flags: u32) -> i32 {
 
 /// Right-click menu for a process row. Runs nested message loops (menu,
 /// message boxes): no `&mut App` is held across them.
-fn proc_menu(pid: u32) {
+pub(crate) fn proc_menu(pid: u32) {
     let (owner, name) = match crate::app::app() {
         Some(a) => (a.hwnd, proc_name(a, pid)),
         None => return,

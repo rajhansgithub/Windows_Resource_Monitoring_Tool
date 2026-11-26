@@ -15,6 +15,8 @@
 //!     thermal_passive_limit  lowest "% Passive Limit" across ACPI thermal zones
 
 mod cpu;
+pub mod detail;
+pub mod hw;
 mod disk;
 mod gpu;
 mod gpu_temp;
@@ -117,6 +119,8 @@ pub struct SampleOpts {
     pub gpu: bool,
     pub disk: bool,
     pub procs: bool,
+    /// The Monitor page is on screen: collect `Detail` too (implies gpu, disk and procs).
+    pub detail: bool,
 }
 
 /// Monotonic clock based on QueryPerformanceCounter.
@@ -155,6 +159,9 @@ pub struct Sensors {
     disk: disk::Disk,
     net: net::Net,
     procs: procs::Procs,
+    detail: detail::DetailSensors,
+    net_detail: net::NetDetail,
+    gpu_pids: Vec<(u32, f32)>,
     // Declared last: counters above are dropped before the query that owns them.
     pdh: Option<pdh::Query>,
 }
@@ -172,12 +179,25 @@ impl Sensors {
             disk: disk::Disk::default(),
             net: net::Net::default(),
             procs: procs::Procs::new(),
+            detail: detail::DetailSensors::default(),
+            net_detail: net::NetDetail::default(),
+            gpu_pids: Vec::new(),
             pdh: pdh::Query::open(),
         }
     }
 
     pub fn sample(&mut self, opts: &SampleOpts) -> &Snapshot {
         let elapsed = self.clock.tick();
+        let mut owned;
+        let opts = if opts.detail && !(opts.gpu && opts.disk && opts.procs) {
+            owned = opts.clone();
+            owned.gpu = true;
+            owned.disk = true;
+            owned.procs = true;
+            &owned
+        } else {
+            opts
+        };
 
         // One PDH collection per sample; counters are attached only while their metric is enabled.
         if let Some(q) = &self.pdh {
@@ -185,6 +205,7 @@ impl Sensors {
             self.perf.attach(q);
             self.gpu.sync(q, opts.gpu);
             self.disk.sync(q, opts.disk);
+            self.detail.sync(q, opts.detail);
             q.collect();
         }
 
@@ -215,7 +236,8 @@ impl Sensors {
         self.net.sample(opts.adapter.as_deref(), elapsed, s);
 
         if opts.procs {
-            self.procs.sample(elapsed, s);
+            let all = opts.detail.then_some(&mut self.detail.d.procs);
+            self.procs.sample(elapsed, s, all);
         } else {
             self.procs.reset();
             s.top_cpu.clear();
@@ -224,9 +246,27 @@ impl Sensors {
             s.proc_count = 0;
         }
 
+        if opts.detail {
+            self.detail.sample(elapsed);
+            let d = &mut self.detail.d;
+            self.gpu.detail(&mut d.engines, &mut self.gpu_pids);
+            for p in &mut d.procs {
+                p.gpu = self.gpu_pids.iter().find(|g| g.0 == p.pid).map_or(0.0, |g| g.1);
+            }
+            let slow = self.detail.slow_due();
+            self.net_detail.sample(elapsed, slow, &mut self.detail.d.adapters);
+        } else {
+            self.net_detail.reset();
+        }
+
         s.battery = power::battery();
         s.uptime_secs = power::uptime_secs();
         &self.snap
+    }
+
+    /// Monitor page detail from the last sample taken with `SampleOpts::detail`.
+    pub fn detail(&self) -> &detail::Detail {
+        &self.detail.d
     }
 
     pub fn adapters(&self) -> Vec<AdapterInfo> {

@@ -754,6 +754,8 @@ impl App {
             disk: sh(Metric::DiskRead) || sh(Metric::DiskWrite) || sh(Metric::DiskActive) || self.detail_warm() || self.ins.enabled(),
             // Insights asks for process lists only while an incident or awake burst needs a culprit.
             procs: sh(Metric::TopProc) || self.detail_warm() || self.ins.wants_procs(),
+            // The Monitor page is on screen (no extra timer: it rides this tick).
+            detail: crate::settings_ui::monitor_visible(),
         }
     }
 
@@ -770,6 +772,11 @@ impl App {
             let opts = self.opts();
             let _ = self.sensors.sample(&opts);
         }
+    }
+
+    /// Monitor page detail from the last sample (empty unless the page is on screen).
+    pub fn detail(&self) -> &crate::sensors::detail::Detail {
+        self.sensors.detail()
     }
 
     pub fn popup_open(&self) -> bool {
@@ -1700,6 +1707,10 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             }
             if w == 2 {
                 a.open_achievements();
+                return 0;
+            }
+            if w == 4 {
+                crate::settings_ui::open(a, crate::nav::Page::Monitor);
                 return 0;
             }
             if w == 3 {

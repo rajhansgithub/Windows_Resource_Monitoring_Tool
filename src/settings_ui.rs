@@ -51,6 +51,7 @@ use crate::achievements::room::{self, Room};
 use crate::achievements::State as AchState;
 use crate::insights::view::{self, View};
 use crate::insights::{unix_ms, Panel};
+use crate::monitor::{Hit as MonHit, Monitor};
 use crate::nav::{self, Entry, History, Page, Placement};
 use crate::popup::style_window;
 use crate::render::{create_font, measure_dc, ui_face, Canvas, Rgba};
@@ -204,6 +205,8 @@ const ID_BIG_NEXT: i32 = 912;
 const ID_BIG_HEAD: i32 = 913;
 const ID_ROOM: i32 = 1000;
 const ID_SINGLE: i32 = 1100;
+/// Monitor page hit regions, + index in `Monitor::hits`.
+const ID_MON: i32 = 1200;
 
 // Per-display toggles, + index in `Ui::displays`.
 const ID_DSHOW: i32 = 800;
@@ -666,6 +669,8 @@ enum Kind {
     Coin,
     /// An earned single in the Server Room tray (index into `Room::single_rects`): shows its coin.
     Single(u16),
+    /// A clickable region of the Monitor page (index into `Monitor::hits`); the page draws it.
+    Mon(u16),
 }
 
 /// Sub-area of a control under the mouse.
@@ -727,6 +732,8 @@ enum Def {
     Room,
     /// The "Next goal" card (Overview).
     Goal,
+    /// The Monitor page (all of it).
+    Monitor,
 }
 
 /// Laid-out non-interactive parts of a page (content coordinates).
@@ -956,6 +963,10 @@ struct Ui {
     room: Room,
     /// The Server Room is laid out on the current page.
     room_on: bool,
+    // ---- Monitor
+    mon: Monitor,
+    /// The Monitor page is laid out on the current page.
+    mon_on: bool,
     // ---- settings
     /// The copy being edited.
     draft: Settings,
@@ -1034,6 +1045,8 @@ impl Ui {
             ach: None,
             room: Room::new(),
             room_on: false,
+            mon: Monitor::new(),
+            mon_on: false,
             draft,
             adapters,
             adapter_labels: labels,
@@ -1588,6 +1601,7 @@ impl Ui {
         match page {
             Page::Overview => self.overview_defs(),
             Page::Achievements => self.achievements_defs(),
+            Page::Monitor => vec![Def::Monitor],
             p if p.panel().is_some() => self.insight_defs(p),
             p => self.settings_defs(p),
         }
@@ -1684,7 +1698,7 @@ impl Ui {
         match self.page {
             Page::Overview => grid::Class::Overview,
             // the Server Room fills the window
-            Page::Achievements => grid::Class::Fill,
+            Page::Achievements | Page::Monitor => grid::Class::Fill,
             // an ordered list: one column, never gridded
             Page::Metrics => grid::Class::List,
             p if p.panel().is_some() => grid::Class::Insights,
@@ -1835,6 +1849,8 @@ impl Ui {
         self.panel_idx = None;
         self.pview.clear();
         let mut room_on = false;
+        let mut mon_on = false;
+        let mut mon_anim = false;
         for (n, d) in defs.into_iter().enumerate() {
             if let (Def::Card { .. }, Some((lw, gap, _))) = (&d, split) {
                 let Def::Card { title, desc, enabled, cells } = d else { continue };
@@ -1900,6 +1916,17 @@ impl Ui {
                         y += self.sc(ROW_GAP);
                     }
                 }
+                Def::Monitor => {
+                    self.mon.motion = self.animate;
+                    y = self.mon.layout(self.dpi, l, r, y);
+                    if self.mon.animating() {
+                        mon_anim = true;
+                    }
+                    mon_on = true;
+                    for (i, (rect, _)) in self.mon.hits.iter().enumerate() {
+                        controls.push(Control { id: ID_MON + i as i32, kind: Kind::Mon(i as u16), rect: *rect, layer: Layer::Page, enabled: true });
+                    }
+                }
                 Def::Goal => {
                     let rect = Rect { l, t: y, r, b: y + room::goal_card_h(self.dpi) };
                     controls.push(Control { id: ID_GOAL, kind: Kind::Goal, rect, layer: Layer::Page, enabled: true });
@@ -1930,6 +1957,10 @@ impl Ui {
         self.controls = controls;
         self.blocks = blocks;
         self.room_on = room_on;
+        self.mon_on = mon_on;
+        if mon_anim && !self.hwnd.is_null() {
+            self.kick();
+        }
 
         let max = self.max_scroll();
         self.target = self.target.clamp(0, max);
@@ -2153,6 +2184,9 @@ impl Ui {
         if done(self.anim.pane.map(|x| x.2), PANE_ANIM_S) {
             self.anim.pane = None;
         } else {
+            busy = true;
+        }
+        if self.mon_on && self.mon.animating() {
             busy = true;
         }
         if self.room_on {
@@ -2456,6 +2490,13 @@ impl Ui {
             });
             self.room.draw(cv, &f.view(), &p.view(), dy, vt, vb, hot);
         }
+        if self.mon_on {
+            let hot = self.hover.and_then(|(id, _)| self.control(id)).and_then(|c| match c.kind {
+                Kind::Mon(i) => Some(i as usize),
+                _ => None,
+            });
+            self.mon.draw(cv, &f.view(), &p.view(), dy, vt, vb, hot);
+        }
         for c in self.controls.iter().filter(|c| c.layer == Layer::Page) {
             let r = shift(c.rect, dy);
             if r.b < vt || r.t > vb {
@@ -2715,6 +2756,7 @@ impl Ui {
                 ring_r = (r, self.sc(6) as f32);
             }
             Kind::Unit(_) => ring_r = (r, self.sc(3) as f32),
+            Kind::Mon(_) => ring_r = (r, self.sc(5) as f32),
             Kind::Coin => ring_r = (r, r.w() as f32 / 2.0),
             Kind::Single(_) => {
                 if hover || pressed {
@@ -3208,6 +3250,32 @@ fn activate(hwnd: HWND, id: i32) {
             }
         }
         Kind::Chip => go(Page::Achievements),
+        Kind::Mon(i) => match u.mon.hits.get(i as usize).map(|h| h.1) {
+            Some(MonHit::Range(secs)) => {
+                u.mon.range = secs;
+                invalidate(hwnd);
+            }
+            Some(MonHit::Sort(k) | MonHit::Tab(k)) => {
+                u.mon.set_sort(k);
+                u.layout();
+                u.refresh_hover();
+                invalidate(hwnd);
+            }
+            Some(MonHit::Pause) => {
+                u.mon.toggle_pause();
+                invalidate(hwnd);
+            }
+            Some(MonHit::ShowAll) => {
+                u.mon.toggle_all();
+                u.layout();
+                u.refresh_hover();
+                invalidate(hwnd);
+            }
+            Some(MonHit::Proc(pid)) => crate::popup::proc_menu(pid),
+            Some(MonHit::TaskMgr) => shell_open("taskmgr.exe", None),
+            Some(MonHit::ResMon) => shell_open("resmon.exe", None),
+            None => {}
+        },
         Kind::Coin => {
             u.room.coin.flip_over();
             u.kick();
@@ -3919,6 +3987,17 @@ pub fn insights_tick(a: &crate::app::App) {
             invalidate(u.hwnd);
         }
     }
+    if u.page == Page::Monitor {
+        if monitor_visible() {
+            u.mon.feed(a);
+            // Process rows reorder every tick: lay out again (cheap, no text measuring).
+            u.layout();
+            u.refresh_hover();
+            invalidate(u.hwnd);
+        }
+        return;
+    }
+    u.mon.clear();
     if !(u.page.shows_insights() || u.page == Page::Achievements) {
         return;
     }
@@ -3927,6 +4006,13 @@ pub fn insights_tick(a: &crate::app::App) {
         u.kick();
     }
     sync_insights(a, false);
+}
+
+/// The Monitor page is open and on screen: the app samples its extra detail.
+pub fn monitor_visible() -> bool {
+    let Some(u) = ui() else { return false };
+    // SAFETY: plain window queries on our own window.
+    !u.hwnd.is_null() && u.page == Page::Monitor && unsafe { IsWindowVisible(u.hwnd) != 0 && IsIconic(u.hwnd) == 0 }
 }
 
 /// Close the window if it is open (app exit): applies pending edits and

@@ -99,6 +99,7 @@ struct Row {
     cpu: f32,
     io_bps: f64,
     mem: u64,
+    threads: u32,
 }
 
 pub struct Procs {
@@ -162,7 +163,8 @@ impl Procs {
         None
     }
 
-    pub fn sample(&mut self, elapsed: f64, snap: &mut Snapshot) {
+    /// Fills the top lists of `snap`; with `all`, also every process (Monitor page).
+    pub fn sample(&mut self, elapsed: f64, snap: &mut Snapshot, all: Option<&mut Vec<super::detail::ProcRow>>) {
         snap.top_cpu.clear();
         snap.top_io.clear();
         snap.top_mem.clear();
@@ -217,7 +219,7 @@ impl Procs {
                 } else {
                     p.working_set_size as u64
                 };
-                self.rows.push(Row { offset, pid, cpu, io_bps, mem });
+                self.rows.push(Row { offset, pid, cpu, io_bps, mem, threads: p.number_of_threads });
             }
             if p.next_entry_offset == 0 {
                 break;
@@ -225,6 +227,19 @@ impl Procs {
             offset += p.next_entry_offset as usize;
         }
         self.prev.retain(|_, p| p.generation == generation);
+
+        if let Some(all) = all {
+            all.clear();
+            all.extend(self.rows.iter().map(|r| super::detail::ProcRow {
+                pid: r.pid,
+                name: self.image_name(r.offset, valid),
+                cpu: r.cpu,
+                mem: r.mem,
+                io: r.io_bps,
+                gpu: 0.0,
+                threads: r.threads,
+            }));
+        }
 
         let fill = |out: &mut Vec<ProcStat>, (idx, n): ([usize; TOP], usize)| {
             out.extend(idx[..n].iter().map(|&i| self.stat(&self.rows[i], valid)));
