@@ -3,10 +3,11 @@
 //! process list. Attached to the shared PDH query only while the page is on screen
 //! (`SampleOpts::detail`), and dropped again when it closes. No admin, no driver.
 
+use super::hw::{Hw, HwReader};
 use super::pdh::{Counter, Query};
+use std::sync::Arc;
 use crate::util::wide;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
-use windows_sys::Win32::Storage::FileSystem::{GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW};
 use windows_sys::Win32::System::ProcessStatus::{GetPerformanceInfo, PERFORMANCE_INFORMATION};
 use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
 use windows_sys::Win32::System::SystemInformation::{
@@ -14,14 +15,15 @@ use windows_sys::Win32::System::SystemInformation::{
 };
 use windows_sys::Win32::System::Threading::GetActiveProcessorCount;
 
-/// Re-read volumes and adapter addresses this often.
+/// Re-read adapter addresses this often.
 const SLOW_SECS: f64 = 10.0;
-const DRIVE_FIXED: u32 = 3;
 
 #[derive(Clone, Debug, Default)]
 pub struct DiskStat {
     /// "Disk 0".
     pub name: String,
+    /// PhysicalDrive number.
+    pub num: Option<u32>,
     /// Volumes on the disk ("C: E:"), may be empty.
     pub letters: String,
     pub read: f64,
@@ -31,15 +33,6 @@ pub struct DiskStat {
     /// Average response time, milliseconds.
     pub latency_ms: f32,
     pub queue: f32,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct Volume {
-    /// "C:".
-    pub letter: String,
-    pub label: String,
-    pub total: u64,
-    pub free: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -108,7 +101,8 @@ pub struct Detail {
     pub engines: Vec<(String, f32)>,
     // ---- disks, volumes, network, processes
     pub disks: Vec<DiskStat>,
-    pub volumes: Vec<Volume>,
+    /// Hardware inventory (devices, drives, volumes), refreshed on a worker thread.
+    pub hw: Arc<Hw>,
     pub adapters: Vec<NetStat>,
     pub procs: Vec<ProcRow>,
 }
@@ -138,6 +132,7 @@ pub struct DetailSensors {
     buf: Vec<u64>,
     /// Seconds since volumes were read (None = never).
     slow_age: Option<f64>,
+    hw: HwReader,
     pub d: Detail,
 }
 
@@ -153,6 +148,7 @@ impl DetailSensors {
                 self.attached = false;
                 self.c = Counters::default();
                 self.slow_age = None;
+                self.hw.reset();
                 self.d.procs = Vec::new();
             }
             return;
@@ -267,17 +263,19 @@ impl DetailSensors {
         for x in &mut disks {
             // "0 C: E:" -> "Disk 0", "C: E:"
             let (num, rest) = x.letters.split_once(' ').map_or((x.letters.clone(), String::new()), |(a, b)| (a.to_string(), b.trim().to_string()));
+            x.num = num.parse().ok();
             x.name = format!("Disk {}", num);
             x.letters = rest;
         }
         disks.sort_by(|a, b| a.name.len().cmp(&b.name.len()).then_with(|| a.name.cmp(&b.name)));
         d.disks = disks;
 
-        // Volumes, every few seconds.
-        let due = self.slow_age.map_or(true, |a| a + elapsed >= SLOW_SECS);
+        // Inventory (worker thread), adapter addresses every few seconds.
+        self.hw.tick(elapsed);
+        d.hw = self.hw.latest.clone();
+        let due = self.slow_age.is_none_or(|a| a + elapsed >= SLOW_SECS);
         if due {
             self.slow_age = Some(0.0);
-            d.volumes = volumes();
         } else if let Some(a) = &mut self.slow_age {
             *a += elapsed;
         }
@@ -290,7 +288,7 @@ impl DetailSensors {
 }
 
 /// Registry string under HKLM.
-fn reg_string(sub: &str, name: &str) -> Option<String> {
+pub(super) fn reg_string(sub: &str, name: &str) -> Option<String> {
     let (sub, name) = (wide(sub), wide(name));
     let mut buf = [0u16; 256];
     let mut sz = (buf.len() * 2) as u32;
@@ -365,51 +363,6 @@ fn gpu_adapter() -> Option<(String, u64, u64)> {
         }
     }
     best
-}
-
-/// Fixed volumes with a drive letter.
-fn volumes() -> Vec<Volume> {
-    let mut out = Vec::new();
-    // SAFETY: plain query.
-    let mask = unsafe { GetLogicalDrives() };
-    for i in 0..26u32 {
-        if mask & (1 << i) == 0 {
-            continue;
-        }
-        let letter = char::from(b'A' + i as u8);
-        let root = wide(&format!("{}:\\", letter));
-        // SAFETY: NUL-terminated root path.
-        if unsafe { GetDriveTypeW(root.as_ptr()) } != DRIVE_FIXED {
-            continue;
-        }
-        let (mut avail, mut total, mut free) = (0u64, 0u64, 0u64);
-        // SAFETY: valid out pointers.
-        if unsafe { GetDiskFreeSpaceExW(root.as_ptr(), &mut avail, &mut total, &mut free) } == 0 || total == 0 {
-            continue;
-        }
-        let mut label = [0u16; 64];
-        // SAFETY: label buffer of the stated length; other outputs not requested.
-        let ok = unsafe {
-            GetVolumeInformationW(
-                root.as_ptr(),
-                label.as_mut_ptr(),
-                label.len() as u32,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                0,
-            )
-        } != 0;
-        let label = if ok {
-            let n = label.iter().position(|&c| c == 0).unwrap_or(label.len());
-            String::from_utf16_lossy(&label[..n])
-        } else {
-            String::new()
-        };
-        out.push(Volume { letter: format!("{}:", letter), label, total, free: avail });
-    }
-    out
 }
 
 /// "3.84 GHz" style clock from MHz.

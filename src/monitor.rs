@@ -23,13 +23,23 @@ use std::collections::VecDeque;
 const TOPN: usize = 14;
 /// Chart ranges, seconds.
 const RANGES: [(&str, usize); 3] = [("1m", 60), ("5m", 300), ("1h", 3600)];
-const SORTS: [&str; 4] = ["CPU", "Memory", "Disk", "GPU"];
+/// Sort tabs (sort keys 0..=4); headers also sort by threads (5) and PID (6).
+const SORTS: [&str; 5] = ["CPU", "Memory", "Disk", "GPU", "Name"];
+/// Reflow animation length, seconds.
+const MOVE_S: f32 = 0.34;
 
 /// What a click on the page does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
     Range(usize),
+    /// Sort tab.
+    Tab(u8),
+    /// Column header.
     Sort(u8),
+    /// Stop / resume reordering the process list.
+    Pause,
+    /// Top rows / every process.
+    ShowAll,
     Proc(u32),
     TaskMgr,
     ResMon,
@@ -42,6 +52,7 @@ enum Sec {
     Gpu,
     Disk,
     Net,
+    Sys,
     Procs,
 }
 
@@ -53,6 +64,24 @@ enum Vit {
     Vram,
     Disk,
     Net,
+}
+
+/// A card on the page (for the reflow animation).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Key {
+    Vit(Vit),
+    Sec(Sec),
+}
+
+/// Ease-out cubic.
+fn ease(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+
+fn lerp_rect(a: Rect, b: Rect, t: f32) -> Rect {
+    let f = |x: i32, y: i32| x + ((y - x) as f32 * t).round() as i32;
+    Rect { l: f(a.l, b.l), t: f(a.t, b.t), r: f(a.r, b.r), b: f(a.b, b.b) }
 }
 
 /// History of one named device (two traces).
@@ -97,6 +126,18 @@ fn sync_series(list: &mut Vec<Series>, keys: &[&str]) -> bool {
 pub struct Monitor {
     pub range: usize,
     pub sort: u8,
+    /// Ascending (A-Z, smallest first).
+    pub asc: bool,
+    /// Process order frozen (values still update).
+    pub paused: bool,
+    /// Every process instead of the top rows.
+    pub all: bool,
+    /// Row order while paused.
+    pinned: Vec<u32>,
+    /// Animate reflows (system animation setting).
+    pub motion: bool,
+    /// Reflow animation: start and where each card was.
+    anim: Option<(std::time::Instant, Vec<(Key, Rect)>)>,
     dpi: u32,
     warn: f32,
     crit: f32,
@@ -137,6 +178,12 @@ impl Monitor {
         Monitor {
             range: 60,
             sort: 0,
+            asc: false,
+            paused: false,
+            all: false,
+            pinned: Vec::new(),
+            motion: true,
+            anim: None,
             dpi: 96,
             warn: 75.0,
             crit: 90.0,
@@ -177,6 +224,9 @@ impl Monitor {
         self.nets.clear();
         self.det.procs = Vec::new();
         self.top.clear();
+        self.pinned.clear();
+        self.paused = false;
+        self.anim = None;
         self.has_data = false;
     }
 
@@ -253,36 +303,145 @@ impl Monitor {
         shape != self.shape()
     }
 
-    pub fn set_sort(&mut self, s: u8) {
-        self.sort = s.min(3);
+    /// Sort by key `k` (0 CPU, 1 memory, 2 disk, 3 GPU, 4 name, 5 threads, 6 PID); the
+    /// current key again flips the direction.
+    pub fn set_sort(&mut self, k: u8) {
+        let k = k.min(6);
+        if k == self.sort {
+            self.asc = !self.asc;
+        } else {
+            self.sort = k;
+            self.asc = k == 4;
+        }
+        self.resort();
+    }
+
+    pub fn toggle_pause(&mut self) {
+        self.paused = !self.paused;
+        if !self.paused {
+            self.sort_top();
+        }
+    }
+
+    pub fn toggle_all(&mut self) {
+        self.all = !self.all;
+        self.resort();
+    }
+
+    /// Re-sort now, even while paused (the user asked for a new order).
+    fn resort(&mut self) {
+        let p = self.paused;
+        self.paused = false;
         self.sort_top();
+        self.paused = p;
     }
 
     fn sort_top(&mut self) {
-        let key = |p: &ProcRow| -> f64 {
+        if self.paused && !self.pinned.is_empty() {
+            let by: std::collections::HashMap<u32, &ProcRow> = self.det.procs.iter().map(|p| (p.pid, p)).collect();
+            self.top = self.pinned.iter().filter_map(|pid| by.get(pid).map(|p| (*p).clone())).collect();
+            return;
+        }
+        let mut v: Vec<&ProcRow> = self.det.procs.iter().collect();
+        let num = |p: &ProcRow| -> f64 {
             match self.sort {
                 1 => p.mem as f64,
                 2 => p.io,
                 3 => f64::from(p.gpu),
+                5 => f64::from(p.threads),
+                6 => f64::from(p.pid),
                 _ => f64::from(p.cpu),
             }
         };
-        let mut v: Vec<&ProcRow> = self.det.procs.iter().collect();
-        v.sort_by(|a, b| key(b).partial_cmp(&key(a)).unwrap_or(std::cmp::Ordering::Equal).then_with(|| b.mem.cmp(&a.mem)));
-        self.top = v.into_iter().take(TOPN).cloned().collect();
+        if self.sort == 4 {
+            v.sort_by_cached_key(|p| (p.name.to_lowercase(), p.pid));
+        } else {
+            // Ascending, ties by memory; reversed below for "largest first".
+            v.sort_by(|a, b| num(a).partial_cmp(&num(b)).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.mem.cmp(&b.mem)));
+        }
+        if !self.asc {
+            v.reverse();
+        }
+        let n = if self.all { v.len() } else { TOPN };
+        self.top = v.into_iter().take(n).cloned().collect();
+        self.pinned = self.top.iter().map(|p| p.pid).collect();
+    }
+
+    /// Process rows the table is laid out for.
+    fn rows(&self) -> usize {
+        if self.all {
+            self.top.len().max(1)
+        } else {
+            TOPN
+        }
     }
 
     /// What decides the layout besides the width.
-    fn shape(&self) -> (usize, usize, usize, usize, usize, bool, bool) {
-        (
+    fn shape(&self) -> [usize; 11] {
+        let hw = &self.det.hw;
+        [
             self.det.core_pct.len(),
             self.det.engines.len(),
             self.det.disks.len(),
             self.det.adapters.len(),
-            self.det.volumes.len(),
-            self.snap.gpu.is_some(),
-            self.det.vram_total > 0,
-        )
+            hw.vols.len(),
+            usize::from(self.snap.gpu.is_some()) + 2 * usize::from(self.det.vram_total > 0),
+            self.sys_tiles().len(),
+            hw.dimms.len(),
+            hw.displays.len(),
+            self.rows(),
+            self.det.adapters.iter().filter(|a| a.connected).count(),
+        ]
+    }
+
+    /// Key facts of the machine for the "This PC" card.
+    fn sys_tiles(&self) -> Vec<(&'static str, String)> {
+        let hw = &self.det.hw;
+        let mut v: Vec<(&'static str, String)> = Vec::new();
+        let mut add = |k: &'static str, val: &str| {
+            if !val.is_empty() {
+                v.push((k, val.to_string()));
+            }
+        };
+        add("WINDOWS", &hw.os);
+        add("VERSION", &hw.os_ver);
+        add("DEVICE", &hw.device);
+        add("MOTHERBOARD", &hw.board);
+        add("BIOS", &hw.bios);
+        add("GPU DRIVER", &hw.gpu_driver);
+        if let Some(b) = &self.snap.battery {
+            let st = if b.charging { "charging" } else if b.on_ac { "plugged in" } else { "on battery" };
+            v.push(("BATTERY", format!("{}% \u{00B7} {}", b.percent, st)));
+        }
+        v
+    }
+
+    fn sys_cols(&self, w: i32) -> i32 {
+        (w / self.sc(200)).clamp(1, 4)
+    }
+
+    /// Where a card is drawn now (moving toward its new place after a reflow).
+    fn cur(&self, k: Key, r: Rect) -> Rect {
+        match &self.anim {
+            Some((t0, from)) => {
+                let t = t0.elapsed().as_secs_f32() / MOVE_S;
+                match from.iter().find(|x| x.0 == k) {
+                    Some((_, a)) if t < 1.0 => lerp_rect(*a, r, ease(t)),
+                    _ => r,
+                }
+            }
+            None => r,
+        }
+    }
+
+    /// Cards still moving after a reflow.
+    pub fn animating(&self) -> bool {
+        self.anim.as_ref().is_some_and(|a| a.0.elapsed().as_secs_f32() < MOVE_S)
+    }
+
+    fn shown(&self) -> Vec<(Key, Rect)> {
+        let v = self.vits.iter().map(|(k, r)| (Key::Vit(*k), self.cur(Key::Vit(*k), *r)));
+        v.chain(self.boxes.iter().map(|(k, r)| (Key::Sec(*k), self.cur(Key::Sec(*k), *r)))).collect()
     }
 
     fn has_gpu(&self) -> bool {
@@ -293,6 +452,15 @@ impl Monitor {
 
     /// Lay the page out between `l` and `r` from `y0` (content coordinates); returns the bottom.
     pub fn layout(&mut self, dpi: u32, l: i32, r: i32, y0: i32) -> i32 {
+        // A big width change (maximize, restore, snap) glides the cards to their new places;
+        // small steps (dragging the border) follow at once.
+        let old_w = self.r - self.l;
+        let jump = self.motion && !self.boxes.is_empty() && dpi == self.dpi && ((r - l) - old_w).abs() >= self.sc(80);
+        if jump {
+            self.anim = Some((std::time::Instant::now(), self.shown()));
+        } else if !self.animating() {
+            self.anim = None;
+        }
         self.dpi = dpi;
         self.l = l;
         self.r = r;
@@ -363,6 +531,7 @@ impl Monitor {
         let wide = if cols == 4 { 2 } else { 1 };
         items.push((Sec::Disk, wide));
         items.push((Sec::Net, wide));
+        items.push((Sec::Sys, cols));
         items.push((Sec::Procs, cols));
         // Pack into rows; the last card of a short row takes the rest of it.
         let mut rows: Vec<Vec<(Sec, i32)>> = Vec::new();
@@ -424,7 +593,7 @@ impl Monitor {
             }
             Sec::Disk => {
                 let n = self.det.disks.len().max(1) as i32;
-                let v = self.det.volumes.len() as i32;
+                let v = self.det.hw.vols.len() as i32;
                 head + n * s(84) + if v > 0 { s(24) + v * s(24) } else { 0 } + foot
             }
             Sec::Net => {
@@ -432,7 +601,20 @@ impl Monitor {
                 let off = if on < self.det.adapters.len() { s(26) } else { 0 };
                 head + on.max(1) as i32 * s(84) + off + s(24 + 70) + foot
             }
-            Sec::Procs => head + s(28) + TOPN as i32 * s(30) + s(8 + 24) + foot,
+            Sec::Sys => {
+                let iw = w - s(32);
+                let n = self.sys_tiles().len() as i32;
+                if n == 0 {
+                    return head + s(40) + foot;
+                }
+                let tc = self.sys_cols(iw);
+                let tiles = (n + tc - 1) / tc * s(48 + 8);
+                let mem = s(20 + 56 + 8 + 18);
+                let disp = s(20) + self.det.hw.displays.len().max(1) as i32 * s(44);
+                let rest = if iw >= s(640) { mem.max(disp) } else { mem + s(16) + disp };
+                head + tiles + s(8) + rest + foot
+            }
+            Sec::Procs => head + s(28) + self.rows() as i32 * s(30) + s(8 + 24) + foot,
         }
     }
 
@@ -470,21 +652,27 @@ impl Monitor {
         }
         let dpi = self.dpi as i32;
         let s = move |v: i32| (v * dpi + 48) / 96;
-        // Sort tabs at the top right.
-        let tw = s(70);
-        let mut x = r.r - s(16) - tw * 4 - s(4);
+        // Pause + sort tabs at the top right.
+        let tw = if r.w() < s(700) { s(60) } else { s(70) };
+        let mut x = r.r - s(16) - tw * SORTS.len() as i32 - s(4);
         let t = r.t + s(14);
-        for i in 0..4u8 {
-            self.hits.push((Rect { l: x, t, r: x + tw, b: t + s(22) }, Hit::Sort(i)));
+        self.hits.push((Rect { l: x - s(12) - s(84), t, r: x - s(12), b: t + s(22) }, Hit::Pause));
+        for i in 0..SORTS.len() as u8 {
+            self.hits.push((Rect { l: x, t, r: x + tw, b: t + s(22) }, Hit::Tab(i)));
             x += tw;
         }
-        // Column headers sort too.
+        // Column headers sort too (again = other direction).
         let cols = self.proc_cols(r);
         let ht = r.t + s(46);
         for (c, l, rr) in &cols {
-            if (2..=5).contains(c) {
-                self.hits.push((Rect { l: *l, t: ht, r: *rr, b: ht + s(28) }, Hit::Sort((*c - 2) as u8)));
-            }
+            let k = match c {
+                1 => 4,
+                2..=5 => (*c - 2) as u8,
+                6 => 5,
+                7 => 6,
+                _ => continue,
+            };
+            self.hits.push((Rect { l: *l, t: ht, r: *rr, b: ht + s(28) }, Hit::Sort(k)));
         }
         let mut y = ht + s(28) + s(4);
         let pids: Vec<u32> = self.top.iter().map(|p| p.pid).collect();
@@ -492,8 +680,9 @@ impl Monitor {
             self.hits.push((Rect { l: r.l + s(8), t: y, r: r.r - s(8), b: y + s(30) }, Hit::Proc(pid)));
             y += s(30);
         }
-        // Footer links.
+        // Footer: show all on the left, links on the right.
         let fy = r.b - s(16) - s(22);
+        self.hits.push((Rect { l: r.l + s(16), t: fy, r: r.l + s(16) + s(150), b: fy + s(22) }, Hit::ShowAll));
         let w2 = s(130);
         self.hits.push((Rect { l: r.r - s(16) - w2, t: fy, r: r.r - s(16), b: fy + s(22) }, Hit::ResMon));
         self.hits.push((Rect { l: r.r - s(16) - 2 * w2 - s(8), t: fy, r: r.r - s(16) - w2 - s(8), b: fy + s(22) }, Hit::TaskMgr));
@@ -505,7 +694,7 @@ impl Monitor {
     /// `hot` indexes `hits`.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(&self, cv: &mut Canvas, f: &Fonts, col: &Colors, dy: i32, vt: i32, vb: i32, hot: Option<usize>) {
-        let d = Draw { m: self, f, col: *col, dy, hot, track: col.line, sub: col.fg.with_a(if col.dark { 10 } else { 14 }) };
+        let d = Draw { m: self, f, col: *col, dx: 0, dy, hot, track: col.line, sub: col.fg.with_a(if col.dark { 10 } else { 14 }) };
         let s = |v: i32| self.sc(v);
         let vis = |r: Rect| r.b + dy >= vt && r.t + dy <= vb;
 
@@ -515,15 +704,19 @@ impl Monitor {
             d.strip(cv, sy);
         }
         for (v, r) in &self.vits {
-            if vis(*r) {
-                d.vital(cv, *v, d.sh(*r));
+            let r = self.cur(Key::Vit(*v), *r);
+            if vis(r) {
+                d.vital(cv, *v, d.sh(r));
             }
         }
-        for (sec, r) in &self.boxes {
-            if !vis(*r) {
+        for (sec, to) in &self.boxes {
+            let r = self.cur(Key::Sec(*sec), *to);
+            if !vis(r) {
                 continue;
             }
-            let r = d.sh(*r);
+            // Controls drawn from hit rects ride along with their (moving) card.
+            let d = Draw { dx: r.r - to.r, dy: dy + r.t - to.t, ..d };
+            let r = Rect { t: r.t + dy, b: r.b + dy, ..r };
             d.card(cv, r);
             match sec {
                 Sec::Cpu => d.cpu(cv, r),
@@ -531,6 +724,7 @@ impl Monitor {
                 Sec::Gpu => d.gpu(cv, r),
                 Sec::Disk => d.disks(cv, r),
                 Sec::Net => d.nets(cv, r),
+                Sec::Sys => d.system(cv, r),
                 Sec::Procs => d.procs(cv, r),
             }
         }
@@ -566,10 +760,13 @@ fn reduce(h: &[f32], n: usize, cols: usize, peak: bool) -> Vec<f32> {
         .collect()
 }
 
+#[derive(Clone, Copy)]
 struct Draw<'a> {
     m: &'a Monitor,
     f: &'a Fonts,
     col: Colors,
+    /// Content -> client offset of hit rects (x only while a card moves).
+    dx: i32,
     dy: i32,
     hot: Option<usize>,
     track: Rgba,
@@ -585,7 +782,7 @@ impl Draw<'_> {
         self.m.scf(v)
     }
     fn sh(&self, r: Rect) -> Rect {
-        Rect { t: r.t + self.dy, b: r.b + self.dy, ..r }
+        Rect { l: r.l + self.dx, r: r.r + self.dx, t: r.t + self.dy, b: r.b + self.dy }
     }
     fn dark(&self) -> bool {
         self.col.dark
@@ -1135,7 +1332,8 @@ impl Draw<'_> {
     fn disks(&self, cv: &mut Canvas, r: Rect) {
         let m = self.m;
         let d = &m.det;
-        let sub = format!("{} physical \u{00B7} {} volumes", d.disks.len(), d.volumes.len());
+        let hw = &d.hw;
+        let sub = format!("{} physical \u{00B7} {} volumes", d.disks.len().max(hw.drives.len()), hw.vols.len());
         let mut y = self.header(cv, r, "Disks", &sub, 0);
         let (l, rr) = (r.l + self.s(16), r.r - self.s(16));
         let (rd, wr) = (self.acc(Metric::DiskRead), self.acc(Metric::DiskWrite));
@@ -1147,35 +1345,74 @@ impl Draw<'_> {
             let h = m.disks.get(i);
             let a: Vec<f32> = h.map_or(Vec::new(), |s| s.a.iter().copied().collect());
             let b: Vec<f32> = h.map_or(Vec::new(), |s| s.b.iter().copied().collect());
-            let sub = format!("{}{}{:.1} ms \u{00B7} queue {:.0}", x.letters, if x.letters.is_empty() { "" } else { " \u{00B7} " }, x.latency_ms, x.queue);
-            self.device_row(cv, l, rr, y, x.active / 100.0, self.heat(rd, x.active), &format!("{:.0}%", x.active), "ACTIVE", &x.name, [("R", x.read, rd), ("W", x.write, wr)], &sub, &a, &b, false);
+            let drv = x.num.and_then(|n| hw.drive(n));
+            let name = drv.filter(|v| !v.model.is_empty()).map_or(x.name.clone(), |v| v.model.clone());
+            // "NVMe SSD · 1 TB · C: E:"
+            let mut sub: Vec<String> = Vec::new();
+            if let Some(v) = drv {
+                let kind = match v.ssd {
+                    Some(true) => "SSD",
+                    Some(false) => "HDD",
+                    None => "",
+                };
+                let t = format!("{} {}", v.bus, kind).trim().to_string();
+                if !t.is_empty() {
+                    sub.push(t);
+                }
+                if v.size > 0 {
+                    sub.push(fmt::bytes(v.size));
+                }
+            }
+            if !x.letters.is_empty() {
+                sub.push(x.letters.clone());
+            }
+            if sub.is_empty() {
+                sub.push(x.name.clone());
+            }
+            let mut note = format!("{:.1} ms \u{00B7} queue {:.0}", x.latency_ms, x.queue);
+            if let Some(t) = drv.and_then(|v| v.temp) {
+                note = format!("{t}\u{00B0}C \u{00B7} {note}");
+            }
+            self.device_row(cv, l, rr, y, x.active / 100.0, self.heat(rd, x.active), &format!("{:.0}%", x.active), "ACTIVE", &name, [("R", x.read, rd), ("W", x.write, wr)], &sub.join(" \u{00B7} "), &note, &a, &b, false);
             y += self.s(84);
         }
         if d.disks.is_empty() {
             self.text_c(cv, self.f.small, "Collecting\u{2026}", (l + rr) / 2, y + self.s(36), self.col.dim);
             y += self.s(84);
         }
-        if d.volumes.is_empty() {
+        if hw.vols.is_empty() {
             return;
         }
         y += self.s(6);
         cv.fill_rect(Rect { l, t: y, r: rr, b: y + 1 }, self.col.card_border);
         y += self.s(18);
         let base = self.acc(Metric::DiskFree);
-        for v in &d.volumes {
+        // Label column grows with the card.
+        let lw = ((rr - l) / 4).clamp(self.s(96), self.s(220));
+        for v in &hw.vols {
             let cy = y + self.s(12);
             text_mid(cv, self.f.cap, &v.letter, l, cy, self.col.fg);
-            let t = format!("{} free of {}", fmt::bytes(v.free), fmt::bytes(v.total));
+            let t = if v.total > 0 { format!("{} free of {}", fmt::bytes(v.free), fmt::bytes(v.total)) } else { v.kind.to_string() };
             let tw = cv.measure(self.f.small, &t).0;
             text_mid(cv, self.f.small, &t, rr - tw, cy, self.col.dim);
-            let lab = if v.label.is_empty() { String::new() } else { cv.ellipsize(self.f.small, &v.label, self.s(90)) };
-            let lw = if lab.is_empty() { 0 } else { self.s(96) };
-            if lw > 0 {
-                text_mid(cv, self.f.small, &lab, l + self.s(30), cy, self.col.dim);
+            // "Windows · NTFS", "USB stick · exFAT · Removable", "Network".
+            let mut parts: Vec<&str> = Vec::new();
+            if !v.label.is_empty() {
+                parts.push(&v.label);
             }
+            if !v.fs.is_empty() {
+                parts.push(&v.fs);
+            }
+            if v.kind != "Fixed" && v.total > 0 {
+                parts.push(v.kind);
+            }
+            let lab = cv.ellipsize(self.f.small, &parts.join(" \u{00B7} "), lw - self.s(6));
+            text_mid(cv, self.f.small, &lab, l + self.s(30), cy, self.col.dim);
             let (bl, br) = (l + self.s(30) + lw, rr - tw - self.s(12));
-            let used = 1.0 - v.free as f32 / v.total.max(1) as f32;
-            self.cells(cv, bl, br, cy, used, self.heat(base, used * 100.0));
+            if v.total > 0 && br - bl > self.s(40) {
+                let used = 1.0 - v.free as f32 / v.total.max(1) as f32;
+                self.cells(cv, bl, br, cy, used, self.heat(base, used * 100.0));
+            }
             y += self.s(24);
         }
     }
@@ -1212,6 +1449,7 @@ impl Draw<'_> {
         name: &str,
         vals: [(&str, f64, Rgba); 2],
         sub: &str,
+        note: &str,
         a: &[f32],
         b: &[f32],
         net: bool,
@@ -1249,6 +1487,144 @@ impl Draw<'_> {
         let cr = Rect { l: vx + vw + self.s(12), t: y + self.s(4), r: rr, b: y + self.s(68) };
         if cr.w() > self.s(40) {
             self.mirror(cv, cr, a, b, vals[0].2, vals[1].2);
+            if !note.is_empty() && cr.w() > self.s(160) {
+                cv.text_right(self.f.tiny, note, cr.r, y + self.s(56), self.col.dim);
+            }
+        }
+    }
+
+    // ---- this PC
+
+    fn system(&self, cv: &mut Canvas, r: Rect) {
+        let m = self.m;
+        let hw = &m.det.hw;
+        let mut y = self.header(cv, r, "This PC", &hw.host, 0);
+        let (l, rr) = (r.l + self.s(16), r.r - self.s(16));
+        let tiles = m.sys_tiles();
+        if tiles.is_empty() {
+            self.text_c(cv, self.f.small, "Reading hardware\u{2026}", (l + rr) / 2, y + self.s(16), self.col.dim);
+            return;
+        }
+        let tc = m.sys_cols(rr - l);
+        self.kv_grid(cv, l, y, rr - l, tc, &tiles);
+        y += (tiles.len() as i32 + tc - 1) / tc * self.s(48 + 8) + self.s(8);
+        let two = rr - l >= self.s(640);
+        let mid = (l + rr) / 2;
+        let (ml, mr) = if two { (l, mid - self.s(14)) } else { (l, rr) };
+        self.dimms(cv, ml, mr, y);
+        let (dl, dr, dy) = if two { (mid + self.s(14), rr, y) } else { (l, rr, y + self.s(20 + 56 + 8 + 18 + 16)) };
+        if two {
+            cv.fill_rect(Rect { l: mid, t: y, r: mid + 1, b: r.b - self.s(16) }, self.col.card_border);
+        }
+        self.displays(cv, dl, dr, dy);
+    }
+
+    /// Memory slots: filled ones show their size, empty ones are outlined.
+    fn dimms(&self, cv: &mut Canvas, l: i32, r: i32, y: i32) {
+        let hw = &self.m.det.hw;
+        let (used, total) = hw.slots();
+        self.cap(cv, "MEMORY SLOTS", l, y);
+        let speed = hw.dimms.iter().map(|d| d.speed).max().unwrap_or(0);
+        let mut info: Vec<String> = Vec::new();
+        if total > 0 {
+            info.push(format!("{used} of {total} used"));
+        }
+        if !hw.mem_type.is_empty() {
+            info.push(hw.mem_type.clone());
+        }
+        if speed > 0 {
+            info.push(format!("{speed} MT/s"));
+        }
+        cv.text_right(self.f.tiny, &info.join(" \u{00B7} "), r, y, self.col.dim);
+        let t = y + self.s(20);
+        let n = hw.dimms.len() as i32;
+        if n == 0 {
+            text_mid(cv, self.f.small, "No slot information from the firmware", l, t + self.s(28), self.col.dim);
+            return;
+        }
+        let g = self.s(8);
+        let bw = ((r - l - g * (n - 1)) / n).min(self.s(130)).max(self.s(30));
+        let ram = self.acc(Metric::Ram);
+        for (i, dm) in hw.dimms.iter().enumerate() {
+            let x = l + i as i32 * (bw + g);
+            if x + bw > r + 1 {
+                break;
+            }
+            let b = Rect { l: x, t, r: x + bw, b: t + self.s(56) };
+            let rad = self.sf(6.0);
+            if dm.size > 0 {
+                cv.fill_round(b, rad, ram.with_a(if self.dark() { 46 } else { 40 }));
+                cv.stroke_round(b, rad, ram.with_a(150));
+                // Contact pins along the bottom edge.
+                let pins = Rect { l: b.l + self.s(6), t: b.b - self.s(7), r: b.r - self.s(6), b: b.b - self.s(4) };
+                let mut px = pins.l;
+                while px + self.s(2) <= pins.r {
+                    cv.fill_rect(Rect { l: px, t: pins.t, r: px + self.s(2).max(1), b: pins.b }, ram.with_a(170));
+                    px += self.s(4);
+                }
+                self.text_c(cv, self.f.semi, &fmt::bytes(dm.size), (b.l + b.r) / 2, b.t + self.s(18), self.col.fg);
+            } else {
+                cv.stroke_round(b, rad, self.col.card_border);
+                self.text_c(cv, self.f.tiny, "Empty", (b.l + b.r) / 2, b.t + self.s(18), self.col.dim);
+            }
+            let sl = cv.ellipsize(self.f.tiny, &dm.slot, bw - self.s(8));
+            self.text_c(cv, self.f.tiny, &sl, (b.l + b.r) / 2, b.t + self.s(36), self.col.dim);
+        }
+        // Maker and part number of the sticks (they usually match).
+        let mut names: Vec<String> = Vec::new();
+        for dm in hw.dimms.iter().filter(|d| d.size > 0) {
+            let s = format!("{} {}", dm.maker, dm.part).trim().to_string();
+            if !s.is_empty() && !names.contains(&s) {
+                names.push(s);
+            }
+        }
+        if !names.is_empty() {
+            let s = cv.ellipsize(self.f.small, &names.join(", "), r - l);
+            cv.text(self.f.small, &s, l, t + self.s(56 + 8), self.col.dim);
+        }
+    }
+
+    /// Each display as a little screen in its own aspect ratio.
+    fn displays(&self, cv: &mut Canvas, l: i32, r: i32, y: i32) {
+        let ds = &self.m.det.hw.displays;
+        self.cap(cv, "DISPLAYS", l, y);
+        let mut t = y + self.s(20);
+        if ds.is_empty() {
+            text_mid(cv, self.f.small, "No display information", l, t + self.s(16), self.col.dim);
+            return;
+        }
+        let acc = self.col.accent;
+        for d in ds {
+            let h = self.s(26);
+            let w = if d.h > 0 { (h as f32 * d.w as f32 / d.h as f32).round() as i32 } else { self.s(46) };
+            let w = w.clamp(self.s(20), self.s(62));
+            let sx = l + (self.s(62) - w) / 2;
+            let scr = Rect { l: sx, t: t + self.s(4), r: sx + w, b: t + self.s(4) + h };
+            cv.fill_round(scr, self.sf(3.0), acc.with_a(if d.primary { 60 } else { 26 }));
+            cv.stroke_round(scr, self.sf(3.0), acc.with_a(if d.primary { 200 } else { 110 }));
+            // Stand.
+            let cx = (scr.l + scr.r) / 2;
+            cv.fill_rect(Rect { l: cx - self.s(1), t: scr.b, r: cx + self.s(1), b: scr.b + self.s(4) }, acc.with_a(110));
+            cv.fill_rect(Rect { l: cx - self.s(6), t: scr.b + self.s(4), r: cx + self.s(6), b: scr.b + self.s(5) }, acc.with_a(110));
+            let tx = l + self.s(74);
+            let nm = cv.ellipsize(self.f.cap, &d.name, r - tx);
+            cv.text(self.f.cap, &nm, tx, t + self.s(2), self.col.fg);
+            let mut sub: Vec<String> = Vec::new();
+            if d.w > 0 {
+                sub.push(format!("{} \u{00D7} {}", d.w, d.h));
+            }
+            if d.hz > 0.0 {
+                sub.push(format!("{:.0} Hz", d.hz));
+            }
+            if !d.link.is_empty() {
+                sub.push(d.link.clone());
+            }
+            if d.primary && ds.len() > 1 {
+                sub.push("Main".into());
+            }
+            let st = cv.ellipsize(self.f.small, &sub.join(" \u{00B7} "), r - tx);
+            cv.text(self.f.small, &st, tx, t + self.s(20), self.col.dim);
+            t += self.s(44);
         }
     }
 
@@ -1281,7 +1657,7 @@ impl Draw<'_> {
                 sub.push(x.ipv4.clone());
             }
             let cap = if x.wifi { "WI-FI" } else { "" };
-            self.device_row(cv, l, rr, y, 0.0, dn, "", cap, &x.alias, [("\u{25BC}", x.down, dn), ("\u{25B2}", x.up, up)], &sub.join(" \u{00B7} "), &a, &b, true);
+            self.device_row(cv, l, rr, y, 0.0, dn, "", cap, &x.alias, [("\u{25BC}", x.down, dn), ("\u{25B2}", x.up, up)], &sub.join(" \u{00B7} "), "", &a, &b, true);
             y += self.s(84);
         }
         let off: Vec<&str> = d.adapters.iter().filter(|a| !a.connected).map(|a| a.alias.as_str()).collect();
@@ -1335,18 +1711,13 @@ impl Draw<'_> {
         let m = self.m;
         let d = &m.det;
         let count = if d.processes > 0 { d.processes as usize } else { d.procs.len() };
-        // Sort tabs.
-        let mut tabs_l = r.r;
-        for i in 0..4u8 {
-            if let Some(t) = self.hit_rect(Hit::Sort(i)).filter(|_| true) {
-                if t.t < r.t + self.s(40) {
-                    tabs_l = tabs_l.min(t.l);
-                }
-            }
-        }
-        let y = self.header(cv, r, "Processes", &format!("Top {} of {}", m.top.len(), count), r.r - tabs_l);
-        let tab_cols = [Metric::Cpu, Metric::Ram, Metric::DiskRead, Metric::Gpu];
-        let tabs: Vec<Rect> = m.hits.iter().filter(|h| matches!(h.1, Hit::Sort(_)) && h.0.t < m.boxes.iter().find(|b| b.0 == Sec::Procs).map_or(0, |b| b.1.t) + self.s(40)).map(|h| self.sh(h.0)).collect();
+        let tabs: Vec<Rect> = (0..SORTS.len() as u8).filter_map(|i| self.hit_rect(Hit::Tab(i))).collect();
+        let pause = self.hit_rect(Hit::Pause);
+        let right = pause.map_or(r.r, |p| p.l);
+        let sub = if m.all { format!("All {}", m.top.len()) } else { format!("Top {} of {}", m.top.len(), count) };
+        let sub = if m.paused { format!("{sub} \u{00B7} order held") } else { sub };
+        let y = self.header(cv, r, "Processes", &sub, r.r - right);
+        let tab_cols = [self.acc(Metric::Cpu), self.acc(Metric::Ram), self.acc(Metric::DiskRead), self.acc(Metric::Gpu), self.col.fg.with_a(150)];
         if let (Some(f), Some(l)) = (tabs.first(), tabs.last()) {
             let tr = Rect { l: f.l - self.s(2), t: f.t - self.s(2), r: l.r + self.s(2), b: l.b + self.s(2) };
             cv.fill_round(tr, tr.h() as f32 / 2.0, self.sub);
@@ -1360,21 +1731,62 @@ impl Draw<'_> {
                 let dot = self.s(6);
                 let x = (t.l + t.r - lw - dot - self.s(5)) / 2;
                 let cy = (t.t + t.b) / 2;
-                cv.fill_round(Rect { l: x, t: cy - dot / 2, r: x + dot, b: cy - dot / 2 + dot }, dot as f32 / 2.0, self.acc(tab_cols[i]));
-                let c = if on || self.is_hot(Hit::Sort(i as u8)) { self.col.fg } else { self.col.dim };
+                cv.fill_round(Rect { l: x, t: cy - dot / 2, r: x + dot, b: cy - dot / 2 + dot }, dot as f32 / 2.0, tab_cols[i]);
+                let c = if on || self.is_hot(Hit::Tab(i as u8)) { self.col.fg } else { self.col.dim };
                 text_mid(cv, self.f.small, label, x + dot + self.s(5), cy, c);
             }
+        }
+        // Pause: holds the row order so rows stop jumping around.
+        if let Some(p) = pause {
+            let hot = self.is_hot(Hit::Pause);
+            let acc = self.col.accent;
+            let (bg, fg) = if m.paused { (acc.with_a(if self.dark() { 60 } else { 44 }), acc) } else { (self.sub, if hot { self.col.fg } else { self.col.dim }) };
+            cv.fill_round(p, p.h() as f32 / 2.0, if hot && !m.paused { self.col.fg.with_a(if self.dark() { 26 } else { 22 }) } else { bg });
+            let label = if m.paused { "Resume" } else { "Pause" };
+            let (lw, _) = cv.measure(self.f.small, label);
+            let iw = self.s(8);
+            let x = (p.l + p.r - lw - iw - self.s(6)) / 2;
+            let cy = (p.t + p.b) / 2;
+            if m.paused {
+                // Play triangle from thin bars.
+                for k in 0..iw {
+                    let hh = ((iw - k) as f32 * 0.6).round() as i32;
+                    cv.fill_rect(Rect { l: x + k, t: cy - hh, r: x + k + 1, b: cy + hh }, fg);
+                }
+            } else {
+                let bw = self.s(3);
+                cv.fill_rect(Rect { l: x, t: cy - self.s(5), r: x + bw, b: cy + self.s(5) }, fg);
+                cv.fill_rect(Rect { l: x + iw - bw, t: cy - self.s(5), r: x + iw, b: cy + self.s(5) }, fg);
+            }
+            text_mid(cv, self.f.small, label, x + iw + self.s(6), cy, fg);
         }
         let cols = m.proc_cols(r);
         let ht = y;
         let names = ["", "NAME", "CPU", "MEMORY", "DISK", "GPU", "THREADS", "PID"];
+        let key = |c: usize| match c {
+            1 => Some(4u8),
+            2..=5 => Some((c - 2) as u8),
+            6 => Some(5),
+            7 => Some(6),
+            _ => None,
+        };
+        let arrow = if m.asc { "\u{25B2}" } else { "\u{25BC}" };
         for (c, l, rr) in &cols {
-            let on = (2..=5).contains(c) && m.sort as usize == c - 2;
-            let col = if on { self.col.fg } else { self.col.dim };
+            let on = key(*c) == Some(m.sort);
+            let hot = key(*c).is_some_and(|k| self.is_hot(Hit::Sort(k)));
+            let col = if on || hot { self.col.fg } else { self.col.dim };
+            let ty = ht + self.s(8);
             if *c >= 6 {
-                cv.text_right(self.f.tiny, names[*c], *rr, ht + self.s(8), col);
+                let w = cv.measure(self.f.tiny, names[*c]).0;
+                cv.text_right(self.f.tiny, names[*c], *rr, ty, col);
+                if on {
+                    cv.text_right(self.f.tiny, arrow, *rr - w - self.s(4), ty, self.col.accent);
+                }
             } else {
-                cv.text(self.f.tiny, names[*c], *l, ht + self.s(8), col);
+                let w = cv.text(self.f.tiny, names[*c], *l, ty, col).max(cv.measure(self.f.tiny, names[*c]).0);
+                if on {
+                    cv.text(self.f.tiny, arrow, *l + w + self.s(4), ty, self.col.accent);
+                }
             }
         }
         cv.fill_rect(Rect { l: r.l + self.s(16), t: ht + self.s(27), r: r.r - self.s(16), b: ht + self.s(28) }, self.col.card_border);
@@ -1430,6 +1842,11 @@ impl Draw<'_> {
         }
         if m.top.is_empty() {
             self.text_c(cv, self.f.small, "Collecting\u{2026}", (r.l + r.r) / 2, y + self.s(40), self.col.dim);
+        }
+        if let Some(t) = self.hit_rect(Hit::ShowAll) {
+            let label = if m.all { "Show top 14".to_string() } else { format!("Show all {count}") };
+            let c = if self.is_hot(Hit::ShowAll) { self.col.accent.mix(self.col.fg, 0.25) } else { self.col.accent };
+            text_mid(cv, self.f.small, &label, t.l, (t.t + t.b) / 2, c);
         }
         for (h, label) in [(Hit::TaskMgr, "Task Manager"), (Hit::ResMon, "Resource Monitor")] {
             if let Some(t) = self.hit_rect(h) {

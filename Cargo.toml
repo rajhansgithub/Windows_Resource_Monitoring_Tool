@@ -35,6 +35,8 @@ features = [
   "Win32_System_Time",
   "Win32_System_ProcessStatus",
   "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+  "Win32_Devices_Display",
   "Win32_NetworkManagement_IpHelper",
   "Win32_Networking_WinHttp",
   "Win32_Security_Cryptography",

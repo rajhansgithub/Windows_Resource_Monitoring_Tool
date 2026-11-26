@@ -1818,6 +1818,7 @@ impl Ui {
         self.pview.clear();
         let mut room_on = false;
         let mut mon_on = false;
+        let mut mon_anim = false;
         for (n, d) in self.page_defs(self.page).into_iter().enumerate() {
             match d {
                 Def::Heading(t) => {
@@ -1873,7 +1874,11 @@ impl Ui {
                     }
                 }
                 Def::Monitor => {
+                    self.mon.motion = self.animate;
                     y = self.mon.layout(self.dpi, l, r, y);
+                    if self.mon.animating() {
+                        mon_anim = true;
+                    }
                     mon_on = true;
                     for (i, (rect, _)) in self.mon.hits.iter().enumerate() {
                         controls.push(Control { id: ID_MON + i as i32, kind: Kind::Mon(i as u16), rect: *rect, layer: Layer::Page, enabled: true });
@@ -1932,6 +1937,9 @@ impl Ui {
         self.blocks = blocks;
         self.room_on = room_on;
         self.mon_on = mon_on;
+        if mon_anim && !self.hwnd.is_null() {
+            self.kick();
+        }
 
         let max = self.max_scroll();
         self.target = self.target.clamp(0, max);
@@ -2080,6 +2088,9 @@ impl Ui {
         if done(self.anim.pane.map(|x| x.2), PANE_ANIM_S) {
             self.anim.pane = None;
         } else {
+            busy = true;
+        }
+        if self.mon_on && self.mon.animating() {
             busy = true;
         }
         if self.room_on {
@@ -3148,8 +3159,18 @@ fn activate(hwnd: HWND, id: i32) {
                 u.mon.range = secs;
                 invalidate(hwnd);
             }
-            Some(MonHit::Sort(k)) => {
+            Some(MonHit::Sort(k) | MonHit::Tab(k)) => {
                 u.mon.set_sort(k);
+                u.layout();
+                u.refresh_hover();
+                invalidate(hwnd);
+            }
+            Some(MonHit::Pause) => {
+                u.mon.toggle_pause();
+                invalidate(hwnd);
+            }
+            Some(MonHit::ShowAll) => {
+                u.mon.toggle_all();
                 u.layout();
                 u.refresh_hover();
                 invalidate(hwnd);

@@ -391,11 +391,23 @@ jobs:
             [void][W5]::SetWindowPos($h, [IntPtr]::Zero, 40, 40, 900, 1000, 0x14); Start-Sleep -Seconds 3
             Grab $h "target/monitor-shots/small.png"
             Scroll $h "small" 7 -1500
+            # Reflow animation: maximize and catch the cards mid-move.
+            [void][W5]::ShowWindow($h, 3); Start-Sleep -Milliseconds 120
+            Grab $h "target/monitor-shots/anim-mid.png"
+            Start-Sleep -Seconds 1
+            [void][W5]::ShowWindow($h, 9); Start-Sleep -Milliseconds 500
             Add-Content "$dir/settings.ini" "`ntheme = light`n"
             [void][W5]::SetWindowPos($h, [IntPtr]::Zero, 20, 20, 1500, 1000, 0x14); Start-Sleep -Seconds 6
             Grab $h "target/monitor-shots/light.png"
             Scroll $h "light" 2 -1800
             Stop-Job $job -ErrorAction SilentlyContinue
+            # TEMP (drop before merge): print the shots so a cloud session can read them from the log.
+            foreach ($f in Get-ChildItem target/monitor-shots/*.png) {
+              $b = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f.FullName))
+              Write-Output "MON-BEGIN $($f.Name)"
+              for ($i = 0; $i -lt $b.Length; $i += 4000) { Write-Output ("MON|" + $b.Substring($i, [Math]::Min(4000, $b.Length - $i))) }
+              Write-Output "MON-END"
+            }
           }
           $log = "$dir/diagnostics.log"
           if (Test-Path $log) { Get-Content $log -Tail 30 }

@@ -16,6 +16,7 @@
 
 mod cpu;
 pub mod detail;
+pub mod hw;
 mod disk;
 mod gpu;
 mod gpu_temp;
