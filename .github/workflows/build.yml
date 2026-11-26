@@ -142,14 +142,12 @@ jobs:
             $g.CopyFromScreen($r.L, $r.T, 0, 0, (New-Object System.Drawing.Size $w, $hh))
             $bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)
           }
-          # TEMP-ROOM-DUMP (remove before merge): PNGs as base64 in the log, artifact download is blocked for the cloud session
-          function Dump($f) { $b = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f)); Write-Output "ROOM-BEGIN $f"; for ($i=0; $i -lt $b.Length; $i+=4000) { Write-Output ("ROOM|" + $b.Substring($i, [Math]::Min(4000, $b.Length-$i))) }; Write-Output "ROOM-END" }
           if ($h -ne [IntPtr]::Zero) {
-            Grab "target/room-shots/overview.png"; Dump "target/room-shots/overview.png"
+            Grab "target/room-shots/overview.png"
             $ws = New-Object -ComObject WScript.Shell
             [void]$ws.AppActivate($p.Id); Start-Sleep -Milliseconds 400
             [System.Windows.Forms.SendKeys]::SendWait("^{TAB}"); Start-Sleep -Seconds 2
-            Grab "target/room-shots/server-room.png"; Dump "target/room-shots/server-room.png"
+            Grab "target/room-shots/server-room.png"
           }
           $log = "$dir/diagnostics.log"
           if (Test-Path $log) { Get-Content $log -Tail 30 }
