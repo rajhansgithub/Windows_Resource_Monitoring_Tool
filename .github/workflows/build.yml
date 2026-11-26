@@ -208,7 +208,7 @@ jobs:
           }
           Set-Content "$dir/usage.csv" ($rows -join "`n")
           # Taskbar widget with meters (later lines win in settings.ini).
-          Add-Content "$dir/settings.ini" "`nlabel_style = meters`ntheme = dark`n"
+          Add-Content "$dir/settings.ini" "`nlabel_style = meters`ntheme = dark`nmax_width_pct = 50`nbg_opacity = 255`n"
           Add-Type @"
           using System; using System.Runtime.InteropServices;
           public static class W4 {
