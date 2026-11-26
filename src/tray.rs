@@ -1,8 +1,7 @@
 //! Notification-area icon.
 
 use windows_sys::Win32::Foundation::*;
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::UI::Controls::*;
+use windows_sys::Win32::System::Registry::HKEY_CURRENT_USER;
 use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -11,10 +10,28 @@ pub const WM_TRAY: u32 = WM_APP + 1;
 pub struct Tray {
     hwnd: HWND,
     icon: HICON,
+    /// The icon shows the eggshell tile (light taskbar).
+    light: bool,
     added: bool,
     last_tip: String,
     /// Insights feature of the last notification (for a click on it).
     source: std::cell::Cell<Option<&'static str>>,
+}
+
+/// Windows draws the taskbar light ("SystemUsesLightTheme" = 1).
+fn taskbar_light() -> bool {
+    crate::util::read_dword(HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", "SystemUsesLightTheme")
+        .unwrap_or(0)
+        != 0
+}
+
+/// DPI-correct small icon: the eggshell tile on a light taskbar, else the dark one.
+fn load(light: bool) -> HICON {
+    let mut icon = crate::logo::icon(!light, false);
+    if icon.is_null() {
+        icon = unsafe { LoadIconW(std::ptr::null_mut(), IDI_APPLICATION) };
+    }
+    icon
 }
 
 fn copy(dst: &mut [u16], s: &str) {
@@ -28,15 +45,27 @@ fn copy(dst: &mut [u16], s: &str) {
 
 impl Tray {
     pub fn new(hwnd: HWND) -> Tray {
-        let mut icon: HICON = std::ptr::null_mut();
-        unsafe {
-            let hinst = GetModuleHandleW(std::ptr::null());
-            // DPI-correct small icon from resource id 1.
-            if LoadIconMetric(hinst, 1 as _, LIM_SMALL, &mut icon) != 0 || icon.is_null() {
-                icon = LoadIconW(std::ptr::null_mut(), IDI_APPLICATION);
-            }
+        let light = taskbar_light();
+        Tray { hwnd, icon: load(light), light, added: false, last_tip: String::new(), source: std::cell::Cell::new(None) }
+    }
+
+    /// Match the icon to the taskbar (Windows' own light/dark setting, not the app theme).
+    pub fn follow_taskbar(&mut self) {
+        let light = taskbar_light();
+        if light == self.light {
+            return;
         }
-        Tray { hwnd, icon, added: false, last_tip: String::new(), source: std::cell::Cell::new(None) }
+        let old = std::mem::replace(&mut self.icon, load(light));
+        self.light = light;
+        let mut d = self.base();
+        d.uFlags = NIF_ICON;
+        d.hIcon = self.icon;
+        unsafe {
+            if self.added && Shell_NotifyIconW(NIM_MODIFY, &d) == 0 {
+                self.add();
+            }
+            DestroyIcon(old);
+        }
     }
 
     fn base(&self) -> NOTIFYICONDATAW {

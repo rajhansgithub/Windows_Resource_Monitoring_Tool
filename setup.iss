@@ -36,6 +36,9 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 SetupIconFile=res\app.ico
+; Pulse Line logo: side panel and corner art (100% and 200%), from tools/icon/make.js.
+WizardImageFile=res\wizard.bmp,res\wizard@2x.bmp
+WizardSmallImageFile=res\wizard-small.bmp,res\wizard-small@2x.bmp
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
 CloseApplications=yes

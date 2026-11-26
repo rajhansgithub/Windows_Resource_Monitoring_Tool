@@ -268,7 +268,7 @@ jobs:
           $env:RESMON_INSIGHTS_DEMO = "1"
           $fails = @()
           # RESMON_PAGE (demo mode only) opens each page directly.
-          $pages = @("overview", "incidents", "sleep", "heldback", "ghost", "general", "alerts", "metrics")
+          $pages = @("overview", "incidents", "sleep", "heldback", "ghost", "general", "alerts", "metrics", "about")
           foreach ($mode in "default", "maximized") {
             $n = 0
             foreach ($pg in $pages) {
