@@ -254,10 +254,6 @@ jobs:
             Start-Sleep -Seconds 6
             Grab "target/popup-shots/popup-light.png"
             if ($ov -ne [IntPtr]::Zero) { Grab "target/popup-shots/widget-both.png" $ov }
-            # TEMP (drop before merge): screenshots into the log, base64 between markers.
-            foreach ($f in Get-ChildItem target/popup-shots/*.png) {
-              "POPUP-BEGIN $($f.Name)"; [Convert]::ToBase64String([IO.File]::ReadAllBytes($f.FullName)) -split '(.{1,4000})' | Where-Object { $_ } | ForEach-Object { "POPUP|$_" }; "POPUP-END"
-            }
           }
           $log = "$dir/diagnostics.log"
           if (Test-Path $log) { Get-Content $log -Tail 30 }

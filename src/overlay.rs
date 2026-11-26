@@ -168,7 +168,7 @@ pub fn register(hinst: HINSTANCE, wndproc: WNDPROC) {
 impl Overlay {
     /// Meter ring diameter for a line height.
     fn meter_d(line_h: i32) -> i32 {
-        ((line_h as f32) * 0.62).round().max(8.0) as i32
+        ((line_h as f32) * 0.74).round().max(8.0) as i32
     }
 
     /// Width of what precedes a value: text label, meter, or both.
@@ -620,7 +620,7 @@ impl Overlay {
                     // Tiny ring gauge: faint track, heat-coloured fill.
                     let d = Self::meter_d(line_h);
                     let (cx, cy) = (x as f32 + d as f32 / 2.0, y as f32 + line_h as f32 / 2.0);
-                    let th = (d as f32 * 0.2).max(2.0 * scale.min(1.5));
+                    let th = (d as f32 * 0.22).max(2.0 * scale.min(1.5));
                     let col = m.pct_of(r).map_or(ac, |p| m.heat(ac, p));
                     self.canvas.ring(cx, cy, d as f32 / 2.0, th, 1.0, fg.with_a(if m.dark { 46 } else { 40 }));
                     self.canvas.ring(cx, cy, d as f32 / 2.0, th, f, col);
