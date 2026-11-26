@@ -4095,7 +4095,8 @@ impl Stage {
                 self.medals.ensure_back(id, tier, b.name, &sub);
             }
         }
-        let ss = if reduced && gpu::is_hardware() { 4 } else { self.ss };
+        // at rest (one frame, then nothing) always full anti-aliasing on a GPU; samples only drop while it moves
+        let ss = if (reduced || !moving) && gpu::is_hardware() { 4 } else { self.ss };
         let c0 = std::time::Instant::now();
         match self.medals.coin_frame(id, tier, nr, n, ss, t, yaw, pitch, (0.0, 0.0), wear) {
             Some(f) => {
@@ -4114,17 +4115,29 @@ impl Stage {
         if moving && !reduced {
             let ms = c0.elapsed().as_secs_f32() * 1000.0;
             self.cost = self.cost * 0.8 + ms * 0.2;
-            if self.cost > 12.0 && self.ss > 1 {
-                self.ss /= 2; // samples go first: half the cost
+            // too slow: 4 -> 2 samples, then down to 75% pixels, then 1 sample, then (weak GPUs only) down to 50%.
+            // Fast again: the same steps back. Edges stay smooth: 2 samples plus 75% keeps the outline clean.
+            let floor = if gpu::is_hardware() { 0.75 } else { 0.5 };
+            if self.cost > 12.0 && self.ss > 2 {
+                self.ss = 2;
                 self.cost = 8.0;
-            } else if self.cost > 12.0 && self.scale > 0.4 {
-                self.scale = (self.scale - 0.1).max(0.4); // then pixels
+            } else if self.cost > 12.0 && self.scale > floor {
+                self.scale = (self.scale - 0.05).max(floor);
+                self.cost = 8.0;
+            } else if self.cost > 12.0 && self.ss > 1 {
+                self.ss = 1;
+                self.cost = 8.0;
+            } else if self.cost > 12.0 && self.scale > 0.5 {
+                self.scale = (self.scale - 0.05).max(0.5);
+                self.cost = 8.0;
+            } else if self.cost < 5.0 && self.ss < 2 && gpu::is_hardware() {
+                self.ss = 2;
                 self.cost = 8.0;
             } else if self.cost < 5.0 && self.scale < 1.0 {
                 self.scale = (self.scale + 0.05).min(1.0);
                 self.cost = 6.0;
             } else if self.cost < 5.0 && self.ss < 4 && gpu::is_hardware() {
-                self.ss *= 2;
+                self.ss = 4;
                 self.cost = 8.0;
             }
         }

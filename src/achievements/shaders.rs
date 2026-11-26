@@ -1021,7 +1021,7 @@ float4 coinPx(float2 f, float S){
   float3 nl=n;
   float matte=0., paint=0.;
   bool face=abs(n.z)>.6;
-  if(length(p.xy)>.975 && abs(n.z)<.6){ float ang=atan2(p.y,p.x); float3 tg=float3(-sin(ang),cos(ang),0.); nl=normalize(nl+tg*sin(ang*220.)*.22); }   // the outer wall: fine reeding
+  if(length(p.xy)>.975 && abs(n.z)<.6){ float ang=atan2(p.y,p.x); float3 tg=float3(-sin(ang),cos(ang),0.); nl=normalize(nl+tg*sin(ang*220.)*.22*saturate(.0143/pxw-1.)); }   // the outer wall: fine reeding, faded out once a ridge is under 2 px so a small coin's rim does not shimmer
 #if STONE == 0
   {                                                  // the icon, etched bright into the die (on the field: engraved)
     const float kI=.17;
