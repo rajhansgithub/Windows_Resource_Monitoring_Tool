@@ -166,3 +166,122 @@ pub fn adapters() -> Vec<AdapterInfo> {
     out.sort_by(|a, b| b.connected.cmp(&a.connected).then_with(|| a.alias.cmp(&b.alias)));
     out
 }
+
+// ------------------------------------------------------------------ Monitor page detail
+
+/// Per-adapter rates, link speed and IPv4 address (Monitor page only).
+#[derive(Default)]
+pub struct NetDetail {
+    prev: HashMap<u64, (u64, u64)>,
+    /// LUID -> first IPv4 address, refreshed with the volumes.
+    ips: HashMap<u64, String>,
+}
+
+const IF_TYPE_IEEE80211: u32 = 71;
+
+impl NetDetail {
+    pub fn reset(&mut self) {
+        self.prev.clear();
+        self.ips.clear();
+    }
+
+    pub fn sample(&mut self, elapsed: f64, refresh_ips: bool, out: &mut Vec<super::detail::NetStat>) {
+        out.clear();
+        if refresh_ips || self.ips.is_empty() {
+            self.ips = ipv4_by_luid();
+        }
+        let Some(table) = IfTable::open() else {
+            self.prev.clear();
+            return;
+        };
+        let mut seen: Vec<u64> = Vec::new();
+        for row in table.rows() {
+            let f = flags(row);
+            if f & FLAG_HARDWARE == 0 || f & FLAG_FILTER != 0 || row.Type == IF_TYPE_SOFTWARE_LOOPBACK || row.Type == IF_TYPE_TUNNEL {
+                continue;
+            }
+            let alias = String::from_utf16_lossy(alias(row));
+            if alias.is_empty() || out.iter().any(|a: &super::detail::NetStat| a.alias == alias) {
+                continue;
+            }
+            // SAFETY: the LUID union is always valid as its 64-bit value.
+            let luid = unsafe { row.InterfaceLuid.Value };
+            seen.push(luid);
+            let (mut down, mut up) = (0.0, 0.0);
+            if let Some(&(rx, tx)) = self.prev.get(&luid) {
+                if elapsed > 0.0 {
+                    down = row.InOctets.saturating_sub(rx) as f64 / elapsed;
+                    up = row.OutOctets.saturating_sub(tx) as f64 / elapsed;
+                }
+            }
+            self.prev.insert(luid, (row.InOctets, row.OutOctets));
+            let connected = is_up(row);
+            out.push(super::detail::NetStat {
+                alias,
+                description: description(row),
+                connected,
+                wifi: row.Type == IF_TYPE_IEEE80211,
+                down,
+                up,
+                link_bps: if connected { row.ReceiveLinkSpeed.min(u64::MAX / 2) } else { 0 },
+                ipv4: self.ips.get(&luid).cloned().unwrap_or_default(),
+            });
+        }
+        self.prev.retain(|k, _| seen.contains(k));
+        out.sort_by(|a, b| b.connected.cmp(&a.connected).then_with(|| a.alias.cmp(&b.alias)));
+    }
+}
+
+/// First IPv4 unicast address of every adapter, keyed by LUID.
+fn ipv4_by_luid() -> HashMap<u64, String> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH,
+    };
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
+    let mut map = HashMap::new();
+    let mut len = 16 * 1024u32;
+    let mut buf: Vec<u64> = Vec::new();
+    for _ in 0..3 {
+        buf.resize((len as usize).div_ceil(8), 0);
+        // SAFETY: buffer of `len` bytes, 8-byte aligned.
+        let r = unsafe {
+            GetAdaptersAddresses(
+                u32::from(AF_INET),
+                GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+                std::ptr::null(),
+                buf.as_mut_ptr().cast(),
+                &mut len,
+            )
+        };
+        if r == 111 {
+            // ERROR_BUFFER_OVERFLOW: `len` now holds the size needed.
+            continue;
+        }
+        if r != 0 {
+            return map;
+        }
+        let mut p = buf.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
+        while !p.is_null() {
+            // SAFETY: linked list inside `buf`, written by GetAdaptersAddresses.
+            let a = unsafe { &*p };
+            let mut u = a.FirstUnicastAddress;
+            while !u.is_null() {
+                // SAFETY: as above.
+                let ua = unsafe { &*u };
+                let sa = ua.Address.lpSockaddr;
+                // SAFETY: a valid sockaddr of the stated family.
+                if !sa.is_null() && unsafe { (*sa).sa_family } == AF_INET {
+                    let sin = unsafe { &*sa.cast::<SOCKADDR_IN>() };
+                    let b = unsafe { sin.sin_addr.S_un.S_addr }.to_ne_bytes();
+                    // SAFETY: the LUID union is always valid as its 64-bit value.
+                    map.insert(unsafe { a.Luid.Value }, format!("{}.{}.{}.{}", b[0], b[1], b[2], b[3]));
+                    break;
+                }
+                u = ua.Next;
+            }
+            p = a.Next;
+        }
+        return map;
+    }
+    map
+}

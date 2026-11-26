@@ -12,6 +12,8 @@ use crate::util::Rect;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Overview,
+    /// Detailed live view of the whole machine (opened from the tray System popup).
+    Monitor,
     /// Placeholder page that opens the Achievements window. Kept as its own
     /// page so an in-window renderer can replace it without touching the nav.
     Achievements,
@@ -37,8 +39,9 @@ pub enum Entry {
 }
 
 /// The scrolling part of the pane (the footer is `FOOTER`).
-pub const MENU: [Entry; 15] = [
+pub const MENU: [Entry; 16] = [
     Entry::Item(Page::Overview),
+    Entry::Item(Page::Monitor),
     Entry::Item(Page::Achievements),
     Entry::Header("INSIGHTS"),
     Entry::Item(Page::Incidents),
@@ -60,8 +63,9 @@ pub const FOOTER: [Page; 1] = [Page::About];
 
 impl Page {
     /// Every page in navigation order (menu, then footer). Ctrl+Tab walks this.
-    pub const ALL: [Page; 13] = [
+    pub const ALL: [Page; 14] = [
         Page::Overview,
+        Page::Monitor,
         Page::Achievements,
         Page::Incidents,
         Page::Sleep,
@@ -83,6 +87,7 @@ impl Page {
     pub fn title(self) -> &'static str {
         match self {
             Page::Overview => "Overview",
+            Page::Monitor => "Monitor",
             Page::Achievements => "Achievements",
             Page::Incidents => "Incident Cards",
             Page::Sleep => "Sleep Verdict",
@@ -102,6 +107,7 @@ impl Page {
     pub fn glyph(self) -> char {
         match self {
             Page::Overview => '\u{E80F}',     // home
+            Page::Monitor => '\u{E9D2}',      // area chart
             Page::Achievements => '\u{E734}', // star
             Page::Incidents => '\u{E945}',    // lightning bolt
             Page::Sleep => '\u{E708}',        // moon
@@ -121,6 +127,7 @@ impl Page {
     pub fn key(self) -> &'static str {
         match self {
             Page::Overview => "overview",
+            Page::Monitor => "monitor",
             Page::Achievements => "achievements",
             Page::Incidents => "incidents",
             Page::Sleep => "sleep",
@@ -307,8 +314,9 @@ mod tests {
         let order: Vec<Page> = nav_order().collect();
         assert_eq!(order, Page::ALL.to_vec(), "Up/Down and Ctrl+Tab agree");
         assert_eq!(MENU[0], Entry::Item(Page::Overview));
-        assert_eq!(MENU[1], Entry::Item(Page::Achievements));
-        assert_eq!(MENU[2], Entry::Header("INSIGHTS"));
+        assert_eq!(MENU[1], Entry::Item(Page::Monitor));
+        assert_eq!(MENU[2], Entry::Item(Page::Achievements));
+        assert_eq!(MENU[3], Entry::Header("INSIGHTS"));
         let sep = MENU.iter().position(|e| *e == Entry::Separator).unwrap();
         assert_eq!(MENU[sep + 1], Entry::Header("SETTINGS"));
         assert_eq!(MENU[sep + 2], Entry::Item(Page::General));
@@ -349,7 +357,8 @@ mod tests {
 
     #[test]
     fn next_and_previous_wrap() {
-        assert_eq!(Page::Overview.step(1), Page::Achievements);
+        assert_eq!(Page::Overview.step(1), Page::Monitor);
+        assert_eq!(Page::Monitor.step(1), Page::Achievements);
         assert_eq!(Page::About.step(1), Page::Overview);
         assert_eq!(Page::Overview.step(-1), Page::About);
         assert_eq!(Page::Ghost.step(1), Page::General);

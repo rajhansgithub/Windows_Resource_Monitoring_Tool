@@ -319,6 +319,66 @@ jobs:
           name: popup-shots
           path: target/popup-shots/
           if-no-files-found: warn
+      - name: Run app, screenshot the Monitor page maximized, small and light
+        shell: pwsh
+        run: |
+          $dir = "$env:LOCALAPPDATA/ResourceMonitor"
+          New-Item -ItemType Directory -Force $dir, target/monitor-shots | Out-Null
+          Add-Content "$dir/settings.ini" "`ntheme = dark`n"
+          Add-Type @"
+          using System; using System.Runtime.InteropServices;
+          public static class W5 {
+            [StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Rt, B; }
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string c, string t);
+            [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r);
+            [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+            [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int w, int hh, uint f);
+          }
+          "@
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          function Grab($h, $file) {
+            $r = New-Object W5+R
+            [void][W5]::GetWindowRect($h, [ref]$r)
+            $w = $r.Rt - $r.L; $hh = $r.B - $r.T
+            $bmp = New-Object System.Drawing.Bitmap $w, $hh
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($r.L, $r.T, 0, 0, (New-Object System.Drawing.Size $w, $hh))
+            $bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)
+          }
+          $p = Start-Process target/release/ResourceMonitor.exe -ArgumentList "--monitor" -PassThru
+          Start-Sleep -Seconds 6
+          $h = [W5]::FindWindowW("ResourceMonitor.Window", [NullString]::Value)
+          if ($h -ne [IntPtr]::Zero) {
+            # Some load so the charts move.
+            $job = Start-Job { $e = (Get-Date).AddSeconds(14); while ((Get-Date) -lt $e) { [math]::Sqrt(12345) | Out-Null } }
+            [void][W5]::ShowWindow($h, 3); Start-Sleep -Seconds 16
+            Grab $h "target/monitor-shots/max.png"
+            [void][W5]::ShowWindow($h, 9); Start-Sleep -Milliseconds 500
+            [void][W5]::SetWindowPos($h, [IntPtr]::Zero, 40, 40, 900, 760, 0x14); Start-Sleep -Seconds 3
+            Grab $h "target/monitor-shots/small.png"
+            Add-Content "$dir/settings.ini" "`ntheme = light`n"
+            [void][W5]::SetWindowPos($h, [IntPtr]::Zero, 20, 20, 1500, 1000, 0x14); Start-Sleep -Seconds 6
+            Grab $h "target/monitor-shots/light.png"
+            Stop-Job $job -ErrorAction SilentlyContinue
+            # TEMP (drop before merge): print the shots so a cloud session can read them from the log.
+            foreach ($f in Get-ChildItem target/monitor-shots/*.png) {
+              $b = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f.FullName))
+              Write-Output "MON-BEGIN $($f.Name)"
+              for ($i = 0; $i -lt $b.Length; $i += 4000) { Write-Output ("MON|" + $b.Substring($i, [Math]::Min(4000, $b.Length - $i))) }
+              Write-Output "MON-END"
+            }
+          }
+          $log = "$dir/diagnostics.log"
+          if (Test-Path $log) { Get-Content $log -Tail 30 }
+          if ($p.HasExited) { Write-Error "app exited early (code $($p.ExitCode))"; exit 1 }
+          Stop-Process -Id $p.Id
+          if ($h -eq [IntPtr]::Zero) { Write-Error "Main window did not open"; exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: monitor-shots
+          path: target/monitor-shots/
+          if-no-files-found: warn
       - name: Installer
         shell: pwsh
         run: |
