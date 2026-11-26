@@ -1294,6 +1294,7 @@ impl App {
                 add(hm, ID_ACHIEVE, "Achievements\u{2026}", false);
             }
             add(hm, ID_TASKMGR, "Task Manager", false);
+            add(hm, ID_UPDATE_NOW, "Check for updates", false);
             sep(hm);
             add(hm, ID_EXIT, "Exit", false);
 
@@ -1327,6 +1328,7 @@ impl App {
                 crate::achievements::ui::open(self.hwnd, &st, self.m.dark);
             }
             ID_TASKMGR => shell_open("taskmgr.exe", None),
+            ID_UPDATE_NOW => self.run(Cmd::CheckUpdates),
             ID_EXIT => unsafe {
                 DestroyWindow(self.hwnd);
             },
@@ -1579,6 +1581,7 @@ const ID_TASKMGR: usize = 701;
 const ID_EXIT: usize = 705;
 const ID_SETTINGS: usize = 706;
 const ID_WEBSITE: usize = 707;
+const ID_UPDATE_NOW: usize = 708;
 const ID_ACHIEVE: usize = 799;
 const MAX_DISPLAYS: usize = 16;
 
