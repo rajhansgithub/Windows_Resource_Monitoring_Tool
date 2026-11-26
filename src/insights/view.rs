@@ -9,28 +9,66 @@
 //! the laid-out blocks.
 //!
 //! `RESMON_INSIGHTS_DEMO=1` in the environment shows built-in demo panels
-//! (one per feature, with cards and charts) so the layout can be checked
-//! before real data exists.
+//! (one per feature, with cards and charts) for a laptop, so the layout can be
+//! checked before real data exists; `RESMON_INSIGHTS_DEMO=desktop` shows the
+//! same for a PC without a battery.
 
-use super::{time, Chart, Panel, Tone};
+use super::{time, Chart, Panel, Role, Tone, Visual};
 use crate::render::{measure_dc, Canvas, Rgba};
 use crate::util::Rect;
 use std::sync::OnceLock;
 use windows_sys::Win32::Graphics::Gdi::{HDC, HFONT};
 
 const CARD_PAD: i32 = 16;
-const CHART_H: i32 = 180;
+/// Height of a chart's plot area.
+const PLOT_H: i32 = 150;
+/// Side of the Held Back gauge.
+const GAUGE: i32 = 130;
+/// Height of the memory split bar.
+const SPLIT_H: i32 = 26;
+/// Gauge sweep, open at the bottom (radians, clockwise from 3 o'clock; the design's
+/// 0.8 pi to 2.2 pi, about 250 degrees).
+const GAUGE_A0: f32 = std::f32::consts::PI * 0.8;
+const GAUGE_A1: f32 = std::f32::consts::PI * 2.2;
 
-/// `RESMON_INSIGHTS_DEMO=1`: show the built-in demo panels.
-pub fn demo() -> bool {
-    static D: OnceLock<bool> = OnceLock::new();
-    *D.get_or_init(|| std::env::var("RESMON_INSIGHTS_DEMO").is_ok_and(|v| v.trim() == "1"))
+/// Which built-in demo to show (`RESMON_INSIGHTS_DEMO`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Demo {
+    Off,
+    /// "1" (or "laptop"): a laptop with a battery.
+    Laptop,
+    /// "desktop": a PC without a battery.
+    Desktop,
+}
+
+fn demo_mode(v: Option<&str>) -> Demo {
+    match v.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("1" | "laptop") => Demo::Laptop,
+        Some("desktop") => Demo::Desktop,
+        _ => Demo::Off,
+    }
+}
+
+/// `RESMON_INSIGHTS_DEMO=1` / `=desktop`: show the built-in demo panels.
+pub fn demo() -> Demo {
+    static D: OnceLock<Demo> = OnceLock::new();
+    *D.get_or_init(|| demo_mode(std::env::var("RESMON_INSIGHTS_DEMO").ok().as_deref()))
+}
+
+/// This PC has a battery (from the latest snapshot; the demo decides in demo mode).
+/// Battery-only settings (Bag Guard, the battery alert) are hidden without one.
+pub fn has_battery(a: &crate::app::App) -> bool {
+    match demo() {
+        Demo::Laptop => true,
+        Demo::Desktop => false,
+        Demo::Off => a.m.snap.battery.is_some(),
+    }
 }
 
 /// Panels to show now and whether Insights is on.
 pub fn fetch(a: &crate::app::App, now: u64) -> (bool, Vec<Panel>) {
-    if demo() {
-        (true, demo_panels(now))
+    if demo() != Demo::Off {
+        (true, demo_panels(now, demo() == Demo::Laptop))
     } else if a.ins.enabled() {
         (true, a.ins.panels(now))
     } else {
@@ -47,6 +85,8 @@ pub struct Fonts {
     pub small: HFONT,
     pub tiny: HFONT,
     pub semi: HFONT,
+    /// Small semibold (legend values).
+    pub cap: HFONT,
     pub head: HFONT,
 }
 
@@ -215,12 +255,82 @@ fn x_of(i: usize, w: i32, n: usize, bars: bool) -> f32 {
     }
 }
 
+/// Share of the whole for each part of a split bar (negative and non-finite parts
+/// count as 0). Sums to 1, or all zeros when there is nothing to split.
+pub fn split_fracs(vals: &[f32]) -> Vec<f32> {
+    let v: Vec<f32> = vals.iter().map(|x| if x.is_finite() { x.max(0.0) } else { 0.0 }).collect();
+    let total: f32 = v.iter().sum();
+    if total <= 0.0 {
+        return vec![0.0; v.len()];
+    }
+    v.iter().map(|x| x / total).collect()
+}
+
+/// Pixel spans `[x0, x1)` of the parts across a bar `w` wide: adjacent, no gaps,
+/// the last one ends at `w` (rounded on the running sum, so errors never add up).
+pub fn split_spans(vals: &[f32], w: i32) -> Vec<(i32, i32)> {
+    let mut acc = 0.0f32;
+    let mut x0 = 0;
+    split_fracs(vals)
+        .into_iter()
+        .map(|f| {
+            acc += f;
+            let x1 = if acc > 0.0 { (acc * w as f32).round().min(w as f32) as i32 } else { 0 };
+            let span = (x0, x1.max(x0));
+            x0 = span.1;
+            span
+        })
+        .collect()
+}
+
+/// Angle of `pct` (0..100) on the gauge, radians clockwise from 3 o'clock.
+pub fn gauge_angle(pct: f32) -> f32 {
+    let t = if pct.is_finite() { (pct / 100.0).clamp(0.0, 1.0) } else { 0.0 };
+    GAUGE_A0 + (GAUGE_A1 - GAUGE_A0) * t
+}
+
+/// "7.2 GB": a split part's value for the legend.
+fn split_val(v: f32, unit: &str) -> String {
+    if unit.is_empty() {
+        format!("{:.1}", v)
+    } else {
+        format!("{:.1} {}", v, unit)
+    }
+}
+
+/// Y-axis labels: top (with unit), middle, bottom.
+fn y_labels(c: &Chart) -> [String; 3] {
+    let max = chart_max(c);
+    [fmt_val(max, c.unit), fmt_val(max / 2.0, ""), "0".into()]
+}
+
 /// Fingerprint of everything visible, to repaint only when it changed.
-pub fn signature(enabled: bool, panels: &[Panel]) -> u64 {
+/// `visual_of`: index of the panel whose visual (gauge, split bar) is on screen;
+/// visuals of other panels are left out, so a live CPU figure on the gauge does not
+/// repaint Overview.
+pub fn signature(enabled: bool, panels: &[Panel], visual_of: Option<usize>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     enabled.hash(&mut h);
-    for p in panels {
+    for (i, p) in panels.iter().enumerate() {
+        if visual_of == Some(i) {
+            match &p.visual {
+                None => 0u8.hash(&mut h),
+                Some(Visual::Split { parts, unit }) => {
+                    unit.hash(&mut h);
+                    for (l, v, r) in parts {
+                        l.hash(&mut h);
+                        ((v * 10.0).round() as i64).hash(&mut h);
+                        r.hash(&mut h);
+                    }
+                }
+                Some(Visual::Gauge { ceiling, used, reason }) => {
+                    ceiling.map(|c| c.round() as i32).hash(&mut h);
+                    (used.round() as i32).hash(&mut h);
+                    reason.hash(&mut h);
+                }
+            }
+        }
         p.key.hash(&mut h);
         (p.tone as u8).hash(&mut h);
         p.headline.hash(&mut h);
@@ -246,14 +356,19 @@ pub fn signature(enabled: bool, panels: &[Panel]) -> u64 {
                 }
             }
             c.markers.hash(&mut h);
+            c.x_labels.hash(&mut h);
+            for t in &c.tones {
+                (*t as u8).hash(&mut h);
+            }
         }
     }
     h.finish()
 }
 
-/// Built-in realistic panels for `RESMON_INSIGHTS_DEMO=1`.
-pub fn demo_panels(now: u64) -> Vec<Panel> {
-    use super::Item;
+/// Built-in realistic panels for `RESMON_INSIGHTS_DEMO`: a laptop (`battery`) or a
+/// desktop without a battery. Only what the real modules can show.
+pub fn demo_panels(now: u64, battery: bool) -> Vec<Panel> {
+    use super::{last_hour, x_labels, Item};
     const MIN: u64 = 60_000;
     const HOUR: u64 = 60 * MIN;
     const DAY: u64 = 24 * HOUR;
@@ -265,6 +380,7 @@ pub fn demo_panels(now: u64) -> Vec<Panel> {
     };
     // Deterministic wiggle so the charts look like real samples.
     let noise = |i: usize| (((i * 7919) % 97) as f32 / 97.0 - 0.5) * 2.0;
+    let today = time::day(now);
 
     // The app was started 40 minutes ago: the hour is only partly filled.
     let cpu: Vec<f32> = (0..40)
@@ -279,16 +395,127 @@ pub fn demo_panels(now: u64) -> Vec<Panel> {
             }
         })
         .collect();
-    let battery: Vec<f32> = (0..49)
-        .map(|i| {
-            let awake = [(12usize, 16usize), (30, 35)];
-            let extra: f32 = awake.iter().map(|(a, b)| (i.clamp(*a, *b) - a) as f32 * 1.1).sum();
-            92.0 - i as f32 * 0.12 - extra
-        })
-        .collect();
-    let limit: Vec<f32> = (0..300).map(|i| if i < 170 { 100.0 } else { 62.0 + 3.0 * noise(i) }).collect();
-    let idle: Vec<f32> = (0..21).map(|i| if i < 12 { 2.0 + 0.4 * noise(i) } else { 6.0 + 0.6 * noise(i) }).collect();
-    let ghost: Vec<f32> = (0..14).map(|i| 3.6 + i as f32 * 0.09 + if i >= 9 { 0.4 } else { 0.0 }).collect();
+    let idle: Vec<f32> = (0..21).map(|i| if i < 12 { 3.1 + 0.1 * noise(i) } else { 3.4 + 0.1 * noise(i) }).collect();
+    let ghost: Vec<f32> = (0..14).map(|i| 0.9 + i as f32 * 0.02 + if i >= 9 { 0.5 * (i - 8) as f32 } else { 0.0 }).collect();
+    let tone_of = |v: f32, good: f32, warn: f32| if v <= good { Tone::Good } else if v <= warn { Tone::Warn } else { Tone::Bad };
+
+    let (sleep, held) = if battery {
+        let drain = [0.4f32, 0.3, 1.2, 0.5, 0.6, 2.4, 0.4, 0.5, 0.3, 0.4, 1.1, 0.5, 0.4, 1.7];
+        let sleep = Panel {
+            key: "sleep",
+            title: "Sleep Verdict",
+            tone: Tone::Bad,
+            headline: "Lost 14% in 8h. Awake 22% of the time. Microsoft Teams was busy.".into(),
+            lines: vec![
+                "Drain 1.7%/h.".into(),
+                "Awake 22% of the time.".into(),
+                "Woke by: Network adapter.".into(),
+                "Busiest while awake: Teams, 12 min of CPU.".into(),
+                "Bag Guard is off.".into(),
+            ],
+            visual: None,
+            chart: Some(Chart {
+                label: "Drain per hour, last 14 nights".into(),
+                points: drain.to_vec(),
+                max: 0.0,
+                unit: "%/h",
+                markers: vec![],
+                bars: true,
+                slots: 0,
+                x_labels: x_labels("Older", "", "Last night"),
+                tones: drain.iter().map(|&d| tone_of(d, 1.0, 2.0)).collect(),
+            }),
+            items: vec![
+                it(2 * HOUR, Tone::Bad, "Lost 14% in 8h. Awake 22% of the time. Teams was busy.", "23:10 to 07:12 \u{b7} woke by Network adapter"),
+                it(DAY + 2 * HOUR, Tone::Good, "Slept 7h 50m. Lost 3%. Good.", "23:30 to 07:20 \u{b7} woke by Power button"),
+                it(2 * DAY + 2 * HOUR, Tone::Good, "Slept 8h 5m. Lost 2%. Good.", "23:05 to 07:10 \u{b7} woke by Lid"),
+            ],
+        };
+        let limit: Vec<f32> = (0..240).map(|i| if i < 140 { 100.0 } else { 62.0 + 3.0 * noise(i) }).collect();
+        let held = Panel {
+            key: "heldback",
+            title: "Held Back",
+            tone: Tone::Bad,
+            headline: "Capped at 62%. Firmware thermal limit.".into(),
+            lines: vec![
+                "Power mode: Balanced. On battery. In front: Code.".into(),
+                "Power plan: Balanced.".into(),
+                "Current speed 71% of normal. Thermal limit 62%.".into(),
+            ],
+            visual: Some(Visual::Gauge { ceiling: Some(62.0), used: 48.0, reason: "Firmware thermal limit".into() }),
+            chart: Some(Chart {
+                label: "CPU ceiling, last hour".into(),
+                points: limit,
+                max: 100.0,
+                unit: "%",
+                markers: vec![],
+                bars: false,
+                slots: 360,
+                x_labels: last_hour(),
+                tones: vec![],
+            }),
+            items: vec![
+                it(23 * MIN, Tone::Bad, "Capped at 59% for 23 min.", "Firmware thermal limit."),
+                it(5 * HOUR, Tone::Warn, "Capped at 80% for 40 min.", "Battery saver."),
+            ],
+        };
+        (sleep, held)
+    } else {
+        let awake = [3.0f32, 2.0, 4.0, 2.0, 61.0, 3.0, 2.0];
+        let sleep = Panel {
+            key: "sleep",
+            title: "Sleep Verdict",
+            tone: Tone::Info,
+            headline: "Slept 7h 42m. Awake 4% of the time.".into(),
+            lines: vec![
+                "Asleep 7h 24m of 7h 42m.".into(),
+                "Awake 4% of the time.".into(),
+                "Woke by: Power button.".into(),
+                "Busiest while awake: SearchIndexer, 40 s of CPU.".into(),
+            ],
+            visual: None,
+            chart: Some(Chart {
+                label: "Time awake per night".into(),
+                points: awake.to_vec(),
+                max: 100.0,
+                unit: "%",
+                markers: vec![],
+                bars: true,
+                slots: 0,
+                x_labels: x_labels("Older", "", "Last night"),
+                tones: awake.iter().map(|&a| if a > 50.0 { Tone::Warn } else { Tone::Info }).collect(),
+            }),
+            items: vec![
+                it(2 * HOUR, Tone::Info, "Slept 7h 42m. Awake 4% of the time.", "23:30 to 07:12 \u{b7} woke by Power button"),
+                it(2 * DAY + 2 * HOUR, Tone::Warn, "Stayed awake 61% of 6h. MsMpEng was busy.", "00:10 to 06:10 \u{b7} woke by Keyboard"),
+            ],
+        };
+        let held = Panel {
+            key: "heldback",
+            title: "Held Back",
+            tone: Tone::Good,
+            headline: "Full power. Nothing is holding this PC back.".into(),
+            lines: vec![
+                "Power mode: Balanced. In front: Code.".into(),
+                "Power plan: Balanced.".into(),
+                "Current speed 64% of normal.".into(),
+            ],
+            visual: Some(Visual::Gauge { ceiling: Some(100.0), used: 6.0, reason: "none".into() }),
+            chart: Some(Chart {
+                label: "CPU ceiling, last hour".into(),
+                points: vec![100.0; 240],
+                max: 100.0,
+                unit: "%",
+                markers: vec![],
+                bars: false,
+                slots: 360,
+                x_labels: last_hour(),
+                tones: vec![],
+            }),
+            items: vec![],
+        };
+        (sleep, held)
+    };
 
     vec![
         Panel {
@@ -300,6 +527,7 @@ pub fn demo_panels(now: u64) -> Vec<Panel> {
                 "Longest: CPU held at 97% for 3 min at 14:02.".into(),
                 "Watching CPU, disk and memory. Nothing leaves this PC.".into(),
             ],
+            visual: None,
             chart: Some(Chart {
                 label: "CPU, last hour".into(),
                 points: cpu,
@@ -308,6 +536,8 @@ pub fn demo_panels(now: u64) -> Vec<Panel> {
                 markers: vec![(14, "Scan".into()), (30, "Index".into())],
                 bars: false,
                 slots: 60,
+                x_labels: last_hour(),
+                tones: vec![],
             }),
             items: vec![
                 it(25 * MIN, Tone::Bad, "CPU held at 97% for 3 min.", "MsMpEng 38%, disk 100%. A Defender scan."),
@@ -316,65 +546,28 @@ pub fn demo_panels(now: u64) -> Vec<Panel> {
                 it(DAY + 2 * HOUR, Tone::Info, "Memory at 92% for 4 min.", "msedge 3.1 GB, Teams 1.4 GB."),
             ],
         },
-        Panel {
-            key: "sleep",
-            title: "Sleep Verdict",
-            tone: Tone::Bad,
-            headline: "Lost 14% overnight. Awake 22% of the time.".into(),
-            lines: vec!["Asleep 8 h 10 min, on battery.".into(), "Top culprit: Microsoft Teams woke it 31 times.".into()],
-            chart: Some(Chart {
-                label: "Battery during sleep".into(),
-                points: battery,
-                max: 100.0,
-                unit: "%",
-                markers: vec![(12, "Wake".into()), (30, "Wake".into())],
-                bars: false,
-                slots: 0,
-            }),
-            items: vec![
-                it(2 * HOUR, Tone::Bad, "Last night: lost 14%.", "Awake 22%. Teams, then Windows Update."),
-                it(DAY + 2 * HOUR, Tone::Good, "Lost 3%.", "Awake 2%. Normal."),
-                it(2 * DAY + 2 * HOUR, Tone::Good, "Lost 2%.", "Awake 1%. Normal."),
-                it(3 * DAY + 2 * HOUR, Tone::Warn, "Lost 9%.", "Awake 12%. The network card kept waking it."),
-            ],
-        },
-        Panel {
-            key: "heldback",
-            title: "Held Back",
-            tone: Tone::Warn,
-            headline: "Capped at 62%. Firmware thermal limit.".into(),
-            lines: vec!["Max speed now 2.1 GHz of 3.4 GHz.".into(), "On battery. Power mode: Balanced.".into()],
-            chart: Some(Chart {
-                label: "CPU ceiling, last hour".into(),
-                points: limit,
-                max: 100.0,
-                unit: "%",
-                markers: vec![(170, "Hot".into())],
-                bars: false,
-                slots: 360,
-            }),
-            items: vec![
-                it(26 * MIN, Tone::Warn, "Thermal limit started.", "Speed fell to 62% after 4 min of heavy load."),
-                it(5 * HOUR, Tone::Info, "Battery saver on.", "Speed limited to 80% until you plug in."),
-            ],
-        },
+        sleep,
+        held,
         Panel {
             key: "baseline",
             title: "Before / After",
             tone: Tone::Info,
-            headline: "Idle CPU up 4 points since the update on 12 Nov.".into(),
-            lines: vec!["Idle CPU 2% before, 6% after.".into(), "Idle memory 3.1 GB before, 3.4 GB after.".into()],
+            headline: "Idle RAM up 0.3 GB since the update on 12 Nov.".into(),
+            lines: vec!["Today: idle RAM 3.4 GB, CPU 2%, 214 processes.".into(), "Baseline: 21 days collected.".into()],
+            visual: None,
             chart: Some(Chart {
-                label: "Idle CPU per day".into(),
+                label: "Idle RAM per day".into(),
                 points: idle,
                 max: 0.0,
-                unit: "%",
+                unit: "GB",
                 markers: vec![(12, "Update".into())],
                 bars: true,
                 slots: 0,
+                x_labels: super::day_span(today - 20, today, now),
+                tones: vec![],
             }),
             items: vec![
-                it(9 * DAY, Tone::Warn, "Windows update KB5046633.", "Idle CPU rose from 2% to 6% after it."),
+                it(9 * DAY, Tone::Warn, "Windows update KB5046633.", "Idle RAM rose from 3.1 GB to 3.4 GB after it."),
                 it(15 * DAY, Tone::Good, "Graphics driver 31.0.101.5590.", "No change in idle use."),
             ],
         },
@@ -382,25 +575,33 @@ pub fn demo_panels(now: u64) -> Vec<Panel> {
             key: "ghost",
             title: "Ghost Memory",
             tone: Tone::Warn,
-            headline: "4.8 GB of memory has no owner. Up 1.2 GB in a week.".into(),
+            headline: "Kernel pool +0.5 GB a day for 5 days. A driver is leaking. A restart buys time.".into(),
             lines: vec![
-                "Kernel pool 2.9 GB. Driver locked 1.1 GB.".into(),
-                "A restart frees it. If it keeps growing, update your drivers.".into(),
+                "Committed: 11.9 of 25.6 GB.".into(),
+                "Kernel pool is memory no app owns. Windows can't say which driver holds it without admin.".into(),
             ],
+            visual: Some(Visual::Split {
+                parts: vec![
+                    ("Apps", 7.2, Role::Accent),
+                    ("Compressed", 0.7, Role::AccentAlt),
+                    ("Kernel pool", 3.4, Role::Warn),
+                    ("Cache", 1.6, Role::Neutral),
+                    ("Free", 3.1, Role::Track),
+                ],
+                unit: "GB",
+            }),
             chart: Some(Chart {
-                label: "Memory no app owns, per day".into(),
+                label: "Kernel pool, peak per day".into(),
                 points: ghost,
                 max: 0.0,
                 unit: "GB",
-                markers: vec![(9, "Driver".into())],
+                markers: vec![(4, "Restart".into())],
                 bars: true,
                 slots: 0,
+                x_labels: super::day_span(today - 13, today, now),
+                tones: vec![],
             }),
-            items: vec![
-                it(3 * HOUR, Tone::Warn, "4.8 GB today.", "Highest in 14 days."),
-                it(DAY, Tone::Info, "4.6 GB.", "Up 0.4 GB after the network driver update."),
-                it(6 * DAY, Tone::Good, "3.6 GB.", "Normal for this PC."),
-            ],
+            items: vec![],
         },
     ]
 }
@@ -455,8 +656,46 @@ enum F {
 enum Block {
     Text { x: i32, y: i32, font: F, dim: bool, s: String },
     Pill { x: i32, y: i32, tone: Tone },
+    /// The split bar and the top-left of each legend entry.
+    Split { bar: Rect, legend: Vec<(i32, i32)> },
+    /// Gauge card, the square the ring sits in and the top-left of the first list row.
+    Gauge { card: Rect, ring: Rect, list: (i32, i32) },
     Chart { rect: Rect },
     Item { rect: Rect, tone: Tone, time: String, title: String, detail: Vec<String>, tx: i32 },
+}
+
+/// Colour of a split-bar part.
+fn role(c: &Colors, r: Role) -> Rgba {
+    match r {
+        Role::Accent => c.accent,
+        Role::AccentAlt => c.accent.mix(c.good, 0.45),
+        Role::Warn => c.warn,
+        Role::Neutral => c.fg.with_a(0x4D),
+        Role::Track => c.fg.with_a(0x1C),
+    }
+}
+
+/// Gauge list rows: (label, value).
+fn gauge_rows(ceiling: Option<f32>, used: f32, reason: &str) -> Vec<(&'static str, String)> {
+    let pct = |v: f32| format!("{}%", v.round() as i32);
+    match ceiling {
+        Some(c) => vec![("Ceiling", pct(c)), ("CPU use", pct(used)), ("Reason", reason.to_string())],
+        None => vec![("Ceiling", "not reported".into()), ("CPU use", pct(used))],
+    }
+}
+
+/// Run `f` with drawing limited to `r` (inside the current clip), then restore it.
+fn clipped(cv: &mut Canvas, r: Rect, f: impl FnOnce(&mut Canvas)) {
+    let old = cv.clip();
+    let n = match old {
+        Some(o) => Rect { l: r.l.max(o.l), t: r.t.max(o.t), r: r.r.min(o.r), b: r.b.min(o.b) },
+        None => r,
+    };
+    if n.l < n.r && n.t < n.b {
+        cv.set_clip(Some(n));
+        f(cv);
+    }
+    cv.set_clip(old);
 }
 
 /// One laid-out panel.
@@ -493,6 +732,7 @@ impl View {
         let w = r - l;
         let lh = |font: HFONT| measure_dc(mdc, font, "Ag").1;
         let m = |font: HFONT| move |s: &str| measure_dc(mdc, font, s).0;
+        let tw = |font: HFONT, s: &str| measure_dc(mdc, font, s).0;
         let mut y = y0;
         // Headline, wrapped.
         let hh = lh(f.head);
@@ -510,14 +750,62 @@ impl View {
                 y += bh + self.sc(2);
             }
         }
-        if p.chart.as_ref().is_some_and(|c| c.points.iter().any(|v| v.is_finite())) {
+        let pad = self.sc(CARD_PAD);
+        let smh = lh(f.small);
+        match &p.visual {
+            Some(Visual::Split { parts, unit }) if !parts.is_empty() => {
+                y += self.sc(12);
+                let bar = Rect { l, t: y, r, b: y + self.sc(SPLIT_H) };
+                y = bar.b + self.sc(8);
+                // Legend: "■ Apps 7.2 GB" entries, wrapped to the column.
+                let mut legend = Vec::with_capacity(parts.len());
+                let (gap_x, row_h) = (self.sc(16), smh + self.sc(6));
+                let mut x = l;
+                for (label, v, _) in parts {
+                    let ew = self.sc(15) + tw(f.small, label) + self.sc(4) + tw(f.cap, &split_val(*v, unit));
+                    if x > l && x + ew > r {
+                        x = l;
+                        y += row_h;
+                    }
+                    legend.push((x, y));
+                    x += ew + gap_x;
+                }
+                y += smh;
+                blocks.push(Block::Split { bar, legend });
+            }
+            Some(Visual::Gauge { ceiling, used, reason }) => {
+                y += self.sc(12);
+                let rows = gauge_rows(*ceiling, *used, reason);
+                let row_h = smh + self.sc(4);
+                let list_h = rows.len() as i32 * row_h - self.sc(4);
+                let g = self.sc(GAUGE);
+                let vpad = self.sc(8);
+                let label_w = rows.iter().map(|(k, v)| tw(f.small, k) + self.sc(6) + tw(f.cap, v)).max().unwrap_or(0);
+                // Ring and list side by side; the list goes under the ring when narrow.
+                let side = w >= pad * 2 + g + self.sc(16) + label_w.min(self.sc(200));
+                let ring = Rect { l: l + pad, t: y + vpad, r: l + pad + g, b: y + vpad + g };
+                let (list, bottom) = if side {
+                    ((ring.r + self.sc(16), ring.t + (g - list_h) / 2), ring.b + vpad)
+                } else {
+                    ((l + pad, ring.b + self.sc(4)), ring.b + self.sc(4) + list_h + pad)
+                };
+                let card = Rect { l, t: y, r, b: bottom };
+                y = card.b;
+                blocks.push(Block::Gauge { card, ring, list });
+            }
+            _ => {}
+        }
+        if let Some(c) = p.chart.as_ref().filter(|c| c.points.iter().any(|v| v.is_finite())) {
             y += self.sc(16);
-            let rect = Rect { l, t: y, r, b: y + self.sc(CHART_H) };
-            let pad = self.sc(CARD_PAD);
-            let top = rect.t + pad + lh(f.semi) + self.sc(10);
-            self.plot = Some(Rect { l: rect.l + pad, t: top, r: rect.r - pad, b: rect.b - pad });
-            blocks.push(Block::Chart { rect });
-            y += self.sc(CHART_H);
+            let tiny_h = lh(f.tiny);
+            let gutter = y_labels(c).iter().map(|s| tw(f.tiny, s)).max().unwrap_or(0) + self.sc(8);
+            let xl = c.x_labels.iter().any(|s| !s.is_empty());
+            let top = y + self.sc(12) + lh(f.semi) + self.sc(12);
+            let plot = Rect { l: l + pad + gutter, t: top, r: r - pad, b: top + self.sc(PLOT_H) };
+            let bottom = plot.b + if xl { self.sc(6) + tiny_h } else { 0 } + self.sc(12);
+            self.plot = Some(plot);
+            blocks.push(Block::Chart { rect: Rect { l, t: y, r, b: bottom } });
+            y = bottom;
         }
         // Cards.
         y += self.sc(24);
@@ -530,10 +818,8 @@ impl View {
         } else {
             let times: Vec<String> = p.items.iter().map(|it| when(it.t_ms, now_ms)).collect();
             let time_w = times.iter().map(|t| measure_dc(mdc, f.small, t).0).max().unwrap_or(0);
-            let pad = self.sc(CARD_PAD);
             let tx = l + self.sc(24) + if time_w > 0 { time_w + self.sc(16) } else { 0 };
             let text_w = (r - pad - tx).max(self.sc(80));
-            let smh = lh(f.small);
             for (it, time) in p.items.iter().zip(times) {
                 let detail = wrap(&m(f.small), &it.detail, text_w);
                 let h = pad * 2 - self.sc(4) + sh + detail.len() as i32 * smh + if detail.is_empty() { 0 } else { self.sc(2) };
@@ -575,6 +861,34 @@ impl View {
                 Block::Pill { x, y, tone } => {
                     draw_pill(cv, f, c, self.dpi, *x, y + dy, *tone);
                 }
+                Block::Split { bar, legend } => {
+                    let Some(Visual::Split { parts, unit }) = &p.visual else { continue };
+                    let bar = shift(*bar, dy);
+                    if bar.t > vb || legend.last().is_some_and(|l| l.1 + dy + self.sc(30) < vt) {
+                        continue;
+                    }
+                    self.draw_split(cv, f, c, bar, legend, parts, unit, dy);
+                }
+                Block::Gauge { card, ring, list } => {
+                    let Some(Visual::Gauge { ceiling, used, reason }) = &p.visual else { continue };
+                    let card = shift(*card, dy);
+                    if card.b < vt || card.t > vb {
+                        continue;
+                    }
+                    cv.fill_round(card, rad, c.card);
+                    cv.stroke_round(card, rad, c.card_border);
+                    self.draw_gauge(cv, f, c, shift(*ring, dy), *ceiling, *used);
+                    let (lx, ly) = (list.0, list.1 + dy);
+                    let row_h = lh(cv, f.small) + self.sc(4);
+                    for (i, (k, v)) in gauge_rows(*ceiling, *used, reason).iter().enumerate() {
+                        let yy = ly + i as i32 * row_h;
+                        cv.text(f.small, k, lx, yy, c.dim);
+                        let kw = cv.measure(f.small, k).0;
+                        let vx = lx + kw + self.sc(6);
+                        let v = cv.ellipsize(f.cap, v, card.r - self.sc(CARD_PAD) - vx);
+                        cv.text(f.cap, &v, vx, yy, c.fg);
+                    }
+                }
                 Block::Chart { rect } => {
                     let r = shift(*rect, dy);
                     if r.b < vt || r.t > vb {
@@ -615,6 +929,69 @@ impl View {
         }
     }
 
+    /// Stacked bar (rounded ends, parts clipped out of one rounded shape) and legend.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_split(&self, cv: &mut Canvas, f: &Fonts, c: &Colors, bar: Rect, legend: &[(i32, i32)], parts: &[(&str, f32, Role)], unit: &str, dy: i32) {
+        let rad = self.sc(6) as f32;
+        let vals: Vec<f32> = parts.iter().map(|p| p.1).collect();
+        // The track first, so a zero total still shows an empty bar.
+        cv.fill_round(bar, rad, role(c, Role::Track));
+        for ((x0, x1), (_, _, r)) in split_spans(&vals, bar.w()).into_iter().zip(parts) {
+            if x1 > x0 && *r != Role::Track {
+                clipped(cv, Rect { l: bar.l + x0, r: bar.l + x1, ..bar }, |cv| cv.fill_round(bar, rad, role(c, *r)));
+            }
+        }
+        cv.stroke_round(bar, rad, c.card_border);
+        let sq = self.sc(9);
+        let smh = cv.measure(f.small, "Ag").1;
+        for ((x, y), (label, v, r)) in legend.iter().zip(parts) {
+            let y = y + dy;
+            let sy = y + (smh - sq) / 2;
+            let sw = Rect { l: *x, t: sy, r: x + sq, b: sy + sq };
+            cv.fill_round(sw, self.sc(2) as f32, role(c, *r));
+            if *r == Role::Track {
+                cv.stroke_round(sw, self.sc(2) as f32, c.card_border);
+            }
+            let lx = x + sq + self.sc(6);
+            cv.text(f.small, label, lx, y, c.dim);
+            let lw = cv.measure(f.small, label).0;
+            cv.text(f.cap, &split_val(*v, unit), lx + lw + self.sc(4), y, c.fg);
+        }
+    }
+
+    /// Gauge ring: track, the part above the ceiling tinted, CPU use in accent,
+    /// a dot on the ceiling, the value in the middle.
+    fn draw_gauge(&self, cv: &mut Canvas, f: &Fonts, c: &Colors, ring: Rect, ceiling: Option<f32>, used: f32) {
+        let s = ring.w() as f32;
+        let (cx, cy) = (ring.l as f32 + s / 2.0, ring.t as f32 + s * 0.54);
+        let rr = s * 0.385;
+        let th = s * 0.062;
+        cv.stroke_arc(cx, cy, rr, th, GAUGE_A0, GAUGE_A1, c.fg.with_a(0x1C));
+        let top = ceiling.unwrap_or(100.0);
+        if ceiling.is_some_and(|x| x < 100.0) {
+            cv.stroke_arc(cx, cy, rr, th, gauge_angle(top), GAUGE_A1, c.warn.with_a(0x59));
+        }
+        let fill = used.min(top);
+        if fill >= 0.5 {
+            cv.stroke_arc(cx, cy, rr, th, GAUGE_A0, gauge_angle(fill), c.accent);
+        }
+        if let Some(x) = ceiling {
+            let a = gauge_angle(x);
+            let d = (s * 0.085).round() as i32;
+            let (dx, dy) = ((cx + rr * a.cos()).round() as i32, (cy + rr * a.sin()).round() as i32);
+            let col = if x < 95.0 { c.warn } else { c.good };
+            cv.fill_round(Rect { l: dx - d / 2, t: dy - d / 2, r: dx - d / 2 + d, b: dy - d / 2 + d }, d as f32 / 2.0, col);
+        }
+        let (big, cap) = match ceiling {
+            Some(x) => (format!("{}%", x.round() as i32), "ceiling"),
+            None => (format!("{}%", used.round() as i32), "CPU use"),
+        };
+        let hh = cv.measure(f.head, "Ag").1;
+        let ty = cy.round() as i32 - hh / 2 - self.sc(6);
+        cv.text_center(f.head, &big, cx.round() as i32, ty, c.fg);
+        cv.text_center(f.tiny, cap, cx.round() as i32, ty + hh, c.dim);
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn draw_chart(&self, cv: &mut Canvas, f: &Fonts, p: &Colors, card: Rect, pr: Rect, c: &Chart, hover_x: Option<i32>) {
         let rad = self.sc(6) as f32;
@@ -622,22 +999,44 @@ impl View {
         cv.stroke_round(card, rad, p.card_border);
         let pad = self.sc(CARD_PAD);
         let max = chart_max(c);
-        let max_s = fmt_val(max, c.unit);
+        let max_s = format!("max {}", fmt_val(max, c.unit));
         let mw = cv.measure(f.small, &max_s).0;
         let label = cv.ellipsize(f.semi, &c.label, card.w() - pad * 3 - mw);
-        cv.text(f.semi, &label, card.l + pad, card.t + pad - self.sc(2), p.fg);
+        let head_t = card.t + self.sc(12);
+        cv.text(f.semi, &label, card.l + pad, head_t, p.fg);
+        let (sh, smh) = (cv.measure(f.semi, "Ag").1, cv.measure(f.small, "Ag").1);
+        cv.text_right(f.small, &max_s, card.r - pad, head_t + (sh - smh) / 2, p.dim);
         let (w, h) = (pr.w(), pr.h());
         if w <= 2 || h <= 2 {
             return;
         }
-        // Axis: dashed top line labelled with the max, solid baseline.
-        cv.text_right(f.small, &max_s, card.r - pad, card.t + pad, p.dim);
-        let mut x = pr.l;
-        while x < pr.r {
-            cv.fill_rect(Rect { l: x, t: pr.t, r: (x + self.sc(3)).min(pr.r), b: pr.t + 1 }, p.line);
-            x += self.sc(6);
+        // Y axis: dashed lines at max and half, solid baseline, labels in the gutter.
+        let th_ = cv.measure(f.tiny, "Ag").1;
+        let ys = [pr.t, pr.t + (h - 1) / 2, pr.b - 1];
+        for (k, (yy, s)) in ys.iter().zip(y_labels(c)).enumerate() {
+            if k == 2 {
+                cv.fill_rect(Rect { l: pr.l, t: *yy, r: pr.r, b: yy + 1 }, p.line.mix(p.dim, 0.3));
+            } else {
+                let mut x = pr.l;
+                while x < pr.r {
+                    cv.fill_rect(Rect { l: x, t: *yy, r: (x + self.sc(3)).min(pr.r), b: yy + 1 }, p.line);
+                    x += self.sc(7);
+                }
+            }
+            cv.text_right(f.tiny, &s, pr.l - self.sc(8), yy - th_ / 2, p.dim);
         }
-        cv.fill_rect(Rect { l: pr.l, t: pr.b - 1, r: pr.r, b: pr.b }, p.line.mix(p.dim, 0.3));
+        // X axis labels: left, middle, right.
+        let xy = pr.b + self.sc(6);
+        let [xl, xm, xr] = &c.x_labels;
+        if !xl.is_empty() {
+            cv.text(f.tiny, xl, pr.l, xy, p.dim);
+        }
+        if !xm.is_empty() {
+            cv.text_center(f.tiny, xm, (pr.l + pr.r) / 2, xy, p.dim);
+        }
+        if !xr.is_empty() {
+            cv.text_right(f.tiny, xr, pr.r, xy, p.dim);
+        }
 
         let bars = c.bars;
         let (n, off) = axis(c);
@@ -657,15 +1056,19 @@ impl View {
             let slot = w as f32 / n as f32;
             // Few points: keep bars slim instead of filling the whole card.
             let bw = (slot * 0.62).max(self.sc(2) as f32).min(slot).min(self.sc(28) as f32);
+            let br_rad = self.sc(3);
             for i in 0..n {
                 let Some(v) = val(i) else { continue };
                 let cx = pr.l as f32 + x_of(i, w, n, true);
                 let top = y_of(v).min(pr.b as f32 - 2.0);
                 let (bl, brr) = ((cx - bw / 2.0).round() as i32, (cx + bw / 2.0).round() as i32);
                 let br = Rect { l: bl, t: top.round() as i32, r: brr, b: pr.b - 1 };
-                let hot = hover_i == Some(i);
-                cv.fill_round(br, self.sc(2) as f32, if hot { acc } else { acc.with_a(fill_a as u8 + 0x30) });
-                cv.fill_rect(Rect { b: br.t + self.sc(2), ..br }, acc);
+                let col = c.tones.get(i - off).map_or(acc, |t| p.tone(*t));
+                // The newest bar (and the one under the mouse) at full strength.
+                let full = i + 1 == n || hover_i == Some(i);
+                let col = if full { col } else { col.with_a((col.3 as f32 * 0.75) as u8) };
+                // Rounded top, square bottom: a taller rounded bar cut at the baseline.
+                clipped(cv, br, |cv| cv.fill_round(Rect { b: br.b + br_rad, ..br }, br_rad as f32, col));
             }
         } else {
             let th = (self.sc(2) as f32).max(1.5);
@@ -695,15 +1098,14 @@ impl View {
                 }
             }
             // A point with no neighbour on either side has no line: draw it as a dot.
-            let d = self.sc(6);
+            // The newest slot, when it has data, gets a dot too ("now").
             for i in 0..n {
                 let Some(v) = val(i) else { continue };
                 let lone = (i == 0 || val(i - 1).is_none()) && (i + 1 >= n || val(i + 1).is_none());
-                if lone {
-                    let cx = pr.l + x_of(i, w, n, false).round() as i32;
-                    let cy = y_of(v).round() as i32;
-                    cv.fill_round(Rect { l: cx - d / 2, t: cy - d / 2, r: cx - d / 2 + d, b: cy - d / 2 + d }, d as f32 / 2.0, acc);
-                }
+                let d = if i + 1 == n { self.sc(7) } else if lone { self.sc(6) } else { continue };
+                let cx = pr.l + x_of(i, w, n, false).round() as i32;
+                let cy = y_of(v).round() as i32;
+                cv.fill_round(Rect { l: cx - d / 2, t: cy - d / 2, r: cx - d / 2 + d, b: cy - d / 2 + d }, d as f32 / 2.0, acc);
             }
         }
 
@@ -717,13 +1119,13 @@ impl View {
             let mx = pr.l + x_of(slot, w, n, bars).round() as i32;
             let mut yy = pr.t;
             while yy < pr.b {
-                cv.fill_rect(Rect { l: mx, t: yy, r: mx + 1, b: (yy + self.sc(3)).min(pr.b) }, p.dim.with_a(0x90));
+                cv.fill_rect(Rect { l: mx, t: yy, r: mx + 1, b: (yy + self.sc(3)).min(pr.b) }, p.warn.with_a(0xC0));
                 yy += self.sc(6);
             }
             let (lw, _) = cv.measure(f.tiny, lab);
             let lx = if mx + self.sc(4) + lw > pr.r { mx - self.sc(4) - lw } else { mx + self.sc(4) };
             if lx > last_r + self.sc(4) {
-                cv.text(f.tiny, lab, lx, pr.t + self.sc(3), p.dim);
+                cv.text(f.tiny, lab, lx, pr.t + self.sc(3), p.warn);
                 last_r = lx + lw;
             }
         }
@@ -842,39 +1244,128 @@ mod tests {
 
     #[test]
     fn signature_tracks_visible_changes() {
-        let a = demo_panels(1_764_000_000_000);
-        let s = signature(true, &a);
-        assert_eq!(s, signature(true, &a.clone()));
-        assert_ne!(s, signature(false, &a));
+        let a = demo_panels(1_764_000_000_000, true);
+        let s = signature(true, &a, None);
+        assert_eq!(s, signature(true, &a.clone(), None));
+        assert_ne!(s, signature(false, &a, None));
         let mut b = a.clone();
         b[2].headline.push('!');
-        assert_ne!(s, signature(true, &b));
+        assert_ne!(s, signature(true, &b, None));
         let mut b = a.clone();
         b[0].items.pop();
-        assert_ne!(s, signature(true, &b));
+        assert_ne!(s, signature(true, &b, None));
         let mut b = a.clone();
         b[1].chart.as_mut().unwrap().points.push(50.0);
-        assert_ne!(s, signature(true, &b));
+        assert_ne!(s, signature(true, &b, None));
         let mut b = a.clone();
         b[0].chart.as_mut().unwrap().points[0] = f32::NAN;
-        assert_ne!(s, signature(true, &b));
+        assert_ne!(s, signature(true, &b, None));
+        let mut b = a.clone();
+        b[1].chart.as_mut().unwrap().tones[0] = Tone::Bad;
+        assert_ne!(s, signature(true, &b, None));
+        // A live gauge value counts only while its page is on screen.
+        let mut b = a.clone();
+        b[2].visual = Some(Visual::Gauge { ceiling: Some(62.0), used: 90.0, reason: "Firmware thermal limit".into() });
+        assert_eq!(s, signature(true, &b, None));
+        assert_ne!(signature(true, &a, Some(2)), signature(true, &b, Some(2)));
     }
 
     #[test]
     fn demo_has_every_feature() {
-        let p = demo_panels(1_764_000_000_000);
-        let keys: Vec<_> = p.iter().map(|x| x.key).collect();
-        assert_eq!(keys, ["incidents", "sleep", "heldback", "baseline", "ghost"]);
-        for x in &p {
-            assert!(!x.items.is_empty());
-            let c = x.chart.as_ref().unwrap();
-            assert!(!c.points.is_empty());
-            assert!(c.markers.iter().all(|(i, _)| *i < c.points.len()));
-            assert!(!x.headline.contains('\u{2014}'));
+        for battery in [true, false] {
+            let p = demo_panels(1_764_000_000_000, battery);
+            let keys: Vec<_> = p.iter().map(|x| x.key).collect();
+            assert_eq!(keys, ["incidents", "sleep", "heldback", "baseline", "ghost"]);
+            for x in &p {
+                let c = x.chart.as_ref().unwrap();
+                assert!(!c.points.is_empty());
+                assert!(c.markers.iter().all(|(i, _)| *i < c.points.len()));
+                assert!(c.tones.is_empty() || c.tones.len() == c.points.len());
+                assert!(!x.headline.contains('\u{2014}'));
+            }
+            // Time series are lines; per-day values are bars.
+            assert!(!p[0].chart.as_ref().unwrap().bars);
+            assert!(p[3].chart.as_ref().unwrap().bars);
+            assert!(p[4].chart.as_ref().unwrap().bars);
+            assert!(matches!(p[2].visual, Some(Visual::Gauge { .. })));
+            assert!(matches!(p[4].visual, Some(Visual::Split { .. })));
         }
-        // Time series are lines; per-day values are bars.
-        assert!(!p[0].chart.as_ref().unwrap().bars);
-        assert!(p[3].chart.as_ref().unwrap().bars);
-        assert!(p[4].chart.as_ref().unwrap().bars);
+        // The desktop demo never mentions a battery or a lid.
+        for x in demo_panels(1_764_000_000_000, false) {
+            let mut text = vec![x.headline.clone(), x.chart.unwrap().label];
+            text.extend(x.lines);
+            text.extend(x.items.into_iter().flat_map(|i| [i.title, i.detail]));
+            for t in text {
+                let t = t.to_ascii_lowercase();
+                assert!(!t.contains("battery") && !t.contains("lid") && !t.contains("drain"), "{}", t);
+            }
+        }
+    }
+
+    #[test]
+    fn demo_modes() {
+        assert_eq!(demo_mode(None), Demo::Off);
+        assert_eq!(demo_mode(Some("1")), Demo::Laptop);
+        assert_eq!(demo_mode(Some(" laptop ")), Demo::Laptop);
+        assert_eq!(demo_mode(Some("Desktop")), Demo::Desktop);
+        assert_eq!(demo_mode(Some("0")), Demo::Off);
+    }
+
+    #[test]
+    fn split_fractions_sum_to_one() {
+        let f = split_fracs(&[7.2, 0.7, 3.4, 1.6, 3.1]);
+        assert!((f.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+        assert!((f[0] - 0.45).abs() < 1e-5);
+        // Negative and NaN parts count as nothing; an empty whole splits into nothing.
+        let f = split_fracs(&[1.0, -2.0, f32::NAN, 3.0]);
+        assert_eq!(f, vec![0.25, 0.0, 0.0, 0.75]);
+        assert_eq!(split_fracs(&[0.0, 0.0]), vec![0.0, 0.0]);
+        assert!(split_fracs(&[]).is_empty());
+    }
+
+    #[test]
+    fn split_spans_tile_the_bar() {
+        for w in [1, 97, 600, 1001] {
+            let s = split_spans(&[7.2, 0.7, 3.4, 1.6, 3.1], w);
+            assert_eq!(s[0].0, 0);
+            assert_eq!(s.last().unwrap().1, w);
+            assert!(s.windows(2).all(|p| p[0].1 == p[1].0), "{:?}", s);
+        }
+        // Thirds of 100 px: rounding on the running sum, never off by more than 1.
+        assert_eq!(split_spans(&[1.0, 1.0, 1.0], 100), vec![(0, 33), (33, 67), (67, 100)]);
+        assert_eq!(split_spans(&[0.0, 0.0], 50), vec![(0, 0), (0, 0)]);
+    }
+
+    #[test]
+    fn gauge_angles() {
+        use std::f32::consts::PI;
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-5;
+        assert!(near(gauge_angle(0.0), 0.8 * PI));
+        assert!(near(gauge_angle(100.0), 2.2 * PI));
+        // Half way is straight up (12 o'clock is 1.5 pi with y pointing down).
+        assert!(near(gauge_angle(50.0), 1.5 * PI));
+        // The sweep is 1.4 pi and symmetric about 12 o'clock; out-of-range values stay on the ring.
+        assert!(near(gauge_angle(100.0) - gauge_angle(0.0), 1.4 * PI));
+        assert!(near(gauge_angle(25.0) + gauge_angle(75.0), 3.0 * PI));
+        assert!(near(gauge_angle(-5.0), gauge_angle(0.0)));
+        assert!(near(gauge_angle(140.0), gauge_angle(100.0)));
+        assert!(near(gauge_angle(f32::NAN), gauge_angle(0.0)));
+    }
+
+    #[test]
+    fn gauge_list() {
+        let r = gauge_rows(Some(100.0), 6.2, "none");
+        assert_eq!(r, vec![("Ceiling", "100%".to_string()), ("CPU use", "6%".into()), ("Reason", "none".into())]);
+        // Not reported: no reason row, CPU use still shown.
+        let r = gauge_rows(None, 6.0, "none");
+        assert_eq!(r, vec![("Ceiling", "not reported".to_string()), ("CPU use", "6%".into())]);
+    }
+
+    #[test]
+    fn y_axis_labels() {
+        let c = Chart { points: vec![1.0, 4.4], unit: "GB", ..Default::default() };
+        assert_eq!(y_labels(&c), ["5 GB".to_string(), "2.5".into(), "0".into()]);
+        let c = Chart { points: vec![10.0], max: 100.0, unit: "%", ..Default::default() };
+        assert_eq!(y_labels(&c), ["100%".to_string(), "50".into(), "0".into()]);
     }
 }
