@@ -135,28 +135,6 @@ jobs:
             $g.CopyFromScreen($r.L, $r.T, 0, 0, (New-Object System.Drawing.Size $w, $hh))
             $bmp.Save("target/insights-shots/main-overview.png", [System.Drawing.Imaging.ImageFormat]::Png)
           }
-          # TEMP-DUMP
-          function Dump($f) { $b = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f)); Write-Output "DUMP-BEGIN $f"; for ($i=0; $i -lt $b.Length; $i+=4000) { Write-Output ("DUMP|" + $b.Substring($i, [Math]::Min(4000, $b.Length-$i))) }; Write-Output "DUMP-END" }
-          function Tour($proc, $tag) {
-            $ws = New-Object -ComObject WScript.Shell
-            foreach ($k in @(2, 1, 1, 1, 1)) {
-              [void]$ws.AppActivate($proc.Id); Start-Sleep -Milliseconds 400
-              for ($j=0; $j -lt $k; $j++) { [System.Windows.Forms.SendKeys]::SendWait("^{TAB}"); Start-Sleep -Milliseconds 300 }
-              Start-Sleep -Seconds 2
-              $bmp = New-Object System.Drawing.Bitmap $w, $hh
-              $g = [System.Drawing.Graphics]::FromImage($bmp)
-              $g.CopyFromScreen($r.L, $r.T, 0, 0, (New-Object System.Drawing.Size $w, $hh))
-              $f = "target/insights-shots/$tag-$(Get-Random).png"; $bmp.Save($f, [System.Drawing.Imaging.ImageFormat]::Png); Dump $f
-            }
-          }
-          if ($h -ne [IntPtr]::Zero) {
-            Tour $p "laptop"
-            Stop-Process -Id $p.Id; Start-Sleep -Seconds 2
-            $env:RESMON_INSIGHTS_DEMO = "desktop"
-            $p = Start-Process target/release/ResourceMonitor.exe -ArgumentList "--insights" -PassThru
-            Start-Sleep -Seconds 8
-            Tour $p "desktop"
-          }
           if ([W2]::FindWindowW("ResourceMonitor.Insights", [NullString]::Value) -ne [IntPtr]::Zero) {
             Write-Error "a separate Insights window opened"; exit 1
           }
