@@ -84,15 +84,12 @@ impl Counter {
         let mut ok = false;
         // The instance list can change between the sizing and the data call, so retry.
         for _ in 0..4 {
-            let ptr = if buf.is_empty() {
-                null_mut()
-            } else {
-                buf.as_mut_ptr().cast()
-            };
+            let ptr = if buf.is_empty() { null_mut() } else { buf.as_mut_ptr().cast() };
             // SAFETY: `ptr` is null with size 0 (sizing call) or points to `size` writable
             // bytes, 8-aligned (Vec<u64>).
-            let r =
-                unsafe { PdhGetFormattedCounterArrayW(self.0, FORMAT, &mut size, &mut count, ptr) };
+            let r = unsafe {
+                PdhGetFormattedCounterArrayW(self.0, FORMAT, &mut size, &mut count, ptr)
+            };
             if r == PDH_MORE_DATA {
                 let words = (size as usize).div_ceil(8) + 32;
                 buf.resize(words.max(buf.len() + 1), 0);

@@ -48,13 +48,7 @@ const GB: f64 = 1024.0 * MB;
 // Idle gate
 
 /// True when this tick is an idle sample.
-pub fn is_idle(
-    input_idle_ms: u64,
-    display_on: bool,
-    uptime_secs: u64,
-    elapsed_s: f64,
-    interval_ms: u32,
-) -> bool {
+pub fn is_idle(input_idle_ms: u64, display_on: bool, uptime_secs: u64, elapsed_s: f64, interval_ms: u32) -> bool {
     input_idle_ms >= IDLE_INPUT_MS
         && display_on
         && uptime_secs >= MIN_UPTIME_SECS
@@ -220,16 +214,8 @@ impl Accum {
         // Empty slot first, else replace the smallest one (reuses its String buffer).
         let i = (0..self.top.len())
             .min_by(|&a, &b| {
-                let ka = if self.top[a].name.is_empty() {
-                    -1.0
-                } else {
-                    self.top[a].sum
-                };
-                let kb = if self.top[b].name.is_empty() {
-                    -1.0
-                } else {
-                    self.top[b].sum
-                };
+                let ka = if self.top[a].name.is_empty() { -1.0 } else { self.top[a].sum };
+                let kb = if self.top[b].name.is_empty() { -1.0 } else { self.top[b].sum };
                 ka.total_cmp(&kb)
             })
             .unwrap_or(0);
@@ -254,10 +240,7 @@ impl Accum {
             day: self.day,
             mins: (self.secs / 60.0) as f32,
             cpu: cpu_value(cpu),
-            ram: self
-                .ram
-                .median()
-                .map_or(0, |i| i as u64 * self.ram_step + self.ram_step / 2),
+            ram: self.ram.median().map_or(0, |i| i as u64 * self.ram_step + self.ram_step / 2),
             procs: self.procs.median().map_or(0, |i| i as u32),
             disk: self.disk.median().map_or(0.0, log_value),
             net: self.net.median().map_or(0.0, log_value),
@@ -423,11 +406,7 @@ pub fn median(v: &mut [f64]) -> Option<f64> {
     }
     v.sort_by(|a, b| a.total_cmp(b));
     let n = v.len();
-    Some(if n % 2 == 1 {
-        v[n / 2]
-    } else {
-        (v[n / 2 - 1] + v[n / 2]) / 2.0
-    })
+    Some(if n % 2 == 1 { v[n / 2] } else { (v[n / 2 - 1] + v[n / 2]) / 2.0 })
 }
 
 fn med_of<'a>(rows: &[&'a DayRow], f: impl Fn(&'a DayRow) -> Option<f64>) -> (Option<f64>, usize) {
@@ -439,14 +418,8 @@ fn med_of<'a>(rows: &[&'a DayRow], f: impl Fn(&'a DayRow) -> Option<f64>) -> (Op
 /// Usable days before (within 14 days) and after (within 14 days) a marker day.
 /// The marker day itself is mixed and left out.
 pub fn window(rows: &[DayRow], day: u32) -> (Vec<&DayRow>, Vec<&DayRow>) {
-    let before = rows
-        .iter()
-        .filter(|r| r.usable() && r.day < day && r.day + WINDOW_DAYS >= day)
-        .collect();
-    let after = rows
-        .iter()
-        .filter(|r| r.usable() && r.day > day && r.day <= day + WINDOW_DAYS)
-        .collect();
+    let before = rows.iter().filter(|r| r.usable() && r.day < day && r.day + WINDOW_DAYS >= day).collect();
+    let after = rows.iter().filter(|r| r.usable() && r.day > day && r.day <= day + WINDOW_DAYS).collect();
     (before, after)
 }
 
@@ -467,48 +440,30 @@ pub fn diff_at(rows: &[DayRow], day: u32) -> Option<DiffResult> {
     };
     if let Some((x, y)) = both(&|r| (r.ram > 0).then_some(r.ram as f64)) {
         if (y - x).abs() >= 300.0 * MB {
-            changes.push(Change {
-                metric: Metric::Ram,
-                before: x,
-                after: y,
-            });
+            changes.push(Change { metric: Metric::Ram, before: x, after: y });
         }
     }
     if let Some((x, y)) = both(&|r| Some(r.cpu as f64)) {
         let d = (y - x).abs();
         if d >= 1.5 && d >= 0.5 * x {
-            changes.push(Change {
-                metric: Metric::Cpu,
-                before: x,
-                after: y,
-            });
+            changes.push(Change { metric: Metric::Cpu, before: x, after: y });
         }
     }
     if let Some((x, y)) = both(&|r| Some(r.disk)) {
         let (lo, hi) = (x.min(y), x.max(y));
         if hi - lo >= 200.0 * 1024.0 && hi >= 2.0 * lo {
-            changes.push(Change {
-                metric: Metric::Disk,
-                before: x,
-                after: y,
-            });
+            changes.push(Change { metric: Metric::Disk, before: x, after: y });
         }
     }
     if let Some((x, y)) = both(&|r| (r.procs > 0).then_some(r.procs as f64)) {
         if (y - x).abs() >= 15.0 {
-            changes.push(Change {
-                metric: Metric::Procs,
-                before: x,
-                after: y,
-            });
+            changes.push(Change { metric: Metric::Procs, before: x, after: y });
         }
     }
     let mut new_procs: Vec<String> = Vec::new();
     for r in &a {
         for (n, v) in &r.top {
-            let seen = b
-                .iter()
-                .any(|br| br.top.iter().any(|(m, _)| m.eq_ignore_ascii_case(n)));
+            let seen = b.iter().any(|br| br.top.iter().any(|(m, _)| m.eq_ignore_ascii_case(n)));
             if *v >= 0.5 && !seen && !new_procs.iter().any(|m| m.eq_ignore_ascii_case(n)) {
                 new_procs.push(n.clone());
             }
@@ -555,11 +510,7 @@ fn change_text(c: &Change) -> String {
     match c.metric {
         Metric::Ram => format!("idle RAM {}", fmt_ram_delta(c.after - c.before)),
         Metric::Cpu => format!("idle CPU {} to {}", fmt_cpu(c.before), fmt_cpu(c.after)),
-        Metric::Disk => format!(
-            "background disk {} to {}",
-            fmt_rate(c.before),
-            fmt_rate(c.after)
-        ),
+        Metric::Disk => format!("background disk {} to {}", fmt_rate(c.before), fmt_rate(c.after)),
         Metric::Procs => {
             let d = (c.after - c.before).round() as i64;
             if d > 0 {
@@ -610,27 +561,13 @@ fn marker_detail(rows: &[DayRow], m: &Marker) -> (Tone, String) {
             parts.push(format!("new at idle: {}", d.new_procs.join(", ")));
         }
         let tone = if d.worse() { Tone::Warn } else { Tone::Good };
-        return (
-            tone,
-            format!("{}. {}.", date, upper_first(&parts.join(", "))),
-        );
+        return (tone, format!("{}. {}.", date, upper_first(&parts.join(", "))));
     }
     let (b, a) = window(rows, m.day);
     if b.len() < NEED_DAYS {
-        (
-            Tone::Info,
-            format!("{}. Not enough idle days before it.", date),
-        )
+        (Tone::Info, format!("{}. Not enough idle days before it.", date))
     } else {
-        (
-            Tone::Learning,
-            format!(
-                "{}. Watching: {} of {} days after.",
-                date,
-                a.len(),
-                NEED_DAYS
-            ),
-        )
+        (Tone::Learning, format!("{}. Watching: {} of {} days after.", date, a.len(), NEED_DAYS))
     }
 }
 
@@ -653,50 +590,26 @@ fn steady_facts(rows: &[&DayRow]) -> String {
 pub fn verdict(rows: &[DayRow], markers: &[Marker]) -> (Tone, String) {
     let usable: Vec<&DayRow> = rows.iter().filter(|r| r.usable()).collect();
     if usable.len() < NEED_DAYS {
-        return (
-            Tone::Learning,
-            format!(
-                "Learning what idle looks like. {} of {} days.",
-                usable.len(),
-                NEED_DAYS
-            ),
-        );
+        return (Tone::Learning, format!("Learning what idle looks like. {} of {} days.", usable.len(), NEED_DAYS));
     }
     for m in markers.iter().rev() {
         if let Some(d) = diff_at(rows, m.day) {
-            let tone = if d.is_empty() || !d.worse() {
-                Tone::Good
-            } else {
-                Tone::Warn
-            };
+            let tone = if d.is_empty() || !d.worse() { Tone::Good } else { Tone::Warn };
             return (tone, diff_headline(m, &d));
         }
     }
     // Newest marker with enough days before it but not yet after: say we are watching it.
-    if let Some(m) = markers
-        .iter()
-        .rev()
-        .find(|m| window(rows, m.day).0.len() >= NEED_DAYS)
-    {
+    if let Some(m) = markers.iter().rev().find(|m| window(rows, m.day).0.len() >= NEED_DAYS) {
         let after = window(rows, m.day).1.len();
         if after < NEED_DAYS && rows.last().map_or(true, |r| r.day <= m.day + WINDOW_DAYS) {
             return (
                 Tone::Learning,
-                format!(
-                    "Watching the {} {}. {} of {} days after.",
-                    time::day_label(m.day),
-                    m.kind.noun(),
-                    after,
-                    NEED_DAYS
-                ),
+                format!("Watching the {} {}. {} of {} days after.", time::day_label(m.day), m.kind.noun(), after, NEED_DAYS),
             );
         }
     }
     let recent = &usable[usable.len().saturating_sub(WINDOW_DAYS as usize)..];
-    (
-        Tone::Info,
-        format!("Idle looks steady. {}.", steady_facts(recent)),
-    )
+    (Tone::Info, format!("Idle looks steady. {}.", steady_facts(recent)))
 }
 
 // ---------------------------------------------------------------------------------------
@@ -746,11 +659,7 @@ fn find_kb(t: &str) -> Option<String> {
 /// Store app updates look like "9NBLGGH4NNS1-Microsoft.DesktopAppInstaller".
 fn is_store_app(t: &str) -> bool {
     let id = t.split('-').next().unwrap_or("");
-    id.len() == 12
-        && id
-            .bytes()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
-        && !t.contains(' ')
+    id.len() == 12 && id.bytes().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()) && !t.contains(' ')
 }
 
 fn clip(s: &str, n: usize) -> String {
@@ -784,12 +693,10 @@ struct Seen {
     run: Option<Vec<String>>,
 }
 
-const UPDATE_XPATH: &str =
-    "*[System[Provider[@Name='Microsoft-Windows-WindowsUpdateClient'] and EventID=19 \
+const UPDATE_XPATH: &str = "*[System[Provider[@Name='Microsoft-Windows-WindowsUpdateClient'] and EventID=19 \
      and TimeCreated[timediff(@SystemTime) <= 2592000000]]]";
 const CV_KEY: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
-const DISPLAY_CLASS: &str =
-    r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
+const DISPLAY_CLASS: &str = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_KEY_WOW: &str = r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run";
 const MAX_RUN: usize = 64;
@@ -818,11 +725,7 @@ fn run_probe() -> Probe {
         }
     }
     let mut run: Option<Vec<String>> = None;
-    for (root, sub) in [
-        (HKEY_CURRENT_USER, RUN_KEY),
-        (HKEY_LOCAL_MACHINE, RUN_KEY),
-        (HKEY_LOCAL_MACHINE, RUN_KEY_WOW),
-    ] {
+    for (root, sub) in [(HKEY_CURRENT_USER, RUN_KEY), (HKEY_LOCAL_MACHINE, RUN_KEY), (HKEY_LOCAL_MACHINE, RUN_KEY_WOW)] {
         if let Some(names) = reg::value_names(root, sub, MAX_RUN) {
             run.get_or_insert_with(Vec::new).extend(names);
         }
@@ -832,12 +735,7 @@ fn run_probe() -> Probe {
         r.dedup();
         r.truncate(MAX_RUN);
     }
-    Probe {
-        updates,
-        build,
-        gpus: (!gpus.is_empty()).then_some(gpus),
-        run,
-    }
+    Probe { updates, build, gpus: (!gpus.is_empty()).then_some(gpus), run }
 }
 
 /// Small registry readers (standard-user read access).
@@ -873,9 +771,7 @@ mod reg {
         let sub = wide(sub);
         let mut hk: HKEY = std::ptr::null_mut();
         // SAFETY: NUL-terminated subkey, valid out pointer.
-        if unsafe { RegOpenKeyExW(root, sub.as_ptr(), 0, KEY_QUERY_VALUE, &mut hk) }
-            != ERROR_SUCCESS
-        {
+        if unsafe { RegOpenKeyExW(root, sub.as_ptr(), 0, KEY_QUERY_VALUE, &mut hk) } != ERROR_SUCCESS {
             return None;
         }
         let mut out = Vec::new();
@@ -959,13 +855,7 @@ impl Baseline {
         let sampled_before = self.prev_sampled;
         self.prev_sampled = c.procs_sampled;
         let s = c.snap;
-        if !is_idle(
-            c.input_idle_ms,
-            c.display_on,
-            s.uptime_secs,
-            s.elapsed,
-            c.interval_ms,
-        ) {
+        if !is_idle(c.input_idle_ms, c.display_on, s.uptime_secs, s.elapsed, c.interval_ms) {
             self.proc_left = 0;
             return;
         }
@@ -974,8 +864,7 @@ impl Baseline {
             self.roll(day);
         }
         // CPU % per process needs two sampled ticks in a row.
-        self.today
-            .add(c, c.procs_sampled, c.procs_sampled && sampled_before);
+        self.today.add(c, c.procs_sampled, c.procs_sampled && sampled_before);
         if self.today.secs >= self.next_partial_secs {
             self.next_partial_secs += PARTIAL_SAVE_SECS;
             self.dirty = true;
@@ -1055,11 +944,7 @@ impl Baseline {
 
     /// Add a marker unless the same one is already there. Returns true when added.
     fn add_marker(&mut self, day: u32, kind: Kind, label: String) -> bool {
-        if self
-            .markers
-            .iter()
-            .any(|m| m.kind == kind && m.label == label)
-        {
+        if self.markers.iter().any(|m| m.kind == kind && m.label == label) {
             return false;
         }
         self.markers.push(Marker { day, kind, label });
@@ -1100,11 +985,9 @@ impl Baseline {
         self.next_probe_ms = now_ms + PROBE_EVERY_MS;
         self.dirty = true;
         let (tx, rx) = mpsc::channel();
-        let spawned = std::thread::Builder::new()
-            .name("baseline-probe".into())
-            .spawn(move || {
-                let _ = tx.send(run_probe());
-            });
+        let spawned = std::thread::Builder::new().name("baseline-probe".into()).spawn(move || {
+            let _ = tx.send(run_probe());
+        });
         if spawned.is_ok() {
             self.rx = Some(rx);
         }
@@ -1122,10 +1005,8 @@ impl Baseline {
                 if old != b {
                     let major = |s: &str| s.split('.').next().unwrap_or("").to_string();
                     // A new UBR is the monthly update, already marked by its update event.
-                    let recent_update = self
-                        .markers
-                        .iter()
-                        .any(|m| m.kind == Kind::Update && m.day + 3 >= today);
+                    let recent_update =
+                        self.markers.iter().any(|m| m.kind == Kind::Update && m.day + 3 >= today);
                     if major(old) != major(&b) || !recent_update {
                         self.add_marker(today, Kind::Build, format!("Windows build {}", b));
                     }
@@ -1160,11 +1041,7 @@ impl Baseline {
             if let Some(old) = &self.seen.run {
                 let new: Vec<String> = r.iter().filter(|n| !old.contains(n)).cloned().collect();
                 for n in new {
-                    self.add_marker(
-                        today,
-                        Kind::Startup,
-                        format!("New at startup: {}", clip(&n, 40)),
-                    );
+                    self.add_marker(today, Kind::Startup, format!("New at startup: {}", clip(&n, 40)));
                 }
             }
             if self.seen.run.as_ref() != Some(&r) {
@@ -1183,12 +1060,7 @@ impl Baseline {
                 let top = r
                     .top
                     .iter()
-                    .map(|(n, v)| {
-                        Json::Arr(vec![
-                            Json::Str(clip(n, 24)),
-                            num((*v as f64 * 10.0).round() / 10.0),
-                        ])
-                    })
+                    .map(|(n, v)| Json::Arr(vec![Json::Str(clip(n, 24)), num((*v as f64 * 10.0).round() / 10.0)]))
                     .collect();
                 Json::Arr(vec![
                     num(r.day as f64),
@@ -1205,13 +1077,7 @@ impl Baseline {
         let marks = self
             .markers
             .iter()
-            .map(|m| {
-                Json::Arr(vec![
-                    num(m.day as f64),
-                    num(m.kind.code() as f64),
-                    Json::Str(m.label.clone()),
-                ])
-            })
+            .map(|m| Json::Arr(vec![num(m.day as f64), num(m.kind.code() as f64), Json::Str(m.label.clone())]))
             .collect();
         let strs = |v: &[String]| Json::Arr(v.iter().map(|s| Json::Str(s.clone())).collect());
         let mut seen = Vec::new();
@@ -1219,10 +1085,7 @@ impl Baseline {
             seen.push(("build", Json::Str(b.clone())));
         }
         if let Some(g) = &self.seen.gpus {
-            let a = g
-                .iter()
-                .map(|(d, v)| Json::Arr(vec![Json::Str(d.clone()), Json::Str(v.clone())]))
-                .collect();
+            let a = g.iter().map(|(d, v)| Json::Arr(vec![Json::Str(d.clone()), Json::Str(v.clone())])).collect();
             seen.push(("gpu", Json::Arr(a)));
         }
         if let Some(r) = &self.seen.run {
@@ -1237,28 +1100,16 @@ impl Baseline {
     }
 
     pub fn load(&mut self, j: &Json) {
-        let n = |a: &[Json], i: usize| {
-            a.get(i).and_then(|x| match x {
-                Json::Num(v) if v.is_finite() && *v >= 0.0 => Some(*v),
-                _ => None,
-            })
-        };
+        let n = |a: &[Json], i: usize| a.get(i).and_then(|x| match x {
+            Json::Num(v) if v.is_finite() && *v >= 0.0 => Some(*v),
+            _ => None,
+        });
         let mut rows = Vec::new();
         for r in j.get("rows").and_then(Json::as_arr).unwrap_or(&[]) {
             let Some(a) = r.as_arr() else { continue };
-            let (Some(day), Some(mins), Some(cpu), Some(ram)) =
-                (n(a, 0), n(a, 1), n(a, 2), n(a, 3))
-            else {
-                continue;
-            };
+            let (Some(day), Some(mins), Some(cpu), Some(ram)) = (n(a, 0), n(a, 1), n(a, 2), n(a, 3)) else { continue };
             let mut top = Vec::new();
-            for t in a
-                .get(7)
-                .and_then(Json::as_arr)
-                .unwrap_or(&[])
-                .iter()
-                .take(TOP_KEEP)
-            {
+            for t in a.get(7).and_then(Json::as_arr).unwrap_or(&[]).iter().take(TOP_KEEP) {
                 if let Some(p) = t.as_arr() {
                     if let (Some(name), Some(v)) = (p.first().and_then(Json::as_str), n(p, 1)) {
                         top.push((name.to_string(), v as f32));
@@ -1285,11 +1136,9 @@ impl Baseline {
         self.markers.clear();
         for m in j.get("marks").and_then(Json::as_arr).unwrap_or(&[]) {
             let Some(a) = m.as_arr() else { continue };
-            let (Some(day), Some(k), Some(label)) = (
-                n(a, 0),
-                n(a, 1).and_then(|k| Kind::from_code(k as u64)),
-                a.get(2).and_then(Json::as_str),
-            ) else {
+            let (Some(day), Some(k), Some(label)) =
+                (n(a, 0), n(a, 1).and_then(|k| Kind::from_code(k as u64)), a.get(2).and_then(Json::as_str))
+            else {
                 continue;
             };
             self.add_marker(day as u32, k, label.to_string());
@@ -1300,20 +1149,14 @@ impl Baseline {
                 a.iter()
                     .filter_map(|p| {
                         let p = p.as_arr()?;
-                        Some((
-                            p.first()?.as_str()?.to_string(),
-                            p.get(1)?.as_str()?.to_string(),
-                        ))
+                        Some((p.first()?.as_str()?.to_string(), p.get(1)?.as_str()?.to_string()))
                     })
                     .collect()
             });
-            self.seen.run = s.get("run").and_then(Json::as_arr).map(|a| {
-                a.iter()
-                    .filter_map(Json::as_str)
-                    .map(str::to_string)
-                    .take(MAX_RUN)
-                    .collect()
-            });
+            self.seen.run = s
+                .get("run")
+                .and_then(Json::as_arr)
+                .map(|a| a.iter().filter_map(Json::as_str).map(str::to_string).take(MAX_RUN).collect());
         }
         self.last_probe_ms = super::store::num(j, "lp").unwrap_or(0.0) as u64;
         self.next_probe_ms = 0;
@@ -1329,11 +1172,7 @@ impl Baseline {
         let mut lines = Vec::new();
         match rows.iter().find(|r| r.day == today) {
             Some(r) => {
-                let mut s = format!(
-                    "Today at idle: CPU {}, RAM {}",
-                    fmt_cpu(r.cpu as f64),
-                    fmt_gb(r.ram as f64)
-                );
+                let mut s = format!("Today at idle: CPU {}, RAM {}", fmt_cpu(r.cpu as f64), fmt_gb(r.ram as f64));
                 if r.procs > 0 {
                     s.push_str(&format!(", {} processes", r.procs));
                 }
@@ -1348,11 +1187,7 @@ impl Baseline {
             n => format!("Baseline: {} days collected.", n),
         });
         if let Some(m) = self.markers.last() {
-            lines.push(format!(
-                "Last change: {}, {}.",
-                m.label,
-                time::day_label(m.day)
-            ));
+            lines.push(format!("Last change: {}, {}.", m.label, time::day_label(m.day)));
         }
         Panel {
             key: "baseline",
@@ -1368,12 +1203,7 @@ impl Baseline {
                 .rev()
                 .map(|m| {
                     let (tone, detail) = marker_detail(&rows, m);
-                    Item {
-                        t_ms: 0,
-                        tone,
-                        title: m.label.clone(),
-                        detail,
-                    }
+                    Item { t_ms: 0, tone, title: m.label.clone(), detail }
                 })
                 .collect(),
         }
@@ -1426,14 +1256,7 @@ mod tests {
     }
 
     fn ctx(now_ms: u64, s: &Snapshot) -> Ctx<'_> {
-        Ctx {
-            now_ms,
-            snap: s,
-            display_on: true,
-            input_idle_ms: 600_000,
-            interval_ms: 1000,
-            procs_sampled: false,
-        }
+        Ctx { now_ms, snap: s, display_on: true, input_idle_ms: 600_000, interval_ms: 1000, procs_sampled: false }
     }
 
     fn quiet() -> Baseline {
@@ -1480,18 +1303,9 @@ mod tests {
         }
         let r = b.today.row().unwrap();
         assert!((r.cpu - 4.95).abs() <= 0.5, "cpu {}", r.cpu);
-        assert!(
-            (r.ram as f64 / GB - 5.0).abs() <= 0.07,
-            "ram {}",
-            r.ram as f64 / GB
-        );
+        assert!((r.ram as f64 / GB - 5.0).abs() <= 0.07, "ram {}", r.ram as f64 / GB);
         let want = 1024.0 * 2f64.powf(4.95);
-        assert!(
-            (r.disk / want - 1.0).abs() < 0.2,
-            "disk {} vs {}",
-            r.disk,
-            want
-        );
+        assert!((r.disk / want - 1.0).abs() < 0.2, "disk {} vs {}", r.disk, want);
         assert!((r.mins - 1000.0 / 60.0).abs() < 0.01);
         assert_eq!(r.procs, 0, "procs never sampled");
     }
@@ -1531,11 +1345,7 @@ mod tests {
         b.on_sample(&ctx(T0, &s));
         assert!(b.wants_procs(), "window opens when idle");
         s.proc_count = 200;
-        s.top_cpu = vec![ProcStat {
-            name: "SearchHost".into(),
-            cpu: 1.0,
-            ..Default::default()
-        }];
+        s.top_cpu = vec![ProcStat { name: "SearchHost".into(), cpu: 1.0, ..Default::default() }];
         let mut asked = 0;
         for i in 1..30u64 {
             let mut c = ctx(T0 + i * 1000, &s);
@@ -1565,25 +1375,14 @@ mod tests {
         }
         let m = D + 5;
         for d in 6..10 {
-            rows.push(row(
-                D + d,
-                6.0,
-                6.1,
-                210,
-                60_000.0,
-                &[("MsMpEng", 0.6), ("WidgetService", 1.2)],
-            ));
+            rows.push(row(D + d, 6.0, 6.1, 210, 60_000.0, &[("MsMpEng", 0.6), ("WidgetService", 1.2)]));
         }
         let d = diff_at(&rows, m).unwrap();
         assert_eq!(d.changes.len(), 2, "{:?}", d.changes);
         assert_eq!(d.changes[0].metric, Metric::Ram);
         assert_eq!(d.changes[1].metric, Metric::Cpu);
         assert_eq!(d.new_procs, vec!["WidgetService".to_string()]);
-        let mk = Marker {
-            day: m,
-            kind: Kind::Update,
-            label: "Windows update KB5044284".into(),
-        };
+        let mk = Marker { day: m, kind: Kind::Update, label: "Windows update KB5044284".into() };
         let h = diff_headline(&mk, &d);
         assert_eq!(
             h,
@@ -1602,21 +1401,11 @@ mod tests {
             quiet_rows.push(row(D + d, 2.0, 5.0, 200, 300_000.0, &[]));
         }
         for d in 6..10 {
-            quiet_rows.push(row(
-                D + d,
-                3.4,
-                5.0 + 290.0 / 1024.0,
-                214,
-                570_000.0,
-                &[("Tiny", 0.4)],
-            ));
+            quiet_rows.push(row(D + d, 3.4, 5.0 + 290.0 / 1024.0, 214, 570_000.0, &[("Tiny", 0.4)]));
         }
         let q = diff_at(&quiet_rows, m).unwrap();
         assert!(q.is_empty(), "{:?}", q);
-        assert_eq!(
-            diff_headline(&mk, &q),
-            format!("The {} update changed nothing at idle.", time::day_label(m))
-        );
+        assert_eq!(diff_headline(&mk, &q), format!("The {} update changed nothing at idle.", time::day_label(m)));
         assert_eq!(verdict(&quiet_rows, &[mk.clone()]).0, Tone::Good);
 
         // CPU +2 points but less than 50 % relative: not meaningful.
@@ -1667,16 +1456,10 @@ mod tests {
         assert_eq!(b.markers[0].label, "Windows update KB5044284");
         assert_eq!(b.markers[0].day, time::day(T0));
         // Back-fill of the same update does not add it again.
-        let p = Probe {
-            updates: vec![(T0, e.data[0].1.clone())],
-            ..Default::default()
-        };
+        let p = Probe { updates: vec![(T0, e.data[0].1.clone())], ..Default::default() };
         b.apply_probe(p, D);
         assert_eq!(b.markers.len(), 1);
-        assert!(update_label(
-            "Security Intelligence Update for Microsoft Defender Antivirus - KB2267602"
-        )
-        .is_none());
+        assert!(update_label("Security Intelligence Update for Microsoft Defender Antivirus - KB2267602").is_none());
         assert!(update_label("9NBLGGH4NNS1-Microsoft.DesktopAppInstaller").is_none());
         assert_eq!(
             update_label("Intel Corporation - Display - 31.0.101.4502").as_deref(),
@@ -1690,36 +1473,12 @@ mod tests {
             run: Some(run.iter().map(|s| s.to_string()).collect()),
         };
         let mut c = quiet();
-        c.apply_probe(
-            snapshot("22631.4317", "32.0.15.6094", &["SecurityHealth"]),
-            D,
-        );
+        c.apply_probe(snapshot("22631.4317", "32.0.15.6094", &["SecurityHealth"]), D);
         assert!(c.markers.is_empty());
-        c.apply_probe(
-            snapshot(
-                "26100.2314",
-                "32.0.15.6614",
-                &["OneDrive", "SecurityHealth"],
-            ),
-            D + 1,
-        );
+        c.apply_probe(snapshot("26100.2314", "32.0.15.6614", &["OneDrive", "SecurityHealth"]), D + 1);
         let labels: Vec<&str> = c.markers.iter().map(|m| m.label.as_str()).collect();
-        assert_eq!(
-            labels,
-            vec![
-                "Windows build 26100.2314",
-                "GPU driver 32.0.15.6614",
-                "New at startup: OneDrive"
-            ]
-        );
-        c.apply_probe(
-            snapshot(
-                "26100.2314",
-                "32.0.15.6614",
-                &["OneDrive", "SecurityHealth"],
-            ),
-            D + 2,
-        );
+        assert_eq!(labels, vec!["Windows build 26100.2314", "GPU driver 32.0.15.6614", "New at startup: OneDrive"]);
+        c.apply_probe(snapshot("26100.2314", "32.0.15.6614", &["OneDrive", "SecurityHealth"]), D + 2);
         assert_eq!(c.markers.len(), 3);
         // Cap at 60.
         for i in 0..70 {
@@ -1730,58 +1489,23 @@ mod tests {
 
     #[test]
     fn learning_and_steady_states() {
-        let rows: Vec<DayRow> = (0..2)
-            .map(|d| row(D + d, 2.0, 5.1, 210, 0.0, &[]))
-            .collect();
-        assert_eq!(
-            verdict(&rows, &[]),
-            (
-                Tone::Learning,
-                "Learning what idle looks like. 2 of 3 days.".into()
-            )
-        );
+        let rows: Vec<DayRow> = (0..2).map(|d| row(D + d, 2.0, 5.1, 210, 0.0, &[])).collect();
+        assert_eq!(verdict(&rows, &[]), (Tone::Learning, "Learning what idle looks like. 2 of 3 days.".into()));
         let mut short = rows.clone();
-        short.push(DayRow {
-            mins: 19.0,
-            ..row(D + 2, 2.0, 5.1, 210, 0.0, &[])
-        });
-        assert_eq!(
-            verdict(&short, &[]).1,
-            "Learning what idle looks like. 2 of 3 days.",
-            "19 min is not a day"
-        );
-        let rows: Vec<DayRow> = (0..4)
-            .map(|d| row(D + d, 2.0, 5.1, 210, 0.0, &[]))
-            .collect();
-        assert_eq!(
-            verdict(&rows, &[]),
-            (
-                Tone::Info,
-                "Idle looks steady. CPU 2%, RAM 5.1 GB, 210 processes.".into()
-            )
-        );
-        let mk = Marker {
-            day: D + 3,
-            kind: Kind::Update,
-            label: "Windows update KB1234567".into(),
-        };
+        short.push(DayRow { mins: 19.0, ..row(D + 2, 2.0, 5.1, 210, 0.0, &[]) });
+        assert_eq!(verdict(&short, &[]).1, "Learning what idle looks like. 2 of 3 days.", "19 min is not a day");
+        let rows: Vec<DayRow> = (0..4).map(|d| row(D + d, 2.0, 5.1, 210, 0.0, &[])).collect();
+        assert_eq!(verdict(&rows, &[]), (Tone::Info, "Idle looks steady. CPU 2%, RAM 5.1 GB, 210 processes.".into()));
+        let mk = Marker { day: D + 3, kind: Kind::Update, label: "Windows update KB1234567".into() };
         let (tone, text) = verdict(&rows[..3], &[mk]);
         assert_eq!(tone, Tone::Learning);
-        assert_eq!(
-            text,
-            format!(
-                "Watching the {} update. 0 of 3 days after.",
-                time::day_label(D + 3)
-            )
-        );
+        assert_eq!(text, format!("Watching the {} update. 0 of 3 days after.", time::day_label(D + 3)));
     }
 
     #[test]
     fn save_load_roundtrip_and_restart_merge() {
         let mut b = quiet();
-        b.rows = (0..3)
-            .map(|d| row(D - 5 + d, 2.0, 5.0, 200, 1000.0, &[("MsMpEng", 0.6)]))
-            .collect();
+        b.rows = (0..3).map(|d| row(D - 5 + d, 2.0, 5.0, 200, 1000.0, &[("MsMpEng", 0.6)])).collect();
         b.add_marker(D + 1, Kind::Driver, "GPU driver 1.2.3".into());
         b.seen.build = Some("22631.1".into());
         for i in 0..600u64 {
@@ -1804,10 +1528,7 @@ mod tests {
         assert!(today.usable());
         // Garbage tolerated.
         let mut g = quiet();
-        g.load(
-            &crate::achievements::json::parse(r#"{"rows":[1,[2],["x"]],"marks":"no","seen":5}"#)
-                .unwrap(),
-        );
+        g.load(&crate::achievements::json::parse(r#"{"rows":[1,[2],["x"]],"marks":"no","seen":5}"#).unwrap());
         assert!(g.rows.is_empty() && g.markers.is_empty());
         let p = g.panel(T0);
         assert_eq!(p.tone, Tone::Learning);
@@ -1816,16 +1537,9 @@ mod tests {
     #[test]
     fn saved_state_stays_small() {
         let mut b = quiet();
-        let top: Vec<(&str, f32)> = vec![
-            ("MsMpEng", 1.2),
-            ("SearchIndexer", 0.9),
-            ("WidgetService", 0.7),
-            ("svchost", 0.6),
-            ("dwm", 0.5),
-        ];
-        b.rows = (0..80)
-            .map(|d| row(D + d, 12.3, 7.5, 312, 123_456.0, &top))
-            .collect();
+        let top: Vec<(&str, f32)> =
+            vec![("MsMpEng", 1.2), ("SearchIndexer", 0.9), ("WidgetService", 0.7), ("svchost", 0.6), ("dwm", 0.5)];
+        b.rows = (0..80).map(|d| row(D + d, 12.3, 7.5, 312, 123_456.0, &top)).collect();
         b.rows.truncate(MAX_ROWS);
         for i in 0..80 {
             b.add_marker(D + i, Kind::Update, format!("Windows update KB50{:05}", i));
@@ -1838,9 +1552,7 @@ mod tests {
     #[test]
     fn panel_chart_and_items() {
         let mut b = quiet();
-        b.rows = (0..8)
-            .map(|d| row(D + d, 2.0, 5.0 + d as f64 * 0.1, 200, 0.0, &[]))
-            .collect();
+        b.rows = (0..8).map(|d| row(D + d, 2.0, 5.0 + d as f64 * 0.1, 200, 0.0, &[])).collect();
         b.add_marker(D + 4, Kind::Update, "Windows update KB5044284".into());
         let p = b.panel(T0 + 30 * 86_400_000);
         let ch = p.chart.unwrap();

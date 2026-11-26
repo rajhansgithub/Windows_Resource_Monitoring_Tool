@@ -190,11 +190,7 @@ pub fn tz_offset_from(bias: i32, standard_bias: i32, daylight_bias: i32, id: u32
 
 /// Billing cycle bookkeeping. `stored` = (cycle start, reset day) last seen.
 /// Returns the new stored value and the start of a cycle that just closed.
-pub fn cycle_step(
-    stored: Option<(u32, u32)>,
-    start: u32,
-    reset: u32,
-) -> (Option<(u32, u32)>, Option<u32>) {
+pub fn cycle_step(stored: Option<(u32, u32)>, start: u32, reset: u32) -> (Option<(u32, u32)>, Option<u32>) {
     let now = Some((start, reset));
     match stored {
         None => (now, None),
@@ -209,14 +205,7 @@ pub fn cycle_step(
 }
 
 /// Badge ids this machine cannot earn right now (see the module docs).
-pub fn unavailable_ids(
-    battery_seen: bool,
-    samples: u32,
-    gpu_tries: u32,
-    gpu_seen: bool,
-    temp_seen: bool,
-    cap_set: bool,
-) -> Vec<&'static str> {
+pub fn unavailable_ids(battery_seen: bool, samples: u32, gpu_tries: u32, gpu_seen: bool, temp_seen: bool, cap_set: bool) -> Vec<&'static str> {
     let mut v = Vec::new();
     if samples > 0 && !battery_seen {
         v.push("fumes");
@@ -352,14 +341,7 @@ impl Observer {
     }
 
     fn unavailable(&self) -> Vec<&'static str> {
-        unavailable_ids(
-            self.battery_seen,
-            self.samples,
-            self.gpu_tries,
-            self.gpu_seen,
-            self.temp_seen,
-            self.cap_set,
-        )
+        unavailable_ids(self.battery_seen, self.samples, self.gpu_tries, self.gpu_seen, self.temp_seen, self.cap_set)
     }
 
     fn run(&mut self, ev: &Event) -> Vec<Moment> {
@@ -425,12 +407,8 @@ pub fn input_recent() -> bool {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
     // SAFETY: valid, sized out pointer.
     unsafe {
-        let mut li = LASTINPUTINFO {
-            cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
-            dwTime: 0,
-        };
-        GetLastInputInfo(&mut li) != 0
-            && (GetTickCount().wrapping_sub(li.dwTime) as u64) < INPUT_WINDOW_MS
+        let mut li = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+        GetLastInputInfo(&mut li) != 0 && (GetTickCount().wrapping_sub(li.dwTime) as u64) < INPUT_WINDOW_MS
     }
 }
 
@@ -540,39 +518,18 @@ mod tests {
         assert_eq!(cycle_step(st, a, 15), (st, None));
         assert_eq!(cycle_step(st, b, 15), (Some((b, 15)), Some(a)));
         // Gap of a whole cycle: not the predecessor.
-        assert_eq!(
-            cycle_step(st, day(2026, 3, 15), 15),
-            (Some((day(2026, 3, 15), 15)), None)
-        );
+        assert_eq!(cycle_step(st, day(2026, 3, 15), 15), (Some((day(2026, 3, 15), 15)), None));
         // Reset day changed: no closure.
-        assert_eq!(
-            cycle_step(st, day(2026, 1, 20), 20),
-            (Some((day(2026, 1, 20), 20)), None)
-        );
+        assert_eq!(cycle_step(st, day(2026, 1, 20), 20), (Some((day(2026, 1, 20), 20)), None));
     }
 
     #[test]
     fn availability() {
-        assert_eq!(
-            unavailable_ids(false, 0, 0, false, false, true),
-            Vec::<&str>::new()
-        );
-        assert_eq!(
-            unavailable_ids(false, 5, 0, false, false, true),
-            vec!["fumes"]
-        );
-        assert_eq!(
-            unavailable_ids(true, 5, 2, false, false, true),
-            Vec::<&str>::new()
-        );
-        assert_eq!(
-            unavailable_ids(true, 5, 3, false, true, false),
-            vec!["render", "under_cap"]
-        );
-        assert_eq!(
-            unavailable_ids(true, 5, 9, true, true, true),
-            Vec::<&str>::new()
-        );
+        assert_eq!(unavailable_ids(false, 0, 0, false, false, true), Vec::<&str>::new());
+        assert_eq!(unavailable_ids(false, 5, 0, false, false, true), vec!["fumes"]);
+        assert_eq!(unavailable_ids(true, 5, 2, false, false, true), Vec::<&str>::new());
+        assert_eq!(unavailable_ids(true, 5, 3, false, true, false), vec!["render", "under_cap"]);
+        assert_eq!(unavailable_ids(true, 5, 9, true, true, true), Vec::<&str>::new());
     }
 
     #[test]

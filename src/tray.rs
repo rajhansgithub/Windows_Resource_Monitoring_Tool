@@ -36,13 +36,7 @@ impl Tray {
                 icon = LoadIconW(std::ptr::null_mut(), IDI_APPLICATION);
             }
         }
-        Tray {
-            hwnd,
-            icon,
-            added: false,
-            last_tip: String::new(),
-            source: std::cell::Cell::new(None),
-        }
+        Tray { hwnd, icon, added: false, last_tip: String::new(), source: std::cell::Cell::new(None) }
     }
 
     fn base(&self) -> NOTIFYICONDATAW {
@@ -59,14 +53,7 @@ impl Tray {
         d.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
         d.uCallbackMessage = WM_TRAY;
         d.hIcon = self.icon;
-        copy(
-            &mut d.szTip,
-            if self.last_tip.is_empty() {
-                "Resource Monitor"
-            } else {
-                &self.last_tip
-            },
-        );
+        copy(&mut d.szTip, if self.last_tip.is_empty() { "Resource Monitor" } else { &self.last_tip });
         unsafe {
             Shell_NotifyIconW(NIM_DELETE, &d);
             self.added = Shell_NotifyIconW(NIM_ADD, &d) != 0;

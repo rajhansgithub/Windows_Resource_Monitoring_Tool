@@ -135,19 +135,9 @@ impl Moment {
             quiet,
         };
         match u {
-            Unlock::Badge {
-                id,
-                from,
-                to,
-                xp,
-                quiet,
-            } => m("badge", id, *from as u32, *to as u32, *xp, *quiet),
-            Unlock::Record { set, from, to, xp } => {
-                m("record", set, *from as u32, *to as u32, *xp, false)
-            }
-            Unlock::Level { from, to, rank, .. } => {
-                m("level", rank.map_or("", |r| r.name()), *from, *to, 0, false)
-            }
+            Unlock::Badge { id, from, to, xp, quiet } => m("badge", id, *from as u32, *to as u32, *xp, *quiet),
+            Unlock::Record { set, from, to, xp } => m("record", set, *from as u32, *to as u32, *xp, false),
+            Unlock::Level { from, to, rank, .. } => m("level", rank.map_or("", |r| r.name()), *from, *to, 0, false),
             Unlock::Gate => m("gate", "", 0, 0, 0, false),
         }
     }
@@ -174,11 +164,7 @@ impl Moment {
         let n = |k: &str| j.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
         Some(Moment {
             kind: j.get("k")?.as_str()?.to_string(),
-            id: j
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
+            id: j.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             from: n("f") as u32,
             to: n("t") as u32,
             xp: n("x") as u32,
@@ -193,14 +179,9 @@ pub fn read_pending() -> Vec<Moment> {
 }
 
 pub fn read_pending_at(path: &Path) -> Vec<Moment> {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
+    let Ok(text) = std::fs::read_to_string(path) else { return Vec::new() };
     json::parse(&text)
-        .and_then(|j| {
-            j.as_arr()
-                .map(|a| a.iter().filter_map(Moment::from_json).collect())
-        })
+        .and_then(|j| j.as_arr().map(|a| a.iter().filter_map(Moment::from_json).collect()))
         .unwrap_or_default()
 }
 
@@ -270,10 +251,7 @@ mod tests {
         let s = earned("power_on", 100);
         let merged = save_to(&s, Some(&r), &l).unwrap();
         assert_eq!(merged, s);
-        assert_eq!(
-            std::fs::read_to_string(&r).unwrap(),
-            std::fs::read_to_string(&l).unwrap()
-        );
+        assert_eq!(std::fs::read_to_string(&r).unwrap(), std::fs::read_to_string(&l).unwrap());
         assert_eq!(load_from(Some(&r), &l), s);
 
         // Another device wrote something else to the roaming copy.
@@ -286,9 +264,7 @@ mod tests {
 
         // Saving never loses what is on disk.
         let merged = save_to(&earned("up_to_date", 7), Some(&r), &l).unwrap();
-        assert!(
-            merged.earned("first_gb") && merged.earned("up_to_date") && merged.earned("power_on")
-        );
+        assert!(merged.earned("first_gb") && merged.earned("up_to_date") && merged.earned("power_on"));
         assert_eq!(load_from(Some(&r), &l), merged);
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -341,25 +317,13 @@ mod tests {
         let d = temp_dir("pending");
         let p = d.join(PENDING_FILE);
         assert!(read_pending_at(&p).is_empty());
-        let (_, un) = apply(
-            &State::default(),
-            &Event::UpdateInstalled { now_ms: 42 },
-            &Ctx::default(),
-        );
+        let (_, un) = apply(&State::default(), &Event::UpdateInstalled { now_ms: 42 }, &Ctx::default());
         let moments: Vec<Moment> = un.iter().map(|u| Moment::from_unlock(u, 42)).collect();
         assert_eq!(moments.len(), 1);
         assert_eq!(moments[0].key(), "badge:up_to_date:0:42");
         push_pending_at(&p, &moments).unwrap();
         push_pending_at(&p, &moments).unwrap(); // no duplicate
-        let extra = Moment {
-            kind: "level".into(),
-            id: "Silver".into(),
-            from: 4,
-            to: 5,
-            xp: 0,
-            at: 43,
-            quiet: false,
-        };
+        let extra = Moment { kind: "level".into(), id: "Silver".into(), from: 4, to: 5, xp: 0, at: 43, quiet: false };
         push_pending_at(&p, &[extra.clone()]).unwrap();
         let got = read_pending_at(&p);
         assert_eq!(got, vec![moments[0].clone(), extra.clone()]);
@@ -370,15 +334,7 @@ mod tests {
         assert!(read_pending_at(&p).is_empty());
         // Capped.
         let many: Vec<Moment> = (0..80)
-            .map(|i| Moment {
-                kind: "badge".into(),
-                id: "x".into(),
-                from: 0,
-                to: 0,
-                xp: 1,
-                at: i,
-                quiet: i % 2 == 0,
-            })
+            .map(|i| Moment { kind: "badge".into(), id: "x".into(), from: 0, to: 0, xp: 1, at: i, quiet: i % 2 == 0 })
             .collect();
         push_pending_at(&p, &many).unwrap();
         let got = read_pending_at(&p);

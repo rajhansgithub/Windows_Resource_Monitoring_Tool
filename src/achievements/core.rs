@@ -35,9 +35,7 @@ pub const TB: u64 = 1_000 * GB;
 
 pub const LADDER_XP: [u32; 7] = [25, 50, 100, 250, 500, 1000, 2000];
 pub const RECORD_XP: [u32; 7] = [100, 200, 400, 800, 1500, 3000, 6000];
-pub const TIER_NAMES: [&str; 7] = [
-    "Bronze", "Silver", "Gold", "Platinum", "Diamond", "Ruby", "Emulsion",
-];
+pub const TIER_NAMES: [&str; 7] = ["Bronze", "Silver", "Gold", "Platinum", "Diamond", "Ruby", "Emulsion"];
 
 const MAX_LEVEL: u32 = 999;
 
@@ -101,312 +99,66 @@ const fn ladder(
     tiers: [u64; 7],
     set: Option<&'static str>,
 ) -> Badge {
-    Badge {
-        id,
-        name,
-        line,
-        category: Category::Ladder,
-        xp: 0,
-        tiers,
-        unit,
-        set,
-        counter,
-        per,
-    }
+    Badge { id, name, line, category: Category::Ladder, xp: 0, tiers, unit, set, counter, per }
 }
 
-const fn single(
-    id: &'static str,
-    name: &'static str,
-    line: &'static str,
-    category: Category,
-    xp: u32,
-) -> Badge {
-    Badge {
-        id,
-        name,
-        line,
-        category,
-        xp,
-        tiers: [0; 7],
-        unit: "",
-        set: None,
-        counter: "",
-        per: 1,
-    }
+const fn single(id: &'static str, name: &'static str, line: &'static str, category: Category, xp: u32) -> Badge {
+    Badge { id, name, line, category, xp, tiers: [0; 7], unit: "", set: None, counter: "", per: 1 }
 }
 
 use Category::{Accident, Mastery, Secret, Start};
 
 pub static BADGES: &[Badge] = &[
     // Ladders (13). Counters: see `counter()`.
-    ladder(
-        "watch",
-        "Watchkeeper",
-        "Hours you really watched your PC with the widget on your taskbar.",
-        "hours",
-        "min",
-        60,
-        [5, 50, 250, 1000, 2500, 6000, 12000],
-        Some("rack_watch"),
-    ),
-    ladder(
-        "heavy",
-        "Heavy Lifting",
-        "Hours your CPU ran at 80% or more while you were watching.",
-        "hours",
-        "cpu_min",
-        60,
-        [1, 10, 50, 200, 600, 1500, 3000],
-        Some("rack_watch"),
-    ),
-    ladder(
-        "render",
-        "Render Farm",
-        "Hours your GPU ran at 50% or more while you were watching.",
-        "hours",
-        "gpu_min",
-        60,
-        [1, 10, 50, 200, 600, 1500, 3000],
-        Some("rack_watch"),
-    ),
-    ladder(
-        "mover",
-        "Data Mover",
-        "Gigabytes read and written on your disks.",
-        "GB",
-        "disk_b",
-        GB,
-        [50, 500, 2000, 10000, 40000, 100000, 250000],
-        Some("rack_watch"),
-    ),
-    ladder(
-        "bandwidth",
-        "Bandwidth",
-        "Gigabytes of network traffic tracked.",
-        "GB",
-        "net_b",
-        GB,
-        [10, 100, 500, 2000, 8000, 20000, 50000],
-        Some("rack_flow"),
-    ),
-    ladder(
-        "down",
-        "Downloader",
-        "Gigabytes downloaded.",
-        "GB",
-        "down_b",
-        GB,
-        [10, 100, 400, 1500, 6000, 15000, 40000],
-        Some("rack_flow"),
-    ),
-    ladder(
-        "up",
-        "Uploader",
-        "Gigabytes uploaded.",
-        "GB",
-        "up_b",
-        GB,
-        [1, 10, 50, 250, 1000, 3000, 8000],
-        Some("rack_flow"),
-    ),
-    ladder(
-        "gameon",
-        "Game On",
-        "Hours of full-screen apps on your screen.",
-        "hours",
-        "game_min",
-        60,
-        [5, 50, 200, 600, 1500, 3500, 7000],
-        Some("rack_flow"),
-    ),
-    ladder(
-        "responder",
-        "First Responder",
-        "Alerts you handled: fired, then cleared within 30 minutes.",
-        "alerts",
-        "alerts",
-        1,
-        [1, 5, 25, 100, 300, 800, 2000],
-        Some("rack_care"),
-    ),
-    ladder(
-        "taskmaster",
-        "Task Master",
-        "Tasks you ended from the panel.",
-        "tasks",
-        "tasks",
-        1,
-        [1, 5, 25, 100, 300, 800, 2000],
-        Some("rack_care"),
-    ),
-    ladder(
-        "regular",
-        "Regular",
-        "Days of real use (30 active minutes or more).",
-        "days",
-        "days",
-        1,
-        [3, 15, 50, 150, 365, 730, 1460],
-        Some("rack_care"),
-    ),
-    ladder(
-        "ritual",
-        "Weekly Ritual",
-        "Weeks (Mon-Sun) with 3 or more days of real use.",
-        "weeks",
-        "weeks3",
-        1,
-        [2, 8, 26, 52, 104, 208, 416],
-        Some("rack_care"),
-    ),
-    ladder(
-        "stillhere",
-        "Still Here",
-        "Months with a day of real use.",
-        "months",
-        "months",
-        1,
-        [2, 6, 12, 24, 36, 60, 120],
-        None,
-    ),
+    ladder("watch", "Watchkeeper", "Hours you really watched your PC with the widget on your taskbar.", "hours", "min", 60,
+        [5, 50, 250, 1000, 2500, 6000, 12000], Some("rack_watch")),
+    ladder("heavy", "Heavy Lifting", "Hours your CPU ran at 80% or more while you were watching.", "hours", "cpu_min", 60,
+        [1, 10, 50, 200, 600, 1500, 3000], Some("rack_watch")),
+    ladder("render", "Render Farm", "Hours your GPU ran at 50% or more while you were watching.", "hours", "gpu_min", 60,
+        [1, 10, 50, 200, 600, 1500, 3000], Some("rack_watch")),
+    ladder("mover", "Data Mover", "Gigabytes read and written on your disks.", "GB", "disk_b", GB,
+        [50, 500, 2000, 10000, 40000, 100000, 250000], Some("rack_watch")),
+    ladder("bandwidth", "Bandwidth", "Gigabytes of network traffic tracked.", "GB", "net_b", GB,
+        [10, 100, 500, 2000, 8000, 20000, 50000], Some("rack_flow")),
+    ladder("down", "Downloader", "Gigabytes downloaded.", "GB", "down_b", GB,
+        [10, 100, 400, 1500, 6000, 15000, 40000], Some("rack_flow")),
+    ladder("up", "Uploader", "Gigabytes uploaded.", "GB", "up_b", GB,
+        [1, 10, 50, 250, 1000, 3000, 8000], Some("rack_flow")),
+    ladder("gameon", "Game On", "Hours of full-screen apps on your screen.", "hours", "game_min", 60,
+        [5, 50, 200, 600, 1500, 3500, 7000], Some("rack_flow")),
+    ladder("responder", "First Responder", "Alerts you handled: fired, then cleared within 30 minutes.", "alerts", "alerts", 1,
+        [1, 5, 25, 100, 300, 800, 2000], Some("rack_care")),
+    ladder("taskmaster", "Task Master", "Tasks you ended from the panel.", "tasks", "tasks", 1,
+        [1, 5, 25, 100, 300, 800, 2000], Some("rack_care")),
+    ladder("regular", "Regular", "Days of real use (30 active minutes or more).", "days", "days", 1,
+        [3, 15, 50, 150, 365, 730, 1460], Some("rack_care")),
+    ladder("ritual", "Weekly Ritual", "Weeks (Mon-Sun) with 3 or more days of real use.", "weeks", "weeks3", 1,
+        [2, 8, 26, 52, 104, 208, 416], Some("rack_care")),
+    ladder("stillhere", "Still Here", "Months with a day of real use.", "months", "months", 1,
+        [2, 6, 12, 24, 36, 60, 120], None),
     // Getting started (25 XP)
-    single(
-        "power_on",
-        "Power On",
-        "Watched your first full active hour.",
-        Start,
-        25,
-    ),
-    single(
-        "second_screen",
-        "Second Screen",
-        "Had widgets on two or more taskbars for a full active hour.",
-        Start,
-        25,
-    ),
-    single(
-        "up_to_date",
-        "Up to Date",
-        "An automatic update installed itself.",
-        Start,
-        25,
-    ),
-    single(
-        "under_cap",
-        "Under the Cap",
-        "Finished a whole billing cycle under your data cap.",
-        Start,
-        25,
-    ),
-    single(
-        "first_gb",
-        "First Gigabyte",
-        "Tracked your first gigabyte of traffic.",
-        Start,
-        25,
-    ),
+    single("power_on", "Power On", "Watched your first full active hour.", Start, 25),
+    single("second_screen", "Second Screen", "Had widgets on two or more taskbars for a full active hour.", Start, 25),
+    single("up_to_date", "Up to Date", "An automatic update installed itself.", Start, 25),
+    single("under_cap", "Under the Cap", "Finished a whole billing cycle under your data cap.", Start, 25),
+    single("first_gb", "First Gigabyte", "Tracked your first gigabyte of traffic.", Start, 25),
     // Mastery
-    single(
-        "marathon",
-        "Marathon",
-        "Watched for 24 hours of continuous active use.",
-        Mastery,
-        250,
-    ),
-    single(
-        "cool_week",
-        "Cool Customer",
-        "Seven days of real use in a row with no alert.",
-        Mastery,
-        250,
-    ),
-    single(
-        "tb_month",
-        "Terabyte Club",
-        "Tracked 1 TB of traffic in one calendar month.",
-        Mastery,
-        300,
-    ),
-    single(
-        "completionist",
-        "Completionist",
-        "Earned every badge available in this build.",
-        Mastery,
-        500,
-    ),
+    single("marathon", "Marathon", "Watched for 24 hours of continuous active use.", Mastery, 250),
+    single("cool_week", "Cool Customer", "Seven days of real use in a row with no alert.", Mastery, 250),
+    single("tb_month", "Terabyte Club", "Tracked 1 TB of traffic in one calendar month.", Mastery, 300),
+    single("completionist", "Completionist", "Earned every badge available in this build.", Mastery, 500),
     // Happy accidents (10 XP)
-    single(
-        "running_hot",
-        "Running Hot",
-        "Your GPU hit 90 degrees C or more.",
-        Accident,
-        10,
-    ),
-    single(
-        "red_line",
-        "Red Line",
-        "Memory use reached 98% or more.",
-        Accident,
-        10,
-    ),
-    single(
-        "full_house",
-        "Full House",
-        "Your system drive was 98% full.",
-        Accident,
-        10,
-    ),
-    single(
-        "gone_dark",
-        "Gone Dark",
-        "No network traffic for 10 active minutes.",
-        Accident,
-        10,
-    ),
-    single(
-        "access_denied",
-        "Access Denied",
-        "Windows refused to end a task.",
-        Accident,
-        10,
-    ),
-    single(
-        "fumes",
-        "Running on Fumes",
-        "Battery at 5% or less, unplugged.",
-        Accident,
-        10,
-    ),
+    single("running_hot", "Running Hot", "Your GPU hit 90 degrees C or more.", Accident, 10),
+    single("red_line", "Red Line", "Memory use reached 98% or more.", Accident, 10),
+    single("full_house", "Full House", "Your system drive was 98% full.", Accident, 10),
+    single("gone_dark", "Gone Dark", "No network traffic for 10 active minutes.", Accident, 10),
+    single("access_denied", "Access Denied", "Windows refused to end a task.", Accident, 10),
+    single("fumes", "Running on Fumes", "Battery at 5% or less, unplugged.", Accident, 10),
     // Secrets (50 XP, shown as "?" until earned)
-    single(
-        "night_owl",
-        "Night Owl",
-        "Real use between 2 and 4 in the morning.",
-        Secret,
-        50,
-    ),
-    single(
-        "one_year",
-        "One Year",
-        "365 days since your first day of real use.",
-        Secret,
-        50,
-    ),
-    single(
-        "spring_clean",
-        "Spring Cleaning",
-        "Your system drive use dropped 10 points within a day.",
-        Secret,
-        50,
-    ),
-    single(
-        "five_nines",
-        "Five Nines",
-        "Windows ran for 30 days without a restart.",
-        Secret,
-        50,
-    ),
+    single("night_owl", "Night Owl", "Real use between 2 and 4 in the morning.", Secret, 50),
+    single("one_year", "One Year", "365 days since your first day of real use.", Secret, 50),
+    single("spring_clean", "Spring Cleaning", "Your system drive use dropped 10 points within a day.", Secret, 50),
+    single("five_nines", "Five Nines", "Windows ran for 30 days without a restart.", Secret, 50),
 ];
 
 /// Word for a set record in the UI ("Gold rack").
@@ -421,21 +173,9 @@ pub struct Set {
 }
 
 pub static SETS: &[Set] = &[
-    Set {
-        id: "rack_watch",
-        name: "Rack 01 · Watch",
-        members: ["watch", "heavy", "render", "mover"],
-    },
-    Set {
-        id: "rack_flow",
-        name: "Rack 02 · Flow",
-        members: ["bandwidth", "down", "up", "gameon"],
-    },
-    Set {
-        id: "rack_care",
-        name: "Rack 03 · Care",
-        members: ["responder", "taskmaster", "regular", "ritual"],
-    },
+    Set { id: "rack_watch", name: "Rack 01 · Watch", members: ["watch", "heavy", "render", "mover"] },
+    Set { id: "rack_flow", name: "Rack 02 · Flow", members: ["bandwidth", "down", "up", "gameon"] },
+    Set { id: "rack_care", name: "Rack 03 · Care", members: ["responder", "taskmaster", "regular", "ritual"] },
 ];
 
 pub struct Catalog;
@@ -586,13 +326,7 @@ pub struct LocalTime {
 
 impl Default for LocalTime {
     fn default() -> Self {
-        LocalTime {
-            year: 2026,
-            month: 1,
-            day: 5,
-            hour: 12,
-            weekday: 0,
-        }
+        LocalTime { year: 2026, month: 1, day: 5, hour: 12, weekday: 0 }
     }
 }
 
@@ -678,11 +412,7 @@ pub fn dust_curve(days: f32) -> f32 {
 
 /// The cobweb, `days` after it was last cleared: none before day 20, full at day 350.
 pub fn web_curve(days: f32) -> f32 {
-    if days < WEB_START {
-        0.0
-    } else {
-        ((days - WEB_START) / WEB_SPAN).min(1.0).powf(0.8)
-    }
+    if days < WEB_START { 0.0 } else { ((days - WEB_START) / WEB_SPAN).min(1.0).powf(0.8) }
 }
 
 /// How worn a medal looks now. Medals age with real time, 1 real hour = 1 day on the shelf: dust settles over months
@@ -776,12 +506,7 @@ impl Default for State {
 impl State {
     /// When the medal on show was struck: the date of the current ladder tier, else the first-earned date.
     fn struck_ms(&self, id: &str) -> u64 {
-        self.kd
-            .get(id)
-            .and_then(|v| v.last().copied())
-            .filter(|&t| t > 0)
-            .or_else(|| self.u.get(id).copied())
-            .unwrap_or(0)
+        self.kd.get(id).and_then(|v| v.last().copied()).filter(|&t| t > 0).or_else(|| self.u.get(id).copied()).unwrap_or(0)
     }
 
     /// The aging key of the medal on show: "badgeId:tier".
@@ -801,29 +526,15 @@ impl State {
     /// How worn the medal `id` looks at `now_ms` (see `Wear`). The Emulsion bubble never ages.
     pub fn wear(&self, id: &str, now_ms: u64) -> Wear {
         if !self.earned(id) || self.tier(id) >= 7 {
-            return Wear {
-                condition: 100,
-                clean: true,
-                ..Wear::default()
-            };
+            return Wear { condition: 100, clean: true, ..Wear::default() };
         }
         let (start, left, webc) = self.age_of(id);
         let day = |t: u64| now_ms.saturating_sub(t) as f32 / WEAR_DAY_MS as f32;
         let dust = left * dust_curve(day(start));
         let web = web_curve(day(webc));
         let polished = webc > start;
-        let condition = (100.0 * (1.0 - (0.7 * dust + 0.3 * web)))
-            .round()
-            .clamp(0.0, 100.0) as u8;
-        Wear {
-            dust,
-            scratch: 0.0,
-            web,
-            days: day(webc),
-            condition,
-            clean: dust < 0.02 && web < 0.01,
-            polishes: polished as u32,
-        }
+        let condition = (100.0 * (1.0 - (0.7 * dust + 0.3 * web))).round().clamp(0.0, 100.0) as u8;
+        Wear { dust, scratch: 0.0, web, days: day(webc), condition, clean: dust < 0.02 && web < 0.01, polishes: polished as u32 }
     }
 
     /// One rub of the polishing cloth. Returns the new look and the shine points it earned (0 when already spotless).
@@ -836,19 +547,7 @@ impl State {
         let (start, left, _) = self.age_of(id);
         let left = left * RUB_KEEP;
         let spotless = left < 0.05 || w.dust * RUB_KEEP < 0.02;
-        let a = if spotless {
-            Age {
-                start: now_ms,
-                left: 1.0,
-                web: now_ms,
-            }
-        } else {
-            Age {
-                start,
-                left,
-                web: now_ms,
-            }
-        };
+        let a = if spotless { Age { start: now_ms, left: 1.0, web: now_ms } } else { Age { start, left, web: now_ms } };
         let key = self.age_key(id);
         self.ag.insert(key, a);
         let gain = SHINE_RUB + if spotless { SHINE_SPOTLESS } else { 0 };
@@ -903,18 +602,12 @@ pub fn total_xp(s: &State) -> u64 {
     let mut t = s.lx.saturating_add(s.f);
     for (id, &tier) in &s.k {
         if Catalog::get(id).map_or(false, |b| b.is_ladder()) {
-            t += LADDER_XP[..tier.min(7) as usize]
-                .iter()
-                .map(|&x| x as u64)
-                .sum::<u64>();
+            t += LADDER_XP[..tier.min(7) as usize].iter().map(|&x| x as u64).sum::<u64>();
         }
     }
     for (id, &tier) in &s.ps {
         if Catalog::set(id).is_some() {
-            t += RECORD_XP[..tier.min(7) as usize]
-                .iter()
-                .map(|&x| x as u64)
-                .sum::<u64>();
+            t += RECORD_XP[..tier.min(7) as usize].iter().map(|&x| x as u64).sum::<u64>();
         }
     }
     for id in s.u.keys() {
@@ -955,14 +648,7 @@ pub struct GateProgress {
 
 impl GateProgress {
     pub fn conditions(&self) -> [(u64, u64); 6] {
-        [
-            self.level,
-            self.days,
-            self.months,
-            self.ruby_ladders,
-            self.active_hours,
-            self.traffic_gb,
-        ]
+        [self.level, self.days, self.months, self.ruby_ladders, self.active_hours, self.traffic_gb]
     }
     /// Every condition holds right now.
     pub fn all_met(&self) -> bool {
@@ -1087,27 +773,11 @@ pub enum Unlock {
     /// A badge unlocked or climbed. Singles: `from == to == 0`. Ladders:
     /// `from` -> `to` (tier skips possible; `xp` sums every tier passed).
     /// `quiet`: Emulsion climb right after the gate opened (no moment of its own).
-    Badge {
-        id: &'static str,
-        from: u8,
-        to: u8,
-        xp: u32,
-        quiet: bool,
-    },
+    Badge { id: &'static str, from: u8, to: u8, xp: u32, quiet: bool },
     /// A certified record rose to `to` (sum of record XP of tiers passed).
-    Record {
-        set: &'static str,
-        from: u8,
-        to: u8,
-        xp: u32,
-    },
+    Record { set: &'static str, from: u8, to: u8, xp: u32 },
     /// Level up. `rank` = the new rank when it changed; `title` = new title when it changed.
-    Level {
-        from: u32,
-        to: u32,
-        rank: Option<Rank>,
-        title: Option<&'static str>,
-    },
+    Level { from: u32, to: u32, rank: Option<Rank>, title: Option<&'static str> },
     /// The Emulsion gate just opened (its own moment).
     Gate,
 }
@@ -1135,9 +805,7 @@ pub fn apply(prev: &State, ev: &Event, ctx: &Ctx) -> (State, Vec<Unlock>) {
             if s.d.k != 0 {
                 s.d.a = true;
             }
-            let fresh =
-                s.al.get(kind)
-                    .map_or(true, |&t| now_ms.saturating_sub(t) > ALERT_WINDOW_MS);
+            let fresh = s.al.get(kind).map_or(true, |&t| now_ms.saturating_sub(t) > ALERT_WINDOW_MS);
             if fresh {
                 s.al.insert(*kind, *now_ms);
             }
@@ -1215,10 +883,7 @@ fn on_minute(s: &mut State, m: &Minute, hits: &mut Vec<&'static str>) -> bool {
     }
     if day > s.d.k {
         close_day(s);
-        s.d = DayState {
-            k: day,
-            ..DayState::default()
-        };
+        s.d = DayState { k: day, ..DayState::default() };
     }
 
     // Run (Marathon, Gone Dark)
@@ -1366,13 +1031,7 @@ fn grant_single(s: &mut State, id: &'static str, now: u64, ctx: &Ctx, out: &mut 
         return;
     }
     s.u.insert(id.to_string(), now.max(1));
-    out.push(Unlock::Badge {
-        id: b.id,
-        from: 0,
-        to: 0,
-        xp: b.xp,
-        quiet: false,
-    });
+    out.push(Unlock::Badge { id: b.id, from: 0, to: 0, xp: b.xp, quiet: false });
 }
 
 /// Move every ladder to the tier its count reaches (never down).
@@ -1396,13 +1055,7 @@ fn sync_ladders(s: &mut State, now: u64, ctx: &Ctx, quiet: bool, out: &mut Vec<U
         }
         s.u.entry(b.id.to_string()).or_insert(now.max(1));
         let xp = LADDER_XP[have as usize..want as usize].iter().sum();
-        out.push(Unlock::Badge {
-            id: b.id,
-            from: have,
-            to: want,
-            xp,
-            quiet,
-        });
+        out.push(Unlock::Badge { id: b.id, from: have, to: want, xp, quiet });
     }
 }
 
@@ -1417,12 +1070,7 @@ fn sync_records(s: &mut State, ctx: &Ctx, out: &mut Vec<Unlock>) {
         if want > have {
             s.ps.insert(set.id.to_string(), want);
             let xp = RECORD_XP[have as usize..want as usize].iter().sum();
-            out.push(Unlock::Record {
-                set: set.id,
-                from: have,
-                to: want,
-                xp,
-            });
+            out.push(Unlock::Record { set: set.id, from: have, to: want, xp });
         }
     }
 }
@@ -1449,15 +1097,10 @@ fn min_nz(a: u64, b: u64) -> u64 {
     }
 }
 
-fn merge_max<K: Ord + Clone, V: Ord + Copy>(
-    a: &BTreeMap<K, V>,
-    b: &BTreeMap<K, V>,
-) -> BTreeMap<K, V> {
+fn merge_max<K: Ord + Clone, V: Ord + Copy>(a: &BTreeMap<K, V>, b: &BTreeMap<K, V>) -> BTreeMap<K, V> {
     let mut m = a.clone();
     for (k, &v) in b {
-        m.entry(k.clone())
-            .and_modify(|x| *x = (*x).max(v))
-            .or_insert(v);
+        m.entry(k.clone()).and_modify(|x| *x = (*x).max(v)).or_insert(v);
     }
     m
 }
@@ -1507,22 +1150,15 @@ pub fn merge(a: &State, b: &State) -> State {
         e[1] = e[1].max(v[1]);
     }
     m.first = min_nz(a.first as u64, b.first as u64) as u32;
-    m.w = if a.w.0 == b.w.0 {
-        (a.w.0, a.w.1 | b.w.1)
-    } else {
-        a.w.max(b.w)
-    };
+    m.w = if a.w.0 == b.w.0 { (a.w.0, a.w.1 | b.w.1) } else { a.w.max(b.w) };
     m.r = a.r.max(b.r);
     m.cw = a.cw.max(b.cw);
     m.tm = a.tm.max(b.tm);
     m.al = merge_max(&a.al, &b.al);
     m.g = a.g || b.g;
-    m.ag = a.ag.clone(); // aging: the newest start wins, then the least dust
+    m.ag = a.ag.clone();   // aging: the newest start wins, then the least dust
     for (k, v) in &b.ag {
-        let better = |x: &Age| {
-            v.start > x.start
-                || (v.start == x.start && (v.left < x.left || (v.left == x.left && v.web > x.web)))
-        };
+        let better = |x: &Age| v.start > x.start || (v.start == x.start && (v.left < x.left || (v.left == x.left && v.web > x.web)));
         if m.ag.get(k).map_or(true, better) {
             m.ag.insert(k.clone(), *v);
         }
@@ -1545,10 +1181,7 @@ pub fn normalize(mut s: State) -> State {
         v.resize(keys[id] as usize, 0);
     }
     for id in s.k.keys() {
-        let first =
-            s.kd.get(id)
-                .and_then(|v| v.iter().copied().filter(|&t| t > 0).min())
-                .unwrap_or(1);
+        let first = s.kd.get(id).and_then(|v| v.iter().copied().filter(|&t| t > 0).min()).unwrap_or(1);
         s.u.entry(id.clone()).or_insert(first);
     }
     for v in s.u.values_mut() {
@@ -1559,23 +1192,16 @@ pub fn normalize(mut s: State) -> State {
     for (id, t) in s.ps.iter_mut() {
         *t = (*t).min(7);
         if let Some(set) = Catalog::set(id) {
-            let weakest = set
-                .members
-                .iter()
-                .map(|m| k.get(*m).copied().unwrap_or(0))
-                .min()
-                .unwrap_or(0);
+            let weakest = set.members.iter().map(|m| k.get(*m).copied().unwrap_or(0)).min().unwrap_or(0);
             *t = (*t).min(weakest);
         }
     }
     s.ps.retain(|_, t| *t > 0);
     let u = &s.u;
-    let k = &s.k; // keep aging only for the tier on show of an earned medal (passed tiers drop)
+    let k = &s.k;   // keep aging only for the tier on show of an earned medal (passed tiers drop)
     s.ag.retain(|key, a| {
         let (id, tier) = key.rsplit_once(':').unwrap_or((key.as_str(), ""));
-        u.contains_key(id)
-            && tier == k.get(id).copied().unwrap_or(0).to_string()
-            && a.left.is_finite()
+        u.contains_key(id) && tier == k.get(id).copied().unwrap_or(0).to_string() && a.left.is_finite()
     });
     for a in s.ag.values_mut() {
         a.left = a.left.clamp(0.0, 1.0);
@@ -1621,10 +1247,7 @@ fn read_map<K: Ord>(j: Option<&Json>, key: impl Fn(&str) -> Option<K>) -> BTreeM
 }
 
 fn nth(j: Option<&Json>, i: usize) -> u64 {
-    j.and_then(|j| j.as_arr())
-        .and_then(|a| a.get(i))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0)
+    j.and_then(|j| j.as_arr()).and_then(|a| a.get(i)).and_then(|v| v.as_u64()).unwrap_or(0)
 }
 
 impl State {
@@ -1641,39 +1264,21 @@ impl State {
             ("v", num(self.v)),
             ("u", map_json(&self.u, |&t| num(t))),
             ("k", map_json(&self.k, |&t| num(t))),
-            (
-                "kd",
-                map_json(&self.kd, |v| Json::Arr(v.iter().map(|&t| num(t)).collect())),
-            ),
+            ("kd", map_json(&self.kd, |v| Json::Arr(v.iter().map(|&t| num(t)).collect()))),
             ("ps", map_json(&self.ps, |&t| num(t))),
             ("lx", num(self.lx)),
             ("c", map_json(&self.c, |&n| num(n))),
             ("f", num(self.f)),
             ("d", d),
-            (
-                "days",
-                map_json(&self.days, |v| Json::Arr(vec![num(v[0]), num(v[1])])),
-            ),
+            ("days", map_json(&self.days, |v| Json::Arr(vec![num(v[0]), num(v[1])]))),
             ("first", num(self.first)),
             ("w", Json::Arr(vec![num(self.w.0), num(self.w.1)])),
-            (
-                "r",
-                Json::Arr(vec![num(self.r.l), num(self.r.s), num(self.r.i)]),
-            ),
+            ("r", Json::Arr(vec![num(self.r.l), num(self.r.s), num(self.r.i)])),
             ("cw", num(self.cw)),
             ("tm", Json::Arr(vec![num(self.tm.0), num(self.tm.1)])),
             ("al", map_json(&self.al, |&t| num(t))),
             ("g", num(self.g as u8)),
-            (
-                "ag",
-                map_json(&self.ag, |a| {
-                    Json::Arr(vec![
-                        num(a.start),
-                        Json::Num((a.left as f64 * 1000.0).round() / 1000.0),
-                        num(a.web),
-                    ])
-                }),
-            ),
+            ("ag", map_json(&self.ag, |a| Json::Arr(vec![num(a.start), Json::Num((a.left as f64 * 1000.0).round() / 1000.0), num(a.web)]))),
             ("sh", num(self.sh)),
         ]);
         j.to_string()
@@ -1686,41 +1291,21 @@ impl State {
         j.as_obj()?;
         let n = |name: &str| j.get(name).and_then(|v| v.as_u64()).unwrap_or(0);
         let d = j.get("d");
-        let dn = |name: &str| {
-            d.and_then(|d| d.get(name))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0)
-        };
+        let dn = |name: &str| d.and_then(|d| d.get(name)).and_then(|v| v.as_u64()).unwrap_or(0);
         let mut s = State {
             v: n("v") as u32,
             u: read_map(j.get("u"), |k| Some(k.to_string())),
-            k: read_map(j.get("k"), |k| Some(k.to_string()))
-                .into_iter()
-                .map(|(k, v)| (k, v.min(7) as u8))
-                .collect(),
+            k: read_map(j.get("k"), |k| Some(k.to_string())).into_iter().map(|(k, v)| (k, v.min(7) as u8)).collect(),
             kd: BTreeMap::new(),
-            ps: read_map(j.get("ps"), |k| Some(k.to_string()))
-                .into_iter()
-                .map(|(k, v)| (k, v.min(7) as u8))
-                .collect(),
+            ps: read_map(j.get("ps"), |k| Some(k.to_string())).into_iter().map(|(k, v)| (k, v.min(7) as u8)).collect(),
             lx: n("lx"),
             c: read_map(j.get("c"), |k| Some(k.to_string())),
             f: n("f"),
-            d: DayState {
-                k: dn("k") as u32,
-                flat: dn("flat") as u32,
-                m: dn("m") as u32,
-                a: dn("a") != 0,
-                dm: dn("dm") as u32,
-            },
+            d: DayState { k: dn("k") as u32, flat: dn("flat") as u32, m: dn("m") as u32, a: dn("a") != 0, dm: dn("dm") as u32 },
             days: BTreeMap::new(),
             first: n("first") as u32,
             w: (nth(j.get("w"), 0) as u32, nth(j.get("w"), 1) as u8),
-            r: Run {
-                l: nth(j.get("r"), 0),
-                s: nth(j.get("r"), 1),
-                i: nth(j.get("r"), 2) as u32,
-            },
+            r: Run { l: nth(j.get("r"), 0), s: nth(j.get("r"), 1), i: nth(j.get("r"), 2) as u32 },
             cw: n("cw") as u32,
             tm: (nth(j.get("tm"), 0) as u32, nth(j.get("tm"), 1)),
             al: read_map(j.get("al"), |k| k.parse::<u8>().ok()),
@@ -1731,36 +1316,20 @@ impl State {
         if let Some(o) = j.get("ag").and_then(|v| v.as_obj()) {
             for (key, v) in o {
                 let arr = v.as_arr().unwrap_or(&[]);
-                let left = match arr.get(1) {
-                    Some(Json::Num(n)) if n.is_finite() => n.clamp(0.0, 1.0) as f32,
-                    _ => 1.0,
-                };
-                s.ag.insert(
-                    key.clone(),
-                    Age {
-                        start: nth(Some(v), 0),
-                        left,
-                        web: nth(Some(v), 2),
-                    },
-                );
+                let left = match arr.get(1) { Some(Json::Num(n)) if n.is_finite() => n.clamp(0.0, 1.0) as f32, _ => 1.0 };
+                s.ag.insert(key.clone(), Age { start: nth(Some(v), 0), left, web: nth(Some(v), 2) });
             }
         }
         if let Some(o) = j.get("kd").and_then(|v| v.as_obj()) {
             for (id, v) in o {
-                let list = v
-                    .as_arr()
-                    .unwrap_or(&[])
-                    .iter()
-                    .map(|t| t.as_u64().unwrap_or(0))
-                    .collect();
+                let list = v.as_arr().unwrap_or(&[]).iter().map(|t| t.as_u64().unwrap_or(0)).collect();
                 s.kd.insert(id.clone(), list);
             }
         }
         if let Some(o) = j.get("days").and_then(|v| v.as_obj()) {
             for (k, v) in o {
                 if let Ok(k) = k.parse::<u32>() {
-                    s.days
-                        .insert(k, [nth(Some(v), 0) as u32, nth(Some(v), 1) as u32]);
+                    s.days.insert(k, [nth(Some(v), 0) as u32, nth(Some(v), 1) as u32]);
                 }
             }
         }
@@ -1805,13 +1374,7 @@ impl Goal {
 
 /// An amount in a badge's unit, short: "12 GB", "19 h", "1 alert", "3 tasks".
 pub fn fmt_amount(n: f64, unit: &str) -> String {
-    let whole = |n: f64| {
-        if n > 0.0 && n < 10.0 && n.fract() > 0.05 {
-            format!("{:.1}", n)
-        } else {
-            format!("{}", n.ceil() as u64)
-        }
-    };
+    let whole = |n: f64| if n > 0.0 && n < 10.0 && n.fract() > 0.05 { format!("{:.1}", n) } else { format!("{}", n.ceil() as u64) };
     match unit {
         "hours" => format!("{} h", whole(n)),
         "GB" if n >= 1000.0 => format!("{:.1} TB", n / 1000.0),
@@ -1842,28 +1405,14 @@ pub fn goal_of(s: &State, id: &str) -> Option<Goal> {
     let to = next_threshold(b, k)?;
     let from = if k == 0 { 0 } else { b.tiers[(k - 1) as usize] };
     let have = amount_of(s, b);
-    Some(Goal {
-        id: b.id,
-        name: b.name,
-        tier: k + 1,
-        have,
-        from,
-        to,
-        unit: b.unit,
-        xp: LADDER_XP[k as usize],
-    })
+    Some(Goal { id: b.id, name: b.name, tier: k + 1, have, from, to, unit: b.unit, xp: LADDER_XP[k as usize] })
 }
 
 /// The goal closest to done (largest share of its step), ties to the cheaper tier. None when every ladder is at its top.
 pub fn next_goal(s: &State) -> Option<Goal> {
     Catalog::ladders()
         .filter_map(|b| goal_of(s, b.id))
-        .max_by(|a, b| {
-            a.frac()
-                .partial_cmp(&b.frac())
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(b.tier.cmp(&a.tier))
-        })
+        .max_by(|a, b| a.frac().partial_cmp(&b.frac()).unwrap_or(std::cmp::Ordering::Equal).then(b.tier.cmp(&a.tier)))
 }
 
 /// A rack (set): its certified tier and the members that hold back the next certificate.
@@ -1877,33 +1426,14 @@ pub struct RackStatus {
 }
 
 pub fn rack_status(s: &State, set: &Set) -> RackStatus {
-    let cert = set
-        .members
-        .iter()
-        .map(|m| s.tier(m))
-        .min()
-        .unwrap_or(0)
-        .min(7);
+    let cert = set.members.iter().map(|m| s.tier(m)).min().unwrap_or(0).min(7);
     let top = if s.g { 7 } else { 6 };
     if cert >= top {
-        return RackStatus {
-            cert,
-            next: None,
-            blockers: Vec::new(),
-        };
+        return RackStatus { cert, next: None, blockers: Vec::new() };
     }
     let next = cert + 1;
-    let blockers = set
-        .members
-        .iter()
-        .copied()
-        .filter(|m| s.tier(m) < next)
-        .collect();
-    RackStatus {
-        cert,
-        next: Some(next),
-        blockers,
-    }
+    let blockers = set.members.iter().copied().filter(|m| s.tier(m) < next).collect();
+    RackStatus { cert, next: Some(next), blockers }
 }
 
 /// One line for the tray tip: "Level 3 · 37 / 218 XP · Next: Data Mover, 12 GB to Bronze".
@@ -1911,12 +1441,7 @@ pub fn tip_line(s: &State) -> String {
     let (lv, into, need) = level_progress(total_xp(s));
     let mut t = format!("Level {lv} \u{00B7} {into} / {need} XP");
     if let Some(g) = next_goal(s) {
-        t.push_str(&format!(
-            " \u{00B7} Next: {}, {} to {}",
-            g.name,
-            fmt_amount(g.left(), g.unit),
-            g.tier_name()
-        ));
+        t.push_str(&format!(" \u{00B7} Next: {}, {} to {}", g.name, fmt_amount(g.left(), g.unit), g.tier_name()));
     }
     t
 }
@@ -1939,21 +1464,11 @@ mod tests {
     fn minute(day_off: i64, i: u64) -> Minute {
         let day = base_day() + day_off;
         let ms = day as u64 * DAY_MS + i * 60_000;
-        Minute {
-            now_ms: ms,
-            local: LocalTime::from_unix_ms(ms, 0),
-            ..Minute::default()
-        }
+        Minute { now_ms: ms, local: LocalTime::from_unix_ms(ms, 0), ..Minute::default() }
     }
 
     /// Feed `n` consecutive minutes starting at minute `from` of day `day_off`.
-    fn feed(
-        mut s: State,
-        day_off: i64,
-        from: u64,
-        n: u64,
-        tweak: impl Fn(&mut Minute),
-    ) -> (State, Vec<Unlock>) {
+    fn feed(mut s: State, day_off: i64, from: u64, n: u64, tweak: impl Fn(&mut Minute)) -> (State, Vec<Unlock>) {
         let mut all = Vec::new();
         for i in from..from + n {
             let mut m = minute(day_off, i);
@@ -1970,8 +1485,7 @@ mod tests {
     }
 
     fn has_badge(un: &[Unlock], id: &str) -> bool {
-        un.iter()
-            .any(|u| matches!(u, Unlock::Badge { id: i, .. } if *i == id))
+        un.iter().any(|u| matches!(u, Unlock::Badge { id: i, .. } if *i == id))
     }
 
     fn xp_for_levels(upto: u32) -> u64 {
@@ -1985,11 +1499,7 @@ mod tests {
         assert_eq!(Catalog::ladders().count(), 13);
         for b in BADGES {
             if b.is_ladder() {
-                assert!(
-                    b.tiers.windows(2).all(|w| w[0] < w[1]) && b.tiers[0] > 0,
-                    "{}",
-                    b.id
-                );
+                assert!(b.tiers.windows(2).all(|w| w[0] < w[1]) && b.tiers[0] > 0, "{}", b.id);
                 assert_eq!(b.xp, 0);
             } else {
                 assert_eq!(b.tiers, [0; 7]);
@@ -2025,39 +1535,15 @@ mod tests {
         let (l, into, need) = level_progress(130);
         assert_eq!((l, into, need), (2, 30, 155));
 
-        let titles = [
-            (1, "Rookie"),
-            (2, "Rookie"),
-            (3, "Tinkerer"),
-            (5, "Tinkerer"),
-            (6, "Builder"),
-            (7, "Builder"),
-            (8, "Tuner"),
-            (11, "Tuner"),
-            (12, "Overclocker"),
-            (15, "Overclocker"),
-            (16, "Engineer"),
-            (19, "Engineer"),
-            (20, "Architect"),
-            (80, "Architect"),
-        ];
+        let titles = [(1, "Rookie"), (2, "Rookie"), (3, "Tinkerer"), (5, "Tinkerer"), (6, "Builder"), (7, "Builder"),
+            (8, "Tuner"), (11, "Tuner"), (12, "Overclocker"), (15, "Overclocker"), (16, "Engineer"), (19, "Engineer"),
+            (20, "Architect"), (80, "Architect")];
         for (l, t) in titles {
             assert_eq!(title_of(l), t, "level {l}");
         }
-        let ranks = [
-            (1, Rank::Bronze),
-            (4, Rank::Bronze),
-            (5, Rank::Silver),
-            (9, Rank::Silver),
-            (10, Rank::Gold),
-            (14, Rank::Gold),
-            (15, Rank::Platinum),
-            (19, Rank::Platinum),
-            (20, Rank::Diamond),
-            (29, Rank::Diamond),
-            (30, Rank::Ruby),
-            (39, Rank::Ruby),
-        ];
+        let ranks = [(1, Rank::Bronze), (4, Rank::Bronze), (5, Rank::Silver), (9, Rank::Silver), (10, Rank::Gold),
+            (14, Rank::Gold), (15, Rank::Platinum), (19, Rank::Platinum), (20, Rank::Diamond), (29, Rank::Diamond),
+            (30, Rank::Ruby), (39, Rank::Ruby)];
         for (l, r) in ranks {
             assert_eq!(rank_of(l, false), r);
             assert_eq!(rank_of(l, true), r);
@@ -2074,22 +1560,10 @@ mod tests {
         for b in Catalog::ladders() {
             for (i, &t) in b.tiers.iter().enumerate() {
                 let want = i as u8 + 1;
-                assert_eq!(
-                    tier_for(b, t - 1, true),
-                    want - 1,
-                    "{} below tier {}",
-                    b.id,
-                    want
-                );
+                assert_eq!(tier_for(b, t - 1, true), want - 1, "{} below tier {}", b.id, want);
                 assert_eq!(tier_for(b, t, true), want, "{} at tier {}", b.id, want);
                 // Without the gate everything stops at Ruby.
-                assert_eq!(
-                    tier_for(b, t, false),
-                    want.min(6),
-                    "{} ungated tier {}",
-                    b.id,
-                    want
-                );
+                assert_eq!(tier_for(b, t, false), want.min(6), "{} ungated tier {}", b.id, want);
             }
             assert_eq!(tier_for(b, u64::MAX, false), 6);
             assert_eq!(tier_for(b, u64::MAX, true), 7);
@@ -2098,14 +1572,8 @@ mod tests {
         // Spec spot checks.
         let watch = Catalog::get("watch").unwrap();
         assert_eq!(watch.tiers, [5, 50, 250, 1000, 2500, 6000, 12000]);
-        assert_eq!(
-            Catalog::get("stillhere").unwrap().tiers,
-            [2, 6, 12, 24, 36, 60, 120]
-        );
-        assert_eq!(
-            Catalog::get("ritual").unwrap().tiers,
-            [2, 8, 26, 52, 104, 208, 416]
-        );
+        assert_eq!(Catalog::get("stillhere").unwrap().tiers, [2, 6, 12, 24, 36, 60, 120]);
+        assert_eq!(Catalog::get("ritual").unwrap().tiers, [2, 8, 26, 52, 104, 208, 416]);
         // Singles never get tiers.
         assert_eq!(tier_for(Catalog::get("marathon").unwrap(), 99999, true), 0);
     }
@@ -2122,17 +1590,13 @@ mod tests {
                 let (s, un) = apply(&s, &Event::UpdateInstalled { now_ms: 5 }, &Ctx::default());
                 assert_eq!(s.tier(b.id), i as u8, "{} just below tier {}", b.id, i + 1);
                 // A fresh state may climb to tier i here, never past it.
-                assert!(!un.iter().any(
-                    |u| matches!(u, Unlock::Badge { id, to, .. } if *id == b.id && *to > i as u8)
-                ));
+                assert!(!un.iter().any(|u| matches!(u, Unlock::Badge { id, to, .. } if *id == b.id && *to > i as u8)));
                 let mut s = s;
                 s.g = true; // open gate so Emulsion is reachable in this unit test
                 s.c.insert(b.counter.to_string(), th * b.per);
                 let (s, un) = apply(&s, &Event::UpdateInstalled { now_ms: 6 }, &Ctx::default());
                 assert_eq!(s.tier(b.id), i as u8 + 1, "{} at tier {}", b.id, i + 1);
-                assert!(un
-                    .iter()
-                    .any(|u| matches!(u, Unlock::Badge { id, from, to, .. }
+                assert!(un.iter().any(|u| matches!(u, Unlock::Badge { id, from, to, .. }
                     if *id == b.id && *from == i as u8 && *to == i as u8 + 1)));
             }
         }
@@ -2144,13 +1608,7 @@ mod tests {
         s.c.insert("min".into(), 1000 * 60 - 1);
         let (s, un) = apply(&s, &Event::ActiveMinute(minute(0, 0)), &Ctx::default());
         let up = un.iter().find_map(|u| match u {
-            Unlock::Badge {
-                id: "watch",
-                from,
-                to,
-                xp,
-                quiet,
-            } => Some((*from, *to, *xp, *quiet)),
+            Unlock::Badge { id: "watch", from, to, xp, quiet } => Some((*from, *to, *xp, *quiet)),
             _ => None,
         });
         // 5, 50, 250, 1000 hours -> Platinum (4): 25+50+100+250.
@@ -2160,9 +1618,7 @@ mod tests {
         assert!(s.kd["watch"].iter().all(|&t| t > 0));
         // Not tracked twice.
         let (_, un2) = apply(&s, &Event::ActiveMinute(minute(0, 1)), &Ctx::default());
-        assert!(!un2
-            .iter()
-            .any(|u| matches!(u, Unlock::Badge { id: "watch", .. })));
+        assert!(!un2.iter().any(|u| matches!(u, Unlock::Badge { id: "watch", .. })));
     }
 
     #[test]
@@ -2185,23 +1641,13 @@ mod tests {
         }
         s.k.insert("mover".into(), 2);
         let (s, un) = apply(&s, &Event::UpdateInstalled { now_ms: 9 }, &Ctx::default());
-        assert!(un.contains(&Unlock::Record {
-            set: "rack_watch",
-            from: 0,
-            to: 2,
-            xp: 300
-        }));
+        assert!(un.contains(&Unlock::Record { set: "rack_watch", from: 0, to: 2, xp: 300 }));
         assert_eq!(s.ps["rack_watch"], 2);
         // Raising the last piece to 5 lifts the record to 3: pays only tier 3.
         let mut s2 = s.clone();
         s2.k.insert("mover".into(), 5);
         let (s3, un) = apply(&s2, &Event::UpdateInstalled { now_ms: 10 }, &Ctx::default());
-        assert!(un.contains(&Unlock::Record {
-            set: "rack_watch",
-            from: 2,
-            to: 3,
-            xp: 400
-        }));
+        assert!(un.contains(&Unlock::Record { set: "rack_watch", from: 2, to: 3, xp: 400 }));
         assert_eq!(s3.ps["rack_watch"], 3);
         // A record never exceeds the badges: normalize clamps.
         let mut bad = s3.clone();
@@ -2213,19 +1659,12 @@ mod tests {
             s4.k.insert(id.into(), 3);
         }
         let (_, un) = apply(&s4, &Event::UpdateInstalled { now_ms: 1 }, &Ctx::default());
-        assert!(un.contains(&Unlock::Record {
-            set: "rack_flow",
-            from: 0,
-            to: 3,
-            xp: 700
-        }));
+        assert!(un.contains(&Unlock::Record { set: "rack_flow", from: 0, to: 3, xp: 700 }));
     }
 
     #[test]
     fn unavailable_badges_wait() {
-        let ctx = Ctx {
-            unavailable: &["up_to_date", "mover"],
-        };
+        let ctx = Ctx { unavailable: &["up_to_date", "mover"] };
         let mut s = State::default();
         s.c.insert("disk_b".into(), 100 * GB);
         for id in ["watch", "heavy", "render"] {
@@ -2233,9 +1672,7 @@ mod tests {
         }
         let (s, un) = apply(&s, &Event::UpdateInstalled { now_ms: 5 }, &ctx);
         assert!(un.is_empty());
-        assert!(
-            !s.earned("up_to_date") && s.tier("mover") == 0 && !s.ps.contains_key("rack_watch")
-        );
+        assert!(!s.earned("up_to_date") && s.tier("mover") == 0 && !s.ps.contains_key("rack_watch"));
     }
 
     #[test]
@@ -2254,15 +1691,7 @@ mod tests {
         s = s1;
         for i in 0..60u64 {
             let t = 100_000_000 + i;
-            s = apply(
-                &s,
-                &Event::TaskEnded {
-                    ok: true,
-                    now_ms: t,
-                },
-                &Ctx::default(),
-            )
-            .0;
+            s = apply(&s, &Event::TaskEnded { ok: true, now_ms: t }, &Ctx::default()).0;
         }
         assert_eq!(s.f, 40);
         assert_eq!(s.c["tasks"], 60); // counting is not capped
@@ -2276,25 +1705,11 @@ mod tests {
         // An alert before minute 30 spoils the clean day.
         let (s, _) = minutes(State::default(), 0, 0, 1);
         let ms = minute(0, 1).now_ms;
-        let (s, _) = apply(
-            &s,
-            &Event::AlertFired {
-                kind: 1,
-                now_ms: ms,
-            },
-            &Ctx::default(),
-        );
+        let (s, _) = apply(&s, &Event::AlertFired { kind: 1, now_ms: ms }, &Ctx::default());
         let (s, _) = minutes(s, 0, 1, 59);
         assert_eq!(s.f, 2);
         // No day known yet: nothing to cap against, no flat XP.
-        let (s, _) = apply(
-            &State::default(),
-            &Event::TaskEnded {
-                ok: true,
-                now_ms: 9,
-            },
-            &Ctx::default(),
-        );
+        let (s, _) = apply(&State::default(), &Event::TaskEnded { ok: true, now_ms: 9 }, &Ctx::default());
         assert_eq!(s.f, 0);
         assert_eq!(s.c["tasks"], 1);
     }
@@ -2396,39 +1811,14 @@ mod tests {
         let (_, un) = apply(&State::default(), &Event::ActiveMinute(m), &Ctx::default());
         assert!(un.is_empty());
 
-        let (s, un) = apply(
-            &State::default(),
-            &Event::TaskEnded {
-                ok: false,
-                now_ms: 5,
-            },
-            &Ctx::default(),
-        );
+        let (s, un) = apply(&State::default(), &Event::TaskEnded { ok: false, now_ms: 5 }, &Ctx::default());
         assert!(has_badge(&un, "access_denied"));
         assert!(!s.c.contains_key("tasks"));
-        let (_, un) = apply(
-            &State::default(),
-            &Event::UpdateInstalled { now_ms: 5 },
-            &Ctx::default(),
-        );
+        let (_, un) = apply(&State::default(), &Event::UpdateInstalled { now_ms: 5 }, &Ctx::default());
         assert!(has_badge(&un, "up_to_date"));
-        let (_, un) = apply(
-            &State::default(),
-            &Event::CycleClosed {
-                under_cap: false,
-                now_ms: 5,
-            },
-            &Ctx::default(),
-        );
+        let (_, un) = apply(&State::default(), &Event::CycleClosed { under_cap: false, now_ms: 5 }, &Ctx::default());
         assert!(un.is_empty());
-        let (_, un) = apply(
-            &State::default(),
-            &Event::CycleClosed {
-                under_cap: true,
-                now_ms: 5,
-            },
-            &Ctx::default(),
-        );
+        let (_, un) = apply(&State::default(), &Event::CycleClosed { under_cap: true, now_ms: 5 }, &Ctx::default());
         assert!(has_badge(&un, "under_cap"));
     }
 
@@ -2467,19 +1857,13 @@ mod tests {
     #[test]
     fn marathon_needs_a_continuous_day() {
         let (s, un) = minutes(State::default(), 0, 0, 24 * 60);
-        assert!(
-            !has_badge(&un, "marathon"),
-            "1440 minutes is 1439 minutes of span"
-        );
+        assert!(!has_badge(&un, "marathon"), "1440 minutes is 1439 minutes of span");
         let (_, un) = minutes(s, 1, 0, 1);
         assert!(has_badge(&un, "marathon"));
         // A gap longer than 5 minutes restarts the run.
         let (s, _) = minutes(State::default(), 0, 0, 600);
         let (_, un) = minutes(s, 0, 610, 1000);
-        assert!(
-            !has_badge(&un, "marathon"),
-            "span since the restart is 999 minutes"
-        );
+        assert!(!has_badge(&un, "marathon"), "span since the restart is 999 minutes");
     }
 
     #[test]
@@ -2505,15 +1889,7 @@ mod tests {
             s = n;
             if d == 3 {
                 let ms = minute(d, 31).now_ms;
-                s = apply(
-                    &s,
-                    &Event::AlertFired {
-                        kind: 0,
-                        now_ms: ms,
-                    },
-                    &Ctx::default(),
-                )
-                .0;
+                s = apply(&s, &Event::AlertFired { kind: 0, now_ms: ms }, &Ctx::default()).0;
             }
             got |= s.earned("cool_week");
         }
@@ -2525,88 +1901,25 @@ mod tests {
     fn alerts_are_handled_within_thirty_minutes() {
         let (s, _) = minutes(State::default(), 0, 0, 1);
         let t0 = 5_000_000_000u64;
-        let (s, _) = apply(
-            &s,
-            &Event::AlertFired {
-                kind: 2,
-                now_ms: t0,
-            },
-            &Ctx::default(),
-        );
-        let (s, un) = apply(
-            &s,
-            &Event::AlertCleared {
-                kind: 2,
-                now_ms: t0 + 29 * 60_000,
-            },
-            &Ctx::default(),
-        );
+        let (s, _) = apply(&s, &Event::AlertFired { kind: 2, now_ms: t0 }, &Ctx::default());
+        let (s, un) = apply(&s, &Event::AlertCleared { kind: 2, now_ms: t0 + 29 * 60_000 }, &Ctx::default());
         assert_eq!(s.c["alerts"], 1);
         assert!(has_badge(&un, "responder"));
         // Clearing again counts nothing (duplicate).
-        let (s2, _) = apply(
-            &s,
-            &Event::AlertCleared {
-                kind: 2,
-                now_ms: t0 + 30 * 60_000,
-            },
-            &Ctx::default(),
-        );
+        let (s2, _) = apply(&s, &Event::AlertCleared { kind: 2, now_ms: t0 + 30 * 60_000 }, &Ctx::default());
         assert_eq!(s2.c["alerts"], 1);
         // Too slow.
-        let (s, _) = apply(
-            &s,
-            &Event::AlertFired {
-                kind: 2,
-                now_ms: t0 + 100 * 60_000,
-            },
-            &Ctx::default(),
-        );
-        let (s, _) = apply(
-            &s,
-            &Event::AlertCleared {
-                kind: 2,
-                now_ms: t0 + 140 * 60_000,
-            },
-            &Ctx::default(),
-        );
+        let (s, _) = apply(&s, &Event::AlertFired { kind: 2, now_ms: t0 + 100 * 60_000 }, &Ctx::default());
+        let (s, _) = apply(&s, &Event::AlertCleared { kind: 2, now_ms: t0 + 140 * 60_000 }, &Ctx::default());
         assert_eq!(s.c["alerts"], 1);
         assert!(s.al.is_empty());
         // A clear with no fire counts nothing.
-        let (s, _) = apply(
-            &s,
-            &Event::AlertCleared {
-                kind: 7,
-                now_ms: t0,
-            },
-            &Ctx::default(),
-        );
+        let (s, _) = apply(&s, &Event::AlertCleared { kind: 7, now_ms: t0 }, &Ctx::default());
         assert_eq!(s.c["alerts"], 1);
         // A stale pending alert is replaced by a new episode.
-        let (s, _) = apply(
-            &s,
-            &Event::AlertFired {
-                kind: 3,
-                now_ms: t0,
-            },
-            &Ctx::default(),
-        );
-        let (s, _) = apply(
-            &s,
-            &Event::AlertFired {
-                kind: 3,
-                now_ms: t0 + 3_600_000,
-            },
-            &Ctx::default(),
-        );
-        let (s, _) = apply(
-            &s,
-            &Event::AlertCleared {
-                kind: 3,
-                now_ms: t0 + 3_600_000 + 60_000,
-            },
-            &Ctx::default(),
-        );
+        let (s, _) = apply(&s, &Event::AlertFired { kind: 3, now_ms: t0 }, &Ctx::default());
+        let (s, _) = apply(&s, &Event::AlertFired { kind: 3, now_ms: t0 + 3_600_000 }, &Ctx::default());
+        let (s, _) = apply(&s, &Event::AlertCleared { kind: 3, now_ms: t0 + 3_600_000 + 60_000 }, &Ctx::default());
         assert_eq!(s.c["alerts"], 2);
     }
 
@@ -2668,9 +1981,7 @@ mod tests {
         assert!(has_badge(&un, "completionist"));
         assert_eq!(s3.u["completionist"], 8);
         // Coming-soon badges are excluded.
-        let ctx = Ctx {
-            unavailable: &["fumes"],
-        };
+        let ctx = Ctx { unavailable: &["fumes"] };
         s.u.remove("fumes");
         let (_, un) = apply(&s, &Event::UpdateInstalled { now_ms: 7 }, &ctx);
         assert!(has_badge(&un, "completionist"));
@@ -2683,22 +1994,12 @@ mod tests {
         s.lx = xp_for_levels(5) - 1; // level 4
         let (s, un) = apply(&s, &Event::UpdateInstalled { now_ms: 5 }, &Ctx::default());
         // Up to Date pays 25: level 5 = Silver, title Tinkerer unchanged.
-        assert!(un.contains(&Unlock::Level {
-            from: 4,
-            to: 5,
-            rank: Some(Rank::Silver),
-            title: None
-        }));
+        assert!(un.contains(&Unlock::Level { from: 4, to: 5, rank: Some(Rank::Silver), title: None }));
         assert_eq!(level(&s), 5);
         let mut s = State::default();
         s.lx = xp_for_levels(6) - 1;
         let (_, un) = apply(&s, &Event::UpdateInstalled { now_ms: 5 }, &Ctx::default());
-        assert!(un.contains(&Unlock::Level {
-            from: 5,
-            to: 6,
-            rank: None,
-            title: Some("Builder")
-        }));
+        assert!(un.contains(&Unlock::Level { from: 5, to: 6, rank: None, title: Some("Builder") }));
     }
 
     /// A state that satisfies every gate condition.
@@ -2728,45 +2029,27 @@ mod tests {
 
         let cases: Vec<(&str, Box<dyn Fn(&mut State)>)> = vec![
             ("level", Box::new(|s| s.lx -= 5000)), // more than the XP apply itself adds
-            (
-                "days",
-                Box::new(|s| {
-                    s.days.insert(202601, [29, 3]); // 179 days
-                }),
-            ),
-            (
-                "months",
-                Box::new(|s| {
-                    let v = s.days.remove(&202606).unwrap();
-                    s.days.insert(202605, [30 + v[0], 3]);
-                }),
-            ),
-            (
-                "ruby",
-                Box::new(|s| {
-                    s.k.insert("render".into(), 5);
-                }),
-            ),
-            (
-                "hours",
-                Box::new(|s| {
-                    s.c.insert("min".into(), 2000 * 60 - 1);
-                }),
-            ),
-            (
-                "traffic",
-                Box::new(|s| {
-                    s.c.insert("net_b".into(), 5 * TB - 1);
-                }),
-            ),
+            ("days", Box::new(|s| {
+                s.days.insert(202601, [29, 3]); // 179 days
+            })),
+            ("months", Box::new(|s| {
+                let v = s.days.remove(&202606).unwrap();
+                s.days.insert(202605, [30 + v[0], 3]);
+            })),
+            ("ruby", Box::new(|s| {
+                s.k.insert("render".into(), 5);
+            })),
+            ("hours", Box::new(|s| {
+                s.c.insert("min".into(), 2000 * 60 - 1);
+            })),
+            ("traffic", Box::new(|s| {
+                s.c.insert("net_b".into(), 5 * TB - 1);
+            })),
         ];
         for (name, f) in cases {
             let mut s = gate_state();
             f(&mut s);
-            assert!(
-                !gate_progress(&s).all_met(),
-                "{name} missing must keep the gate shut"
-            );
+            assert!(!gate_progress(&s).all_met(), "{name} missing must keep the gate shut");
             // And apply does not open it.
             let (s2, un) = apply(&s, &Event::UpdateInstalled { now_ms: 5 }, &Ctx::default());
             assert!(!s2.g, "{name}");
@@ -2790,20 +2073,8 @@ mod tests {
         assert_eq!(un.iter().filter(|u| **u == Unlock::Gate).count(), 1);
         assert_eq!(s2.tier("watch"), 7);
         assert_eq!(s2.tier("heavy"), 6);
-        let climb = un
-            .iter()
-            .find(|u| matches!(u, Unlock::Badge { id: "watch", .. }))
-            .unwrap();
-        assert!(matches!(
-            climb,
-            Unlock::Badge {
-                from: 6,
-                to: 7,
-                xp: 2000,
-                quiet: true,
-                ..
-            }
-        ));
+        let climb = un.iter().find(|u| matches!(u, Unlock::Badge { id: "watch", .. })).unwrap();
+        assert!(matches!(climb, Unlock::Badge { from: 6, to: 7, xp: 2000, quiet: true, .. }));
         // The gate unlock comes before the climb.
         let gi = un.iter().position(|u| *u == Unlock::Gate).unwrap();
         let ci = un.iter().position(|u| u == climb).unwrap();
@@ -2820,33 +2091,17 @@ mod tests {
         let mut s = gate_state();
         s.g = true;
         for id in ["watch", "heavy", "render", "mover"] {
-            s.c.insert(
-                Catalog::get(id).unwrap().counter.to_string(),
-                Catalog::get(id).unwrap().tiers[6] * Catalog::get(id).unwrap().per,
-            );
+            s.c.insert(Catalog::get(id).unwrap().counter.to_string(), Catalog::get(id).unwrap().tiers[6] * Catalog::get(id).unwrap().per);
         }
         s.c.insert("min".into(), 12_000 * 60);
         let (s, un) = apply(&s, &Event::UpdateInstalled { now_ms: 5 }, &Ctx::default());
         assert_eq!(s.ps["rack_watch"], 7);
-        assert!(un.contains(&Unlock::Record {
-            set: "rack_watch",
-            from: 0,
-            to: 7,
-            xp: RECORD_XP.iter().sum()
-        }));
+        assert!(un.contains(&Unlock::Record { set: "rack_watch", from: 0, to: 7, xp: RECORD_XP.iter().sum() }));
     }
 
     fn sample_state() -> State {
         let (mut s, _) = minutes(State::default(), 0, 0, 90);
-        s = apply(
-            &s,
-            &Event::AlertFired {
-                kind: 1,
-                now_ms: 99_999_999,
-            },
-            &Ctx::default(),
-        )
-        .0;
+        s = apply(&s, &Event::AlertFired { kind: 1, now_ms: 99_999_999 }, &Ctx::default()).0;
         s = apply(&s, &Event::UpdateInstalled { now_ms: 123 }, &Ctx::default()).0;
         s
     }
@@ -2859,12 +2114,7 @@ mod tests {
         assert_eq!(back, s);
         assert_eq!(back.to_json(), text);
         // Gate state with everything.
-        let g = apply(
-            &gate_state(),
-            &Event::UpdateInstalled { now_ms: 5 },
-            &Ctx::default(),
-        )
-        .0;
+        let g = apply(&gate_state(), &Event::UpdateInstalled { now_ms: 5 }, &Ctx::default()).0;
         assert_eq!(State::from_json(&g.to_json()).unwrap(), g);
         // Lenient parse.
         assert_eq!(State::from_json("{}").unwrap(), State::default());
@@ -2884,19 +2134,13 @@ mod tests {
             s.u.insert(b.id.to_string(), t0 + 123_456_789);
             if b.is_ladder() {
                 s.k.insert(b.id.to_string(), 6);
-                s.kd.insert(
-                    b.id.to_string(),
-                    (0..6).map(|i| t0 + i * 86_400_000 * 90).collect(),
-                );
+                s.kd.insert(b.id.to_string(), (0..6).map(|i| t0 + i * 86_400_000 * 90).collect());
             }
         }
         for set in SETS {
             s.ps.insert(set.id.to_string(), 6);
         }
-        for name in [
-            "min", "cpu_min", "gpu_min", "game_min", "dual_min", "owl_min", "disk_b", "net_b",
-            "down_b", "up_b", "alerts", "tasks",
-        ] {
+        for name in ["min", "cpu_min", "gpu_min", "game_min", "dual_min", "owl_min", "disk_b", "net_b", "down_b", "up_b", "alerts", "tasks"] {
             s.c.insert(name.to_string(), 123_456_789_012);
         }
         for m in 0..36u32 {
@@ -2904,20 +2148,10 @@ mod tests {
         }
         s.lx = 12345;
         s.f = 54321;
-        s.d = DayState {
-            k: 20_000,
-            flat: 40,
-            m: 600,
-            a: true,
-            dm: 987,
-        };
+        s.d = DayState { k: 20_000, flat: 40, m: 600, a: true, dm: 987 };
         s.first = 19_000;
         s.w = (20_000, 0x7f);
-        s.r = Run {
-            l: 29_000_000,
-            s: 28_000_000,
-            i: 4,
-        };
+        s.r = Run { l: 29_000_000, s: 28_000_000, i: 4 };
         s.cw = 5;
         s.tm = (202611, 987_654_321_000);
         s.al.insert(1, t0);
@@ -2972,28 +2206,12 @@ mod tests {
     #[test]
     fn merge_day_and_week_pick_the_later_one() {
         let mut a = State::default();
-        a.d = DayState {
-            k: 10,
-            flat: 40,
-            m: 99,
-            a: true,
-            dm: 5,
-        };
+        a.d = DayState { k: 10, flat: 40, m: 99, a: true, dm: 5 };
         a.w = (7, 0b11);
-        a.r = Run {
-            l: 100,
-            s: 10,
-            i: 3,
-        };
+        a.r = Run { l: 100, s: 10, i: 3 };
         a.tm = (202601, 5);
         let mut b = State::default();
-        b.d = DayState {
-            k: 11,
-            flat: 2,
-            m: 1,
-            a: false,
-            dm: 0,
-        };
+        b.d = DayState { k: 11, flat: 2, m: 1, a: false, dm: 0 };
         b.w = (7, 0b100);
         b.r = Run { l: 90, s: 80, i: 9 };
         b.tm = (202602, 1);
@@ -3021,25 +2239,16 @@ mod tests {
         assert_eq!(n.kd["watch"].len(), 7);
         assert_eq!(n.kd["watch"][0], 5);
         assert!(!n.kd.contains_key("ghost"));
-        assert_eq!(
-            n.u["watch"], 5,
-            "first earned falls back to the earliest tier date"
-        );
+        assert_eq!(n.u["watch"], 5, "first earned falls back to the earliest tier date");
         assert_eq!(n.d.flat, FLAT_CAP);
     }
 
     #[test]
     fn local_time_helpers() {
         let l = LocalTime::from_unix_ms(0, 0);
-        assert_eq!(
-            (l.year, l.month, l.day, l.hour, l.weekday),
-            (1970, 1, 1, 0, 3)
-        ); // Thursday
+        assert_eq!((l.year, l.month, l.day, l.hour, l.weekday), (1970, 1, 1, 0, 3)); // Thursday
         let l = LocalTime::from_unix_ms(base_day() as u64 * DAY_MS + 5 * 3_600_000, 60);
-        assert_eq!(
-            (l.year, l.month, l.day, l.hour, l.weekday),
-            (2026, 1, 5, 6, 0)
-        );
+        assert_eq!((l.year, l.month, l.day, l.hour, l.weekday), (2026, 1, 5, 6, 0));
         assert_eq!(l.day_number(), base_day());
         assert_eq!(l.month_key(), 202601);
         assert_eq!(days_from_civil(2000, 2, 29), 11_016);
@@ -3070,19 +2279,8 @@ mod tests {
         let w0 = s.wear("watch", at);
         assert!(w0.clean && w0.condition == 100);
         // the dust curve: min(1, 2(1 - e^(-days/527)))
-        for (d, want) in [
-            (10.0, 0.0377),
-            (30.0, 0.1107),
-            (90.0, 0.3141),
-            (180.0, 0.5781),
-            (270.0, 0.8019),
-            (365.0, 0.9994),
-        ] {
-            assert!(
-                (dust_curve(d) - want).abs() < 0.002,
-                "day {d}: {}",
-                dust_curve(d)
-            );
+        for (d, want) in [(10.0, 0.0377), (30.0, 0.1107), (90.0, 0.3141), (180.0, 0.5781), (270.0, 0.8019), (365.0, 0.9994)] {
+            assert!((dust_curve(d) - want).abs() < 0.002, "day {d}: {}", dust_curve(d));
             let w = s.wear("watch", at + (d as u64) * WEAR_DAY_MS);
             assert!((w.dust - want).abs() < 0.002 && w.scratch == 0.0, "{w:?}");
         }
@@ -3091,10 +2289,7 @@ mod tests {
         assert!(s.wear("watch", at + 30 * WEAR_DAY_MS).web > 0.0);
         assert!(s.wear("watch", at + 349 * WEAR_DAY_MS).web < 1.0);
         assert_eq!(s.wear("watch", at + 350 * WEAR_DAY_MS).web, 1.0);
-        assert!(
-            s.wear("watch", at + 30 * WEAR_DAY_MS).condition
-                < s.wear("watch", at + 5 * WEAR_DAY_MS).condition
-        );
+        assert!(s.wear("watch", at + 30 * WEAR_DAY_MS).condition < s.wear("watch", at + 5 * WEAR_DAY_MS).condition);
         assert!(s.wear("nope", at + 99 * WEAR_DAY_MS).clean);
         // the bubble never ages
         let mut e = s.clone();
@@ -3112,20 +2307,11 @@ mod tests {
         let (w1, g1) = s.polish("watch", now);
         assert_eq!(g1, SHINE_RUB);
         assert_eq!(w1.web, 0.0, "the first rub clears the cobweb");
-        assert!(
-            (w1.dust - before.dust * 0.7).abs() < 1e-4,
-            "each rub takes 30% of the dust"
-        );
+        assert!((w1.dust - before.dust * 0.7).abs() < 1e-4, "each rub takes 30% of the dust");
         // the dust clock keeps running from the tier's start; the web regrows from the rub
         let later = s.wear("watch", now + 25 * WEAR_DAY_MS);
-        assert!(
-            (later.dust - 0.7 * dust_curve(85.0)).abs() < 1e-3,
-            "{later:?}"
-        );
-        assert!(
-            (later.web - web_curve(25.0)).abs() < 1e-4 && later.web > 0.0,
-            "{later:?}"
-        );
+        assert!((later.dust - 0.7 * dust_curve(85.0)).abs() < 1e-3, "{later:?}");
+        assert!((later.web - web_curve(25.0)).abs() < 1e-4 && later.web > 0.0, "{later:?}");
         let mut rubs = 1;
         let mut last = w1;
         let mut s2 = s.clone();
@@ -3134,11 +2320,7 @@ mod tests {
             rubs += 1;
         }
         assert!(last.clean && (4..=20).contains(&rubs), "{rubs} rubs");
-        assert_eq!(
-            s2.polish("watch", now).1,
-            0,
-            "no shine for an already spotless medal"
-        );
+        assert_eq!(s2.polish("watch", now).1, 0, "no shine for an already spotless medal");
         assert_eq!(s2.sh, rubs as u64 * SHINE_RUB + SHINE_SPOTLESS);
         // spotless starts the clocks again
         assert!((s2.wear("watch", now + 60 * WEAR_DAY_MS).dust - dust_curve(60.0)).abs() < 1e-4);
@@ -3158,10 +2340,7 @@ mod tests {
         a.polish("watch", at + 40 * WEAR_DAY_MS);
         let back = State::from_json(&a.to_json()).unwrap();
         assert_eq!(back.ag.keys().collect::<Vec<_>>(), vec!["watch:3"]);
-        assert!(
-            (back.ag["watch:3"].left - 0.7).abs() < 1e-3
-                && back.ag["watch:3"].web == at + 40 * WEAR_DAY_MS
-        );
+        assert!((back.ag["watch:3"].left - 0.7).abs() < 1e-3 && back.ag["watch:3"].web == at + 40 * WEAR_DAY_MS);
         assert_eq!(back.sh, a.sh);
         // same start: the least dust wins, in either order
         let mut b = a.clone();
@@ -3171,29 +2350,12 @@ mod tests {
         assert_eq!(merge(&b, &a), m);
         // a newer start wins over less dust
         let mut c = earned_gold(at);
-        c.ag.insert(
-            "watch:3".into(),
-            Age {
-                start: at + 70 * WEAR_DAY_MS,
-                left: 1.0,
-                web: at + 70 * WEAR_DAY_MS,
-            },
-        );
+        c.ag.insert("watch:3".into(), Age { start: at + 70 * WEAR_DAY_MS, left: 1.0, web: at + 70 * WEAR_DAY_MS });
         assert_eq!(merge(&b, &c).ag["watch:3"].start, at + 70 * WEAR_DAY_MS);
         assert_eq!(merge(&c, &b), merge(&b, &c));
         let mut stray = State::default();
-        stray.ag.insert(
-            "ghost:1".into(),
-            Age {
-                start: 1,
-                left: 5.0,
-                web: 1,
-            },
-        );
-        assert!(
-            normalize(stray).ag.is_empty(),
-            "aging only for earned badges"
-        );
+        stray.ag.insert("ghost:1".into(), Age { start: 1, left: 5.0, web: 1 });
+        assert!(normalize(stray).ag.is_empty(), "aging only for earned badges");
     }
 
     #[test]
@@ -3217,10 +2379,7 @@ mod tests {
             s.k.insert(m.into(), 1);
         }
         let r = rack_status(&s, Catalog::set("rack_flow").unwrap());
-        assert_eq!(
-            (r.cert, r.next, r.blockers.clone()),
-            (0, Some(1), vec!["gameon"])
-        );
+        assert_eq!((r.cert, r.next, r.blockers.clone()), (0, Some(1), vec!["gameon"]));
         s.k.insert("gameon".into(), 2);
         let r = rack_status(&s, Catalog::set("rack_flow").unwrap());
         assert_eq!((r.cert, r.next, r.blockers.len()), (1, Some(2), 3));

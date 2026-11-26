@@ -31,18 +31,11 @@ impl Cpu {
             Some(v) => v as f32,
             None => fallback,
         };
-        if pct.is_finite() {
-            pct.clamp(0.0, 100.0)
-        } else {
-            0.0
-        }
+        if pct.is_finite() { pct.clamp(0.0, 100.0) } else { 0.0 }
     }
 
     fn system_times_pct(&mut self) -> f32 {
-        let zero = FILETIME {
-            dwLowDateTime: 0,
-            dwHighDateTime: 0,
-        };
+        let zero = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
         let (mut idle, mut kernel, mut user) = (zero, zero, zero);
         // SAFETY: valid out pointers.
         if unsafe { GetSystemTimes(&mut idle, &mut kernel, &mut user) } == 0 {

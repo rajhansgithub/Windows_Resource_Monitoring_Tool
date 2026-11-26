@@ -1,6 +1,7 @@
 //! Achievements: pure core (`core`), persistence (`store`), tiny JSON helper (`json`).
 //! The observer is wired into the app; unused items are still allowed for the UI to pick up.
 
+
 pub mod core;
 pub mod gpu;
 pub mod json;

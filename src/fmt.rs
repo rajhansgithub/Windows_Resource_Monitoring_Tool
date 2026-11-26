@@ -40,10 +40,7 @@ impl SpeedUnit {
         }
     }
     pub fn from_key(s: &str) -> Option<Self> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|u| u.key().eq_ignore_ascii_case(s))
+        Self::ALL.iter().copied().find(|u| u.key().eq_ignore_ascii_case(s))
     }
 }
 

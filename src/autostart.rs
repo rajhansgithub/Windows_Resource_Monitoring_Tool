@@ -10,23 +10,13 @@ const NAME: &str = "ResourceMonitor";
 const LEGACY: &str = "WindowsNetworkMonitor";
 
 fn exe() -> String {
-    std::env::current_exe()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default()
+    std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default()
 }
 
 fn open() -> Option<HKEY> {
     let sub = wide(RUN);
     let mut k: HKEY = std::ptr::null_mut();
-    let r = unsafe {
-        RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            sub.as_ptr(),
-            0,
-            KEY_READ | KEY_WRITE,
-            &mut k,
-        )
-    };
+    let r = unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, sub.as_ptr(), 0, KEY_READ | KEY_WRITE, &mut k) };
     (r == ERROR_SUCCESS).then_some(k)
 }
 
@@ -35,15 +25,7 @@ fn value(k: HKEY, name: &str) -> Option<String> {
     let mut buf = [0u16; 1024];
     let mut sz = (buf.len() * 2) as u32;
     let r = unsafe {
-        RegGetValueW(
-            k,
-            std::ptr::null(),
-            n.as_ptr(),
-            RRF_RT_REG_SZ,
-            std::ptr::null_mut(),
-            buf.as_mut_ptr() as _,
-            &mut sz,
-        )
+        RegGetValueW(k, std::ptr::null(), n.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), buf.as_mut_ptr() as _, &mut sz)
     };
     (r == ERROR_SUCCESS).then(|| crate::util::from_wide(&buf))
 }
@@ -64,14 +46,7 @@ pub fn set(on: bool) {
     unsafe {
         if on {
             let v = wide(&format!("\"{}\"", exe()));
-            RegSetValueExW(
-                k,
-                name.as_ptr(),
-                0,
-                REG_SZ,
-                v.as_ptr() as _,
-                (v.len() * 2) as u32,
-            );
+            RegSetValueExW(k, name.as_ptr(), 0, REG_SZ, v.as_ptr() as _, (v.len() * 2) as u32);
         } else {
             RegDeleteValueW(k, name.as_ptr());
         }

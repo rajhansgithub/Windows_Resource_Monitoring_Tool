@@ -14,13 +14,10 @@ use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
 use windows_sys::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_TERMINATE,
+    OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
 use windows_sys::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
-};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 const CLASS: &str = "ResourceMonitor.Popup";
@@ -68,30 +65,15 @@ pub fn palette(dark: bool) -> Pal {
 /// text remains legible.
 fn translucent(p: Pal, dark: bool) -> Pal {
     let (card_a, chip_a) = if dark { (191, 170) } else { (217, 190) }; // cards ~0.75 / 0.85
-    Pal {
-        bg: Rgba(0, 0, 0, 0),
-        card: p.card.with_a(card_a),
-        chip: p.chip.with_a(chip_a),
-        ..p
-    }
+    Pal { bg: Rgba(0, 0, 0, 0), card: p.card.with_a(card_a), chip: p.chip.with_a(chip_a), ..p }
 }
 
 pub fn style_window(hwnd: HWND, dark: bool) {
     unsafe {
         let d: i32 = dark as i32;
-        DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
-            &d as *const i32 as _,
-            4,
-        );
+        DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE as u32, &d as *const i32 as _, 4);
         let round: i32 = DWMWCP_ROUND;
-        DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
-            &round as *const i32 as _,
-            4,
-        );
+        DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE as u32, &round as *const i32 as _, 4);
     }
 }
 
@@ -103,9 +85,7 @@ fn build_number() -> u32 {
         if lib.is_null() {
             return 0;
         }
-        let Some(f) = GetProcAddress(lib, b"RtlGetVersion\0".as_ptr()) else {
-            return 0;
-        };
+        let Some(f) = GetProcAddress(lib, b"RtlGetVersion\0".as_ptr()) else { return 0 };
         let f: unsafe extern "system" fn(*mut OSVERSIONINFOW) -> i32 = std::mem::transmute(f);
         let mut v: OSVERSIONINFOW = std::mem::zeroed();
         v.dwOSVersionInfoSize = std::mem::size_of::<OSVERSIONINFOW>() as u32;
@@ -157,18 +137,11 @@ unsafe fn acrylic_accent(hwnd: HWND, dark: bool) -> bool {
     if user32.is_null() {
         return false;
     }
-    let Some(f) = GetProcAddress(user32, b"SetWindowCompositionAttribute\0".as_ptr()) else {
-        return false;
-    };
+    let Some(f) = GetProcAddress(user32, b"SetWindowCompositionAttribute\0".as_ptr()) else { return false };
     let set: SetWca = std::mem::transmute(f);
     // Same tint strength as Windows flyouts: dark #202020 / light #F3F3F3 at ~70%.
     let tint = if dark { 0xB320_2020u32 } else { 0xB3F3_F3F3u32 };
-    let mut policy = AccentPolicy {
-        state: ACCENT_ENABLE_ACRYLICBLURBEHIND,
-        flags: 2,
-        color: tint,
-        animation: 0,
-    };
+    let mut policy = AccentPolicy { state: ACCENT_ENABLE_ACRYLICBLURBEHIND, flags: 2, color: tint, animation: 0 };
     let mut data = CompositionData {
         attribute: WCA_ACCENT_POLICY,
         data: &mut policy as *mut AccentPolicy as *mut _,
@@ -214,14 +187,7 @@ impl Fonts {
 impl Drop for Fonts {
     fn drop(&mut self) {
         unsafe {
-            for f in [
-                self.small,
-                self.normal,
-                self.bold,
-                self.mid,
-                self.big,
-                self.caps,
-            ] {
+            for f in [self.small, self.normal, self.bold, self.mid, self.big, self.caps] {
                 DeleteObject(f);
             }
         }
@@ -320,20 +286,7 @@ fn has_space(a: &App) -> bool {
 }
 
 fn size(a: &App) -> (i32, i32) {
-    let mut h = PAD
-        + HEADER
-        + GAP
-        + RINGS
-        + GAP
-        + NET
-        + GAP
-        + DISK
-        + GAP
-        + USAGE
-        + GAP
-        + PROCS
-        + GAP
-        + FOOTER;
+    let mut h = PAD + HEADER + GAP + RINGS + GAP + NET + GAP + DISK + GAP + USAGE + GAP + PROCS + GAP + FOOTER;
     if has_space(a) {
         h += DISK_SPACE;
     }
@@ -345,17 +298,11 @@ fn size(a: &App) -> (i32, i32) {
 
 pub fn reposition(a: &mut App) {
     let (w, h) = size(a);
-    let Some((anchor, tb, _)) = a.anchor() else {
-        return;
-    };
+    let Some((anchor, tb, _)) = a.anchor() else { return };
     let g = sc(a, 10.0);
-    let center = POINT {
-        x: (anchor.l + anchor.r) / 2,
-        y: (anchor.t + anchor.b) / 2,
-    };
-    let work =
-        crate::taskbar::monitor_info(unsafe { MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST) })
-            .map_or(tb.work, |m| m.1);
+    let center = POINT { x: (anchor.l + anchor.r) / 2, y: (anchor.t + anchor.b) / 2 };
+    let work = crate::taskbar::monitor_info(unsafe { MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST) })
+        .map_or(tb.work, |m| m.1);
     let above = (anchor.r - w, anchor.t - h - g);
     let below = (anchor.r - w, anchor.b + g);
     let left = (anchor.l - w - g, anchor.b - h);
@@ -368,19 +315,10 @@ pub fn reposition(a: &mut App) {
         (_, Edge::Right) => [left, above, below, right],
     };
     let clamp = |(x, y): (i32, i32)| {
-        (
-            fit(x, work.l + g, work.r - w - g),
-            fit(y, work.t + g, work.b - h - g),
-        )
+        (fit(x, work.l + g, work.r - w - g), fit(y, work.t + g, work.b - h - g))
     };
-    let clear = |(x, y): (i32, i32)| {
-        !(x < anchor.r && x + w > anchor.l && y < anchor.b && y + h > anchor.t)
-    };
-    let (x, y) = order
-        .iter()
-        .map(|p| clamp(*p))
-        .find(|p| clear(*p))
-        .unwrap_or_else(|| clamp(order[0]));
+    let clear = |(x, y): (i32, i32)| !(x < anchor.r && x + w > anchor.l && y < anchor.b && y + h > anchor.t);
+    let (x, y) = order.iter().map(|p| clamp(*p)).find(|p| clear(*p)).unwrap_or_else(|| clamp(order[0]));
     unsafe {
         SetWindowPos(a.popup, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE);
         InvalidateRect(a.popup, std::ptr::null(), 0);
@@ -471,9 +409,7 @@ fn reduce(h: &VecDeque<f32>, n: usize, cols: usize, peak: bool) -> Vec<f32> {
             let hi = ((k + 1) * n / m).max(lo + 1);
             let (mut sum, mut cnt, mut mx) = (0.0f32, 0u32, f32::MIN);
             for w in lo..hi {
-                let Some(i) = (len + w).checked_sub(n) else {
-                    continue;
-                };
+                let Some(i) = (len + w).checked_sub(n) else { continue };
                 let v = h[i];
                 sum += v;
                 cnt += 1;
@@ -514,38 +450,18 @@ fn chart(c: &mut Canvas, e: &Env, out: &mut Out, r: Rect, kind: Kind, traces: &[
     }
     let rw = r.w() as usize;
     let peak = kind != Kind::Pct;
-    let raws: Vec<Vec<f32>> = traces
-        .iter()
-        .map(|t| reduce(&e.a.hist[t.m.idx()], e.n, rw, peak))
-        .collect();
+    let raws: Vec<Vec<f32>> = traces.iter().map(|t| reduce(&e.a.hist[t.m.idx()], e.n, rw, peak)).collect();
     let m = raws[0].len();
     let top = match kind {
         Kind::Pct => 100.0,
-        Kind::Net => raws
-            .iter()
-            .flatten()
-            .copied()
-            .filter(|v| !v.is_nan())
-            .fold(64.0 * 1024.0, f32::max),
-        Kind::Disk => raws
-            .iter()
-            .flatten()
-            .copied()
-            .filter(|v| !v.is_nan())
-            .fold(1024.0 * 1024.0, f32::max),
+        Kind::Net => raws.iter().flatten().copied().filter(|v| !v.is_nan()).fold(64.0 * 1024.0, f32::max),
+        Kind::Disk => raws.iter().flatten().copied().filter(|v| !v.is_nan()).fold(1024.0 * 1024.0, f32::max),
     };
     for (t, raw) in traces.iter().zip(&raws) {
-        let norm: Vec<f32> = raw
-            .iter()
-            .map(|v| if v.is_nan() { 0.0 } else { v / top })
-            .collect();
+        let norm: Vec<f32> = raw.iter().map(|v| if v.is_nan() { 0.0 } else { v / top }).collect();
         c.spark(r, &norm, t.col);
     }
-    let hit = Rect {
-        t: r.t - e.sc(4.0),
-        b: r.b + e.sc(4.0),
-        ..r
-    };
+    let hit = Rect { t: r.t - e.sc(4.0), b: r.b + e.sc(4.0), ..r };
     out.hits.push((hit, PopupHit::Chart));
     let Some((hx, hy)) = e.hover else { return };
     if !hit.contains(hx, hy) || raws.iter().all(|v| v.iter().all(|x| x.is_nan())) {
@@ -559,15 +475,7 @@ fn chart(c: &mut Canvas, e: &Env, out: &mut Out, r: Rect, kind: Kind, traces: &[
     if raws.iter().all(|v| v[k].is_nan()) {
         return;
     }
-    c.fill_rect(
-        Rect {
-            l: colx,
-            t: r.t,
-            r: colx + (e.scale.round() as i32).max(1),
-            b: r.b,
-        },
-        e.base.fg.with_a(110),
-    );
+    c.fill_rect(Rect { l: colx, t: r.t, r: colx + (e.scale.round() as i32).max(1), b: r.b }, e.base.fg.with_a(110));
     let d = e.sc(3.0);
     let mut parts = Vec::new();
     for (t, raw) in traces.iter().zip(&raws) {
@@ -576,41 +484,15 @@ fn chart(c: &mut Canvas, e: &Env, out: &mut Out, r: Rect, kind: Kind, traces: &[
             continue;
         }
         let y = r.b - ((v / top).clamp(0.0, 1.0) * r.h() as f32).round() as i32;
-        c.fill_round(
-            Rect {
-                l: colx - d - 1,
-                t: y - d - 1,
-                r: colx + d + 2,
-                b: y + d + 2,
-            },
-            d as f32 + 1.5,
-            e.base.card,
-        );
-        c.fill_round(
-            Rect {
-                l: colx - d,
-                t: y - d,
-                r: colx + d + 1,
-                b: y + d + 1,
-            },
-            d as f32 + 0.5,
-            t.col,
-        );
+        c.fill_round(Rect { l: colx - d - 1, t: y - d - 1, r: colx + d + 2, b: y + d + 2 }, d as f32 + 1.5, e.base.card);
+        c.fill_round(Rect { l: colx - d, t: y - d, r: colx + d + 1, b: y + d + 1 }, d as f32 + 0.5, t.col);
         let val = kind_text(e, kind, v);
-        parts.push(if t.tag.is_empty() {
-            val
-        } else {
-            format!("{} {}", t.tag, val)
-        });
+        parts.push(if t.tag.is_empty() { val } else { format!("{} {}", t.tag, val) });
     }
     let n = e.n as f32;
     let center = (k as f32 + 0.5) * n / m as f32 - 0.5;
     let secs = (n - 1.0 - center) * e.a.s.interval_ms as f32 / 1000.0;
-    out.tip = Some(Tip {
-        x: colx,
-        r: hit,
-        text: format!("{} \u{00B7} {}", parts.join("   "), ago_text(secs)),
-    });
+    out.tip = Some(Tip { x: colx, r: hit, text: format!("{} \u{00B7} {}", parts.join("   "), ago_text(secs)) });
 }
 
 fn draw_tip(c: &mut Canvas, e: &Env, t: &Tip) {
@@ -624,12 +506,7 @@ fn draw_tip(c: &mut Canvas, e: &Env, t: &Tip) {
     if y < edge {
         y = t.r.b + e.sc(6.0);
     }
-    let r = Rect {
-        l: x,
-        t: y,
-        r: x + w,
-        b: y + h,
-    };
+    let r = Rect { l: x, t: y, r: x + w, b: y + h };
     c.fill_round(r, 6.0 * e.scale, e.base.chip);
     c.stroke_round(r, 6.0 * e.scale, e.base.dim.with_a(120));
     c.text(font, &t.text, x + px, y + py, e.base.fg);
@@ -637,51 +514,19 @@ fn draw_tip(c: &mut Canvas, e: &Env, t: &Tip) {
 
 /// Card with hairline border (brighter while hovered).
 fn card(c: &mut Canvas, r: Rect, rad: f32, pal: &Pal, hot: bool) {
-    c.fill_round(
-        Rect {
-            l: r.l + 1,
-            t: r.t + 1,
-            r: r.r - 1,
-            b: r.b - 1,
-        },
-        rad - 1.0,
-        pal.card,
-    );
-    c.stroke_round(
-        r,
-        rad,
-        if hot {
-            pal.border.mix(pal.dim, 0.55)
-        } else {
-            pal.border
-        },
-    );
+    c.fill_round(Rect { l: r.l + 1, t: r.t + 1, r: r.r - 1, b: r.b - 1 }, rad - 1.0, pal.card);
+    c.stroke_round(r, rad, if hot { pal.border.mix(pal.dim, 0.55) } else { pal.border });
 }
 
 /// Pill-shaped chip right-aligned at `*x`, if it still fits right of `min_x`.
 #[allow(clippy::too_many_arguments)]
-fn chip(
-    c: &mut Canvas,
-    f: HFONT,
-    text: &str,
-    x: &mut i32,
-    min_x: i32,
-    y: i32,
-    h: i32,
-    gap: i32,
-    pal: &Pal,
-) {
+fn chip(c: &mut Canvas, f: HFONT, text: &str, x: &mut i32, min_x: i32, y: i32, h: i32, gap: i32, pal: &Pal) {
     let (tw, th) = c.measure(f, text);
     let w = tw + h;
     if *x - w < min_x {
         return;
     }
-    let r = Rect {
-        l: *x - w,
-        t: y,
-        r: *x,
-        b: y + h,
-    };
+    let r = Rect { l: *x - w, t: y, r: *x, b: y + h };
     c.fill_round(r, h as f32 / 2.0, pal.chip);
     c.text(f, text, r.l + h / 2, y + (h - th) / 2, pal.dim);
     *x -= w + gap;
@@ -704,14 +549,9 @@ fn paint(a: &mut App, hwnd: HWND) {
 
     // Fonts and canvas are cached across the once-per-second repaints.
     let mut cache = a.popup_cache.take().filter(|(f, _)| f.scale == scale);
-    let (f, mut c) = cache
-        .take()
-        .unwrap_or_else(|| (Fonts::gray(scale), Canvas::new()));
+    let (f, mut c) = cache.take().unwrap_or_else(|| (Fonts::gray(scale), Canvas::new()));
     c.resize(cw, ch);
-    let mut out = Out {
-        hits: std::mem::take(&mut a.popup_hits),
-        tip: None,
-    };
+    let mut out = Out { hits: std::mem::take(&mut a.popup_hits), tip: None };
     out.hits.clear();
     draw(a, &mut c, &f, scale, &mut out);
     a.popup_hits = out.hits;
@@ -723,21 +563,9 @@ fn paint(a: &mut App, hwnd: HWND) {
 fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
     let sc = |v: f32| (v * scale).round() as i32;
     let base = palette(a.dark);
-    let pal = if a.popup_acrylic {
-        translucent(palette(a.dark), a.dark)
-    } else {
-        palette(a.dark)
-    };
+    let pal = if a.popup_acrylic { translucent(palette(a.dark), a.dark) } else { palette(a.dark) };
     let ms = a.s.interval_ms.max(1) as usize;
-    let e = Env {
-        a,
-        f,
-        pal,
-        base,
-        scale,
-        hover: a.popup_hover,
-        n: (a.popup_range * 1000 / ms).clamp(2, HIST),
-    };
+    let e = Env { a, f, pal, base, scale, hover: a.popup_hover, n: (a.popup_range * 1000 / ms).clamp(2, HIST) };
     let pal = &e.pal;
     let s = &a.snap;
     let pad = sc(PAD);
@@ -754,59 +582,26 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
     let mut x = right;
     {
         // Segmented time-range control.
-        let widths: Vec<i32> = RANGES
-            .iter()
-            .map(|(t, _)| c.measure(f.small, t).0 + sc(16.0))
-            .collect();
+        let widths: Vec<i32> = RANGES.iter().map(|(t, _)| c.measure(f.small, t).0 + sc(16.0)).collect();
         let total = widths.iter().sum::<i32>() + sc(4.0);
-        let r = Rect {
-            l: x - total,
-            t: y,
-            r: x,
-            b: y + chip_h,
-        };
+        let r = Rect { l: x - total, t: y, r: x, b: y + chip_h };
         c.fill_round(r, chip_h as f32 / 2.0, pal.chip);
         let mut sx = r.l + sc(2.0);
         for ((label, secs), w) in RANGES.iter().zip(&widths) {
-            let seg = Rect {
-                l: sx,
-                t: y + sc(2.0),
-                r: sx + w,
-                b: y + chip_h - sc(2.0),
-            };
+            let seg = Rect { l: sx, t: y + sc(2.0), r: sx + w, b: y + chip_h - sc(2.0) };
             let on = a.popup_range == *secs;
             if on {
-                c.fill_round(
-                    seg,
-                    seg.h() as f32 / 2.0,
-                    pal.fg.with_a(if a.dark { 46 } else { 34 }),
-                );
+                c.fill_round(seg, seg.h() as f32 / 2.0, pal.fg.with_a(if a.dark { 46 } else { 34 }));
             }
             let (tw, th) = c.measure(f.small, label);
             let col = if on || e.hot(seg) { pal.fg } else { pal.dim };
-            c.text(
-                f.small,
-                label,
-                seg.l + (seg.w() - tw) / 2,
-                seg.t + (seg.h() - th) / 2,
-                col,
-            );
+            c.text(f.small, label, seg.l + (seg.w() - tw) / 2, seg.t + (seg.h() - th) / 2, col);
             out.hits.push((seg, PopupHit::Range(*secs)));
             sx += w;
         }
         x = r.l - sc(6.0);
     }
-    chip(
-        c,
-        f.small,
-        &format!("Up {}", fmt::duration(s.uptime_secs)),
-        &mut x,
-        min_x,
-        y,
-        chip_h,
-        sc(6.0),
-        pal,
-    );
+    chip(c, f.small, &format!("Up {}", fmt::duration(s.uptime_secs)), &mut x, min_x, y, chip_h, sc(6.0), pal);
     if let Some(b) = s.battery {
         let mut t = format!("Battery {}%", b.percent);
         if b.charging {
@@ -816,17 +611,7 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
         }
         chip(c, f.small, &t, &mut x, min_x, y, chip_h, sc(6.0), pal);
     }
-    chip(
-        c,
-        f.small,
-        &format!("{} processes", s.proc_count),
-        &mut x,
-        min_x,
-        y,
-        chip_h,
-        sc(6.0),
-        pal,
-    );
+    chip(c, f.small, &format!("{} processes", s.proc_count), &mut x, min_x, y, chip_h, sc(6.0), pal);
     y += sc(HEADER) + gap;
 
     // ---- ring gauges
@@ -844,10 +629,7 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
         Gauge {
             label: "CPU",
             pct: s.cpu,
-            sub: s
-                .top_cpu
-                .first()
-                .map_or(String::new(), |p| format!("{} {:.0}%", p.name, p.cpu)),
+            sub: s.top_cpu.first().map_or(String::new(), |p| format!("{} {:.0}%", p.name, p.cpu)),
             sub2: format!("{} processes", s.proc_count),
             sub2_col: pal.dim,
             m: Metric::Cpu,
@@ -874,15 +656,11 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
                 sub2.push_str(&format!(" \u{00B7} {:.0} W", w));
             }
         }
-        let sub2_col = a
-            .pct_of(Metric::GpuTemp)
-            .map_or(pal.dim, |p| a.heat_text(pal.dim, p));
+        let sub2_col = a.pct_of(Metric::GpuTemp).map_or(pal.dim, |p| a.heat_text(pal.dim, p));
         gauges.push(Gauge {
             label: "GPU",
             pct: g,
-            sub: s
-                .vram_used
-                .map_or(String::new(), |v| format!("{} VRAM", fmt::bytes(v))),
+            sub: s.vram_used.map_or(String::new(), |v| format!("{} VRAM", fmt::bytes(v))),
             sub2,
             sub2_col,
             m: Metric::Gpu,
@@ -904,12 +682,7 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
     let gh = sc(RINGS);
     for (i, g) in gauges.iter().enumerate() {
         let x = pad + i as i32 * (gw + gap);
-        let r = Rect {
-            l: x,
-            t: y,
-            r: x + gw,
-            b: y + gh,
-        };
+        let r = Rect { l: x, t: y, r: x + gw, b: y + gh };
         card(c, r, rad, pal, e.hot(r));
         out.hits.push((r, g.hit));
         let acc = accent(g.m, a.dark);
@@ -921,97 +694,35 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
         c.ring(cx, cy, rr, th, g.pct / 100.0, col);
         let v = format!("{:.0}%", g.pct);
         let (_, vh) = c.measure(f.mid, &v);
-        c.text_center(
-            f.mid,
-            &v,
-            cx as i32,
-            cy as i32 - vh / 2,
-            a.heat_text(pal.fg, g.pct),
-        );
+        c.text_center(f.mid, &v, cx as i32, cy as i32 - vh / 2, a.heat_text(pal.fg, g.pct));
         c.text_center(f.caps, g.label, cx as i32, y + sc(84.0), pal.dim);
         let sub = c.ellipsize(f.small, &g.sub, gw - sc(16.0));
         c.text_center(f.small, &sub, cx as i32, y + sc(98.0), pal.fg);
         let sub2 = c.ellipsize(f.small, &g.sub2, gw - sc(16.0));
         c.text_center(f.small, &sub2, cx as i32, y + sc(112.0), g.sub2_col);
-        let cr = Rect {
-            l: x + sc(12.0),
-            t: y + sc(134.0),
-            r: x + gw - sc(12.0),
-            b: y + gh - sc(10.0),
-        };
-        chart(
-            c,
-            &e,
-            out,
-            cr,
-            Kind::Pct,
-            &[Trace {
-                m: g.m,
-                col: acc,
-                tag: "",
-            }],
-        );
+        let cr = Rect { l: x + sc(12.0), t: y + sc(134.0), r: x + gw - sc(12.0), b: y + gh - sc(10.0) };
+        chart(c, &e, out, cr, Kind::Pct, &[Trace { m: g.m, col: acc, tag: "" }]);
     }
     y += gh + gap;
 
     // ---- network
     let chart_w = sc(150.0);
     let nh = sc(NET);
-    let r = Rect {
-        l: pad,
-        t: y,
-        r: right,
-        b: y + nh,
-    };
+    let r = Rect { l: pad, t: y, r: right, b: y + nh };
     card(c, r, rad, pal, e.hot(r));
     out.hits.push((r, PopupHit::NetSettings));
     let ix = pad + sc(14.0);
-    let adapter = if a.s.adapter.is_empty() {
-        "ALL ADAPTERS".to_string()
-    } else {
-        a.s.adapter.to_uppercase()
-    };
-    c.text(
-        f.caps,
-        &format!("NETWORK  \u{00B7}  {}", adapter),
-        ix,
-        y + sc(10.0),
-        pal.dim,
-    );
+    let adapter = if a.s.adapter.is_empty() { "ALL ADAPTERS".to_string() } else { a.s.adapter.to_uppercase() };
+    c.text(f.caps, &format!("NETWORK  \u{00B7}  {}", adapter), ix, y + sc(10.0), pal.dim);
     let down_c = accent(Metric::Down, a.dark);
     let up_c = accent(Metric::Up, a.dark);
-    c.text(
-        f.big,
-        &format!("\u{25BC} {}", fmt::speed(s.net_down, a.s.unit)),
-        ix,
-        y + sc(26.0),
-        down_c,
-    );
-    c.text(
-        f.normal,
-        &format!("\u{25B2} {}", fmt::speed(s.net_up, a.s.unit)),
-        ix,
-        y + sc(56.0),
-        up_c,
-    );
+    c.text(f.big, &format!("\u{25BC} {}", fmt::speed(s.net_down, a.s.unit)), ix, y + sc(26.0), down_c);
+    c.text(f.normal, &format!("\u{25B2} {}", fmt::speed(s.net_up, a.s.unit)), ix, y + sc(56.0), up_c);
     {
-        let cr = Rect {
-            l: right - chart_w - sc(12.0),
-            t: y + sc(12.0),
-            r: right - sc(12.0),
-            b: y + nh - sc(12.0),
-        };
+        let cr = Rect { l: right - chart_w - sc(12.0), t: y + sc(12.0), r: right - sc(12.0), b: y + nh - sc(12.0) };
         let tr = [
-            Trace {
-                m: Metric::Down,
-                col: down_c,
-                tag: "\u{25BC}",
-            },
-            Trace {
-                m: Metric::Up,
-                col: up_c,
-                tag: "\u{25B2}",
-            },
+            Trace { m: Metric::Down, col: down_c, tag: "\u{25BC}" },
+            Trace { m: Metric::Up, col: up_c, tag: "\u{25B2}" },
         ];
         chart(c, &e, out, cr, Kind::Net, &tr);
     }
@@ -1020,12 +731,7 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
     // ---- disk
     let space = has_space(a);
     let dh = sc(DISK + if space { DISK_SPACE } else { 0.0 });
-    let r = Rect {
-        l: pad,
-        t: y,
-        r: right,
-        b: y + dh,
-    };
+    let r = Rect { l: pad, t: y, r: right, b: y + dh };
     card(c, r, rad, pal, e.hot(r));
     out.hits.push((r, PopupHit::ResMon));
     let dl = match s.disk_active {
@@ -1035,11 +741,7 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
     c.text(f.caps, &dl, ix, y + sc(10.0), pal.dim);
     c.text(
         f.mid,
-        &format!(
-            "R {}   W {}",
-            fmt::rate(s.disk_read),
-            fmt::rate(s.disk_write)
-        ),
+        &format!("R {}   W {}", fmt::rate(s.disk_read), fmt::rate(s.disk_write)),
         ix,
         y + sc(28.0),
         pal.fg,
@@ -1049,30 +751,11 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
     if wr_c == rd_c {
         wr_c = rd_c.mix(pal.fg, 0.5);
     }
-    let cr = Rect {
-        l: right - chart_w - sc(12.0),
-        t: y + sc(12.0),
-        r: right - sc(12.0),
-        b: y + sc(DISK) - sc(12.0),
-    };
-    let tr = [
-        Trace {
-            m: Metric::DiskRead,
-            col: rd_c,
-            tag: "R",
-        },
-        Trace {
-            m: Metric::DiskWrite,
-            col: wr_c,
-            tag: "W",
-        },
-    ];
+    let cr = Rect { l: right - chart_w - sc(12.0), t: y + sc(12.0), r: right - sc(12.0), b: y + sc(DISK) - sc(12.0) };
+    let tr = [Trace { m: Metric::DiskRead, col: rd_c, tag: "R" }, Trace { m: Metric::DiskWrite, col: wr_c, tag: "W" }];
     chart(c, &e, out, cr, Kind::Disk, &tr);
     if space {
-        let drive = std::env::var("SystemDrive")
-            .ok()
-            .filter(|d| !d.is_empty())
-            .unwrap_or_else(|| "C:".into());
+        let drive = std::env::var("SystemDrive").ok().filter(|d| !d.is_empty()).unwrap_or_else(|| "C:".into());
         let pct = s.disk_used_pct.unwrap_or(0.0);
         let text = format!(
             "{}  {:.0}% used  \u{00B7}  {} free of {}",
@@ -1083,24 +766,12 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
         );
         let text = c.ellipsize(f.small, &text, right - sc(14.0) - ix);
         c.text(f.small, &text, ix, y + sc(DISK) - sc(8.0), pal.fg);
-        let bar = Rect {
-            l: ix,
-            t: y + dh - sc(14.0),
-            r: right - sc(14.0),
-            b: y + dh - sc(10.0),
-        };
+        let bar = Rect { l: ix, t: y + dh - sc(14.0), r: right - sc(14.0), b: y + dh - sc(10.0) };
         c.fill_round(bar, 2.0 * scale, pal.track);
         let fw = (bar.w() as f32 * (pct / 100.0).clamp(0.0, 1.0)) as i32;
         if fw > 0 {
             let col = a.heat(accent(Metric::DiskFree, a.dark), pct);
-            c.fill_round(
-                Rect {
-                    r: bar.l + fw.max(bar.h()),
-                    ..bar
-                },
-                2.0 * scale,
-                col,
-            );
+            c.fill_round(Rect { r: bar.l + fw.max(bar.h()), ..bar }, 2.0 * scale, col);
         }
     }
     y += dh + gap;
@@ -1108,12 +779,7 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
     // ---- data usage
     let cap = a.cycle_usage();
     let uh = sc(USAGE) + if cap.is_some() { sc(CAP) } else { 0 };
-    let r = Rect {
-        l: pad,
-        t: y,
-        r: right,
-        b: y + uh,
-    };
+    let r = Rect { l: pad, t: y, r: right, b: y + uh };
     card(c, r, rad, pal, e.hot(r));
     out.hits.push((r, PopupHit::UsageReport));
     c.text(f.caps, "DATA USAGE", ix, y + sc(10.0), pal.dim);
@@ -1125,113 +791,39 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
     c.text(f.small, "Today", ix, y + sc(26.0), pal.dim);
     c.text(f.mid, &fmt::bytes(today.total()), ix, y + sc(40.0), pal.fg);
     c.text(f.small, "This month", col2, y + sc(26.0), pal.dim);
-    c.text(
-        f.mid,
-        &fmt::bytes(month.total()),
-        col2,
-        y + sc(40.0),
-        pal.fg,
-    );
-    let split = |u: usage::Usage| {
-        format!(
-            "\u{25B2} {}  \u{25BC} {}",
-            fmt::bytes(u.sent),
-            fmt::bytes(u.recv)
-        )
-    };
+    c.text(f.mid, &fmt::bytes(month.total()), col2, y + sc(40.0), pal.fg);
+    let split = |u: usage::Usage| format!("\u{25B2} {}  \u{25BC} {}", fmt::bytes(u.sent), fmt::bytes(u.recv));
     let tw = c.measure(f.mid, &fmt::bytes(today.total())).0;
-    c.text(
-        f.small,
-        &split(today),
-        ix + tw + sc(8.0),
-        y + sc(44.0),
-        pal.dim,
-    );
+    c.text(f.small, &split(today), ix + tw + sc(8.0), y + sc(44.0), pal.dim);
     let mw = c.measure(f.mid, &fmt::bytes(month.total())).0;
-    let ms = c.ellipsize(
-        f.small,
-        &split(month),
-        right - sc(12.0) - (col2 + mw + sc(8.0)),
-    );
+    let ms = c.ellipsize(f.small, &split(month), right - sc(12.0) - (col2 + mw + sc(8.0)));
     c.text(f.small, &ms, col2 + mw + sc(8.0), y + sc(44.0), pal.dim);
     if let Some((used, pct)) = cap {
         let by = y + sc(USAGE);
-        let label = format!(
-            "{} of {:.0} GB  ({:.0}%)",
-            fmt::bytes(used),
-            a.s.data_cap_gb,
-            pct
-        );
+        let label = format!("{} of {:.0} GB  ({:.0}%)", fmt::bytes(used), a.s.data_cap_gb, pct);
         let lw = c.measure(f.small, &label).0;
-        let bar = Rect {
-            l: ix,
-            t: by,
-            r: right - sc(14.0) - lw - sc(10.0),
-            b: by + sc(8.0),
-        };
+        let bar = Rect { l: ix, t: by, r: right - sc(14.0) - lw - sc(10.0), b: by + sc(8.0) };
         c.fill_round(bar, 4.0 * scale, pal.track);
         let fw = (bar.w() as f64 * (pct / 100.0).min(1.0)) as i32;
         let col = a.heat(accent(Metric::Down, a.dark), pct as f32);
         if fw > 0 {
-            c.fill_round(
-                Rect {
-                    r: bar.l + fw.max(bar.h()),
-                    ..bar
-                },
-                4.0 * scale,
-                col,
-            );
+            c.fill_round(Rect { r: bar.l + fw.max(bar.h()), ..bar }, 4.0 * scale, col);
         }
-        c.text(
-            f.small,
-            &label,
-            right - sc(14.0) - lw,
-            by - sc(4.0),
-            pal.dim,
-        );
+        c.text(f.small, &label, right - sc(14.0) - lw, by - sc(4.0), pal.dim);
     }
     y += uh + gap;
 
     // ---- processes
     let ph = sc(PROCS);
-    card(
-        c,
-        Rect {
-            l: pad,
-            t: y,
-            r: right,
-            b: y + ph,
-        },
-        rad,
-        pal,
-        false,
-    );
+    card(c, Rect { l: pad, t: y, r: right, b: y + ph }, rad, pal, false);
     let inner_l = ix;
     let inner_r = right - sc(14.0);
     let col_w = (inner_r - inner_l) / 3;
     type Row = (u32, String, String);
     let cols: [(&str, Vec<Row>); 3] = [
-        (
-            "TOP CPU",
-            s.top_cpu
-                .iter()
-                .map(|p| (p.pid, p.name.clone(), format!("{:.1}%", p.cpu)))
-                .collect(),
-        ),
-        (
-            "TOP MEMORY",
-            s.top_mem
-                .iter()
-                .map(|p| (p.pid, p.name.clone(), fmt::bytes(p.mem)))
-                .collect(),
-        ),
-        (
-            "TOP DISK I/O",
-            s.top_io
-                .iter()
-                .map(|p| (p.pid, p.name.clone(), fmt::rate(p.io_bps)))
-                .collect(),
-        ),
+        ("TOP CPU", s.top_cpu.iter().map(|p| (p.pid, p.name.clone(), format!("{:.1}%", p.cpu))).collect()),
+        ("TOP MEMORY", s.top_mem.iter().map(|p| (p.pid, p.name.clone(), fmt::bytes(p.mem))).collect()),
+        ("TOP DISK I/O", s.top_io.iter().map(|p| (p.pid, p.name.clone(), fmt::rate(p.io_bps))).collect()),
     ];
     for (i, (title, list)) in cols.iter().enumerate() {
         let x = inner_l + i as i32 * col_w;
@@ -1242,12 +834,7 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
         }
         for (j, (pid, name, val)) in list.iter().take(5).enumerate() {
             let ry = y + sc(28.0) + j as i32 * sc(PROC_ROW);
-            let row = Rect {
-                l: x - sc(5.0),
-                t: ry - sc(1.0),
-                r: xr + sc(5.0),
-                b: ry + sc(PROC_ROW) - sc(1.0),
-            };
+            let row = Rect { l: x - sc(5.0), t: ry - sc(1.0), r: xr + sc(5.0), b: ry + sc(PROC_ROW) - sc(1.0) };
             out.hits.push((row, PopupHit::Proc(*pid)));
             if e.hot(row) {
                 c.fill_round(row, 4.0 * scale, pal.chip);
@@ -1329,9 +916,7 @@ fn on_mouse_leave(hwnd: HWND) {
 }
 
 fn on_set_cursor(hwnd: HWND) -> bool {
-    let Some(a) = crate::app::app() else {
-        return false;
-    };
+    let Some(a) = crate::app::app() else { return false };
     let mut pt = POINT { x: 0, y: 0 };
     unsafe {
         GetCursorPos(&mut pt);
@@ -1339,20 +924,9 @@ fn on_set_cursor(hwnd: HWND) -> bool {
     }
     let hand = matches!(
         hit_at(a, pt.x, pt.y, true),
-        Some(
-            PopupHit::Range(_)
-                | PopupHit::TaskMgr
-                | PopupHit::ResMon
-                | PopupHit::NetSettings
-                | PopupHit::UsageReport
-        )
+        Some(PopupHit::Range(_) | PopupHit::TaskMgr | PopupHit::ResMon | PopupHit::NetSettings | PopupHit::UsageReport)
     );
-    unsafe {
-        SetCursor(LoadCursorW(
-            std::ptr::null_mut(),
-            if hand { IDC_HAND } else { IDC_ARROW },
-        ))
-    };
+    unsafe { SetCursor(LoadCursorW(std::ptr::null_mut(), if hand { IDC_HAND } else { IDC_ARROW })) };
     true
 }
 
@@ -1398,12 +972,7 @@ fn on_right_click(l: LPARAM) {
         let mut pt = POINT { x: 0, y: 0 };
         unsafe {
             GetCursorPos(&mut pt);
-            PostMessageW(
-                owner,
-                crate::tray::WM_TRAY,
-                ((pt.y as u16 as usize) << 16) | pt.x as u16 as usize,
-                WM_CONTEXTMENU as isize,
-            );
+            PostMessageW(owner, crate::tray::WM_TRAY, ((pt.y as u16 as usize) << 16) | pt.x as u16 as usize, WM_CONTEXTMENU as isize);
         }
     }
 }
@@ -1439,14 +1008,7 @@ fn image_path(pid: u32) -> Option<String> {
 
 fn message(owner: HWND, text: &str, title: &str, flags: u32) -> i32 {
     let (t, c) = (wide(text), wide(title));
-    unsafe {
-        MessageBoxW(
-            owner,
-            t.as_ptr(),
-            c.as_ptr(),
-            flags | MB_TOPMOST | MB_SETFOREGROUND,
-        )
-    }
+    unsafe { MessageBoxW(owner, t.as_ptr(), c.as_ptr(), flags | MB_TOPMOST | MB_SETFOREGROUND) }
 }
 
 /// Right-click menu for a process row. Runs nested message loops (menu,
@@ -1462,26 +1024,14 @@ fn proc_menu(pid: u32) {
         AppendMenuW(hm, MF_STRING | MF_GRAYED, 0, title.as_ptr());
         AppendMenuW(hm, MF_SEPARATOR, 0, std::ptr::null());
         AppendMenuW(hm, MF_STRING, ID_END, wide("End task").as_ptr());
-        AppendMenuW(
-            hm,
-            MF_STRING,
-            ID_LOCATION,
-            wide("Open file location").as_ptr(),
-        );
+        AppendMenuW(hm, MF_STRING, ID_LOCATION, wide("Open file location").as_ptr());
         let mut pt = POINT { x: 0, y: 0 };
         GetCursorPos(&mut pt);
         if let Some(a) = crate::app::app() {
             a.menu_open = true;
         }
         SetForegroundWindow(owner);
-        let cmd = TrackPopupMenuEx(
-            hm,
-            TPM_RETURNCMD | TPM_RIGHTBUTTON,
-            pt.x,
-            pt.y,
-            owner,
-            std::ptr::null(),
-        );
+        let cmd = TrackPopupMenuEx(hm, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, owner, std::ptr::null());
         DestroyMenu(hm);
         PostMessageW(owner, WM_NULL, 0, 0);
         if let Some(a) = crate::app::app() {
@@ -1509,31 +1059,14 @@ fn proc_menu(pid: u32) {
 fn end_task(owner: HWND, pid: u32, name: &str) {
     // The list may be a moment stale: make sure the PID still is that program.
     if let Some(p) = image_path(pid) {
-        let stem = std::path::Path::new(&p)
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
+        let stem = std::path::Path::new(&p).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
         if !stem.eq_ignore_ascii_case(name) {
-            message(
-                owner,
-                &format!("\"{}\" is no longer running.", name),
-                "End task",
-                MB_OK | MB_ICONINFORMATION,
-            );
+            message(owner, &format!("\"{}\" is no longer running.", name), "End task", MB_OK | MB_ICONINFORMATION);
             return;
         }
     }
-    let ask = format!(
-        "End \"{}\" (PID {})?\n\nAny unsaved data in this program will be lost.",
-        name, pid
-    );
-    if message(
-        owner,
-        &ask,
-        "End task",
-        MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
-    ) != IDYES
-    {
+    let ask = format!("End \"{}\" (PID {})?\n\nAny unsaved data in this program will be lost.", name, pid);
+    if message(owner, &ask, "End task", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES {
         return;
     }
     let ok = unsafe {

@@ -207,13 +207,7 @@ pub struct Episodes {
 impl Episodes {
     /// Advance with this tick's debounced state. `why` is only called when a reason is needed
     /// (opening an episode, or upgrading a generic one). Returns true when an episode closed.
-    pub fn step(
-        &mut self,
-        now_ms: u64,
-        capped_since: Option<u64>,
-        ceiling: Option<f32>,
-        why: impl Fn() -> Reason,
-    ) -> bool {
+    pub fn step(&mut self, now_ms: u64, capped_since: Option<u64>, ceiling: Option<f32>, why: impl Fn() -> Reason) -> bool {
         match (capped_since, &mut self.open) {
             (Some(_), Some(e)) => {
                 e.dur_ms = now_ms.saturating_sub(e.start_ms);
@@ -273,18 +267,9 @@ impl Episodes {
                 return;
             }
         }
-        let e = Episode {
-            start_ms: t_ms.saturating_sub(dur_ms),
-            dur_ms,
-            min_ceiling: None,
-            reason: FW_REASON.into(),
-        };
+        let e = Episode { start_ms: t_ms.saturating_sub(dur_ms), dur_ms, min_ceiling: None, reason: FW_REASON.into() };
         // Keep the list in time order (events can arrive slightly late).
-        let at = self
-            .done
-            .iter()
-            .position(|x| x.start_ms > e.start_ms)
-            .unwrap_or(self.done.len());
+        let at = self.done.iter().position(|x| x.start_ms > e.start_ms).unwrap_or(self.done.len());
         self.done.insert(at, e);
         self.prune(t_ms);
     }
@@ -369,9 +354,7 @@ impl HeldBack {
                 self.mode = Some(m);
             }
         }
-        if c.display_on
-            && (now.saturating_sub(self.fg_last_ms) >= FG_EVERY_MS || now < self.fg_last_ms)
-        {
+        if c.display_on && (now.saturating_sub(self.fg_last_ms) >= FG_EVERY_MS || now < self.fg_last_ms) {
             self.fg_last_ms = now;
             // Our own window in front (e.g. the main window) says nothing; keep the last app.
             if let Some(fg) = foreground_app() {
@@ -389,10 +372,7 @@ impl HeldBack {
             mode: self.mode,
             fg_eco: eco_name(&self.fg),
         };
-        if self
-            .eps
-            .step(now, self.capped_since, ceiling, || reason(&inputs))
-        {
+        if self.eps.step(now, self.capped_since, ceiling, || reason(&inputs)) {
             self.changes = self.changes.wrapping_add(1);
         }
 
@@ -459,11 +439,7 @@ impl HeldBack {
                 obj(vec![
                     ("s", Json::Num(e.start_ms as f64)),
                     ("d", Json::Num(e.dur_ms as f64)),
-                    (
-                        "m",
-                        e.min_ceiling
-                            .map_or(Json::Null, |m| Json::Num(m.round() as f64)),
-                    ),
+                    ("m", e.min_ceiling.map_or(Json::Null, |m| Json::Num(m.round() as f64))),
                     ("r", Json::Str(e.reason.clone())),
                 ])
             })
@@ -478,9 +454,7 @@ impl HeldBack {
     }
 
     pub fn load(&mut self, j: &Json) {
-        let Some(list) = j.get("episodes").and_then(Json::as_arr) else {
-            return;
-        };
+        let Some(list) = j.get("episodes").and_then(Json::as_arr) else { return };
         let mut done: Vec<Episode> = list
             .iter()
             .filter_map(|x| {
@@ -488,12 +462,7 @@ impl HeldBack {
                 let dur_ms = num(x, "d")? as u64;
                 let min_ceiling = num(x, "m").map(|m| m.clamp(0.0, 100.0) as f32);
                 let reason: String = x.get("r")?.as_str()?.chars().take(80).collect();
-                Some(Episode {
-                    start_ms,
-                    dur_ms,
-                    min_ceiling,
-                    reason,
-                })
+                Some(Episode { start_ms, dur_ms, min_ceiling, reason })
             })
             .collect();
         done.sort_by_key(|e| e.start_ms);
@@ -597,34 +566,19 @@ pub struct State<'a> {
 pub fn describe(s: &State) -> (Tone, String, Vec<String>, Visual) {
     let eco_app = s.front.filter(|f| f.1 == Some(true)).map(|f| f.0);
     let (tone, headline) = match s.ceiling {
-        None => (
-            Tone::Unavailable,
-            "This PC does not report CPU limits.".to_string(),
-        ),
+        None => (Tone::Unavailable, "This PC does not report CPU limits.".to_string()),
         Some(c) if s.capped => {
             let pct = c.round() as i32;
-            let tone = if s.reason == Reason::Thermal {
-                Tone::Bad
-            } else {
-                Tone::Warn
-            };
+            let tone = if s.reason == Reason::Thermal { Tone::Bad } else { Tone::Warn };
             let h = match &s.reason {
-                Reason::OnBattery(Some(m)) => {
-                    format!("{} on battery. Capped at {}%.", mode_name(*m), pct)
-                }
+                Reason::OnBattery(Some(m)) => format!("{} on battery. Capped at {}%.", mode_name(*m), pct),
                 r => format!("Capped at {}%. {}.", pct, r.text()),
             };
             (tone, h)
         }
         Some(_) => match eco_app {
-            Some(app) => (
-                Tone::Info,
-                format!("{} is in Efficiency mode. It may feel slow.", app),
-            ),
-            None => (
-                Tone::Good,
-                "Full power. Nothing is holding this PC back.".to_string(),
-            ),
+            Some(app) => (Tone::Info, format!("{} is in Efficiency mode. It may feel slow.", app)),
+            None => (Tone::Good, "Full power. Nothing is holding this PC back.".to_string()),
         },
     };
 
@@ -634,11 +588,7 @@ pub fn describe(s: &State) -> (Tone, String, Vec<String>, Visual) {
         None => "Power mode: unknown.".into(),
     };
     if s.battery {
-        first += if s.on_battery {
-            " On battery."
-        } else {
-            " Plugged in."
-        };
+        first += if s.on_battery { " On battery." } else { " Plugged in." };
     }
     if let Some((name, eco)) = s.front {
         first += &match eco {
@@ -671,11 +621,7 @@ pub fn describe(s: &State) -> (Tone, String, Vec<String>, Visual) {
         Some(_) if s.capped => s.reason.text(),
         _ => "none".into(),
     };
-    let gauge = Visual::Gauge {
-        ceiling: s.ceiling.map(|c| c.clamp(0.0, 100.0)),
-        used: s.cpu.clamp(0.0, 100.0),
-        reason,
-    };
+    let gauge = Visual::Gauge { ceiling: s.ceiling.map(|c| c.clamp(0.0, 100.0)), used: s.cpu.clamp(0.0, 100.0), reason };
     (tone, headline, lines, gauge)
 }
 
@@ -685,31 +631,16 @@ fn fw_recent(fw_last_ms: Option<u64>, now_ms: u64) -> bool {
 
 /// Foreground app name when it is known to run in Efficiency mode.
 fn eco_name(fg: &Option<Foreground>) -> Option<&str> {
-    fg.as_ref()
-        .filter(|f| f.eco == Some(true))
-        .map(|f| f.name.as_str())
+    fg.as_ref().filter(|f| f.eco == Some(true)).map(|f| f.name.as_str())
 }
 
 fn episode_item(e: &Episode) -> Item {
     let title = match e.min_ceiling {
-        Some(c) => format!(
-            "Capped at {}% for {}.",
-            c.round() as i32,
-            dur_text(e.dur_ms)
-        ),
+        Some(c) => format!("Capped at {}% for {}.", c.round() as i32, dur_text(e.dur_ms)),
         None => format!("Firmware limit for {}.", dur_text(e.dur_ms)),
     };
-    let tone = if e.min_ceiling.is_none() || e.reason == Reason::Thermal.text() {
-        Tone::Bad
-    } else {
-        Tone::Warn
-    };
-    Item {
-        t_ms: e.start_ms,
-        tone,
-        title,
-        detail: format!("{}.", e.reason),
-    }
+    let tone = if e.min_ceiling.is_none() || e.reason == Reason::Thermal.text() { Tone::Bad } else { Tone::Warn };
+    Item { t_ms: e.start_ms, tone, title, detail: format!("{}.", e.reason) }
 }
 
 /// "40 s", "3 min", "2 h 5 min".
@@ -773,9 +704,7 @@ unsafe extern "system" fn on_power_mode(mode: i32, context: *const c_void) {
 /// the callback posts `WM_APP_POWER_MODE` to `hwnd`. Looked up at run time because the export
 /// only exists on Windows 10 1809+; older builds simply get no power mode.
 pub fn register_power_mode(hwnd: isize) {
-    use windows_sys::Win32::System::LibraryLoader::{
-        GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32,
-    };
+    use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32};
     use windows_sys::Win32::System::Power::{EFFECTIVE_POWER_MODE_V1, EFFECTIVE_POWER_MODE_V2};
     if !MODE_HANDLE.load(Ordering::Relaxed).is_null() {
         return;
@@ -788,18 +717,14 @@ pub fn register_power_mode(hwnd: isize) {
         if m.is_null() {
             return;
         }
-        let Some(f) = GetProcAddress(
-            m,
-            b"PowerRegisterForEffectivePowerModeNotifications\0".as_ptr(),
-        ) else {
+        let Some(f) = GetProcAddress(m, b"PowerRegisterForEffectivePowerModeNotifications\0".as_ptr()) else {
             return;
         };
         let register: RegisterFn = std::mem::transmute(f);
         // V2 adds game mode / mixed reality; fall back to V1 on builds that reject it.
         for v in [EFFECTIVE_POWER_MODE_V2, EFFECTIVE_POWER_MODE_V1] {
             let mut h: *mut c_void = null_mut();
-            if register(v, Some(on_power_mode), hwnd as *const c_void, &mut h) >= 0 && !h.is_null()
-            {
+            if register(v, Some(on_power_mode), hwnd as *const c_void, &mut h) >= 0 && !h.is_null() {
                 MODE_HANDLE.store(h, Ordering::Relaxed);
                 return;
             }
@@ -819,16 +744,7 @@ fn active_plan_name() -> Option<String> {
     let mut buf = [0u16; 128];
     let mut size = (buf.len() * 2) as u32;
     // SAFETY: `guid` is valid; `buf` is writable for `size` bytes.
-    let r = unsafe {
-        PowerReadFriendlyName(
-            null_mut(),
-            guid,
-            null(),
-            null(),
-            buf.as_mut_ptr().cast(),
-            &mut size,
-        )
-    };
+    let r = unsafe { PowerReadFriendlyName(null_mut(), guid, null(), null(), buf.as_mut_ptr().cast(), &mut size) };
     // SAFETY: allocated by PowerGetActiveScheme, freed exactly once.
     unsafe { LocalFree(guid as _) };
     if r != 0 {
@@ -847,12 +763,9 @@ fn foreground_app() -> Option<Foreground> {
     use windows_sys::Win32::System::Threading::{
         GetCurrentProcessId, GetProcessInformation, OpenProcess, ProcessPowerThrottling,
         QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_POWER_THROTTLING_CURRENT_VERSION,
-        PROCESS_POWER_THROTTLING_EXECUTION_SPEED, PROCESS_POWER_THROTTLING_STATE,
-        PROCESS_QUERY_LIMITED_INFORMATION,
+        PROCESS_POWER_THROTTLING_EXECUTION_SPEED, PROCESS_POWER_THROTTLING_STATE, PROCESS_QUERY_LIMITED_INFORMATION,
     };
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowThreadProcessId,
-    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
     // SAFETY: plain calls with valid out pointers; the process handle is closed before returning.
     unsafe {
         let w = GetForegroundWindow();
@@ -883,17 +796,13 @@ fn foreground_app() -> Option<Foreground> {
         let eco = ok.then_some(st.ControlMask & exec != 0 && st.StateMask & exec != 0);
         let mut path = [0u16; 1024];
         let mut len = path.len() as u32;
-        let named =
-            QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, path.as_mut_ptr(), &mut len) != 0;
+        let named = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, path.as_mut_ptr(), &mut len) != 0;
         CloseHandle(h);
         if !named {
             return None;
         }
         let full = String::from_utf16_lossy(&path[..(len as usize).min(path.len())]);
-        let name = std::path::Path::new(&full)
-            .file_stem()?
-            .to_string_lossy()
-            .into_owned();
+        let name = std::path::Path::new(&full).file_stem()?.to_string_lossy().into_owned();
         Some(Foreground { name, eco })
     }
 }
@@ -903,14 +812,7 @@ mod tests {
     use super::*;
 
     fn base() -> Inputs<'static> {
-        Inputs {
-            passive: None,
-            fw_recent: false,
-            battery: true,
-            on_battery: false,
-            mode: Some(2),
-            fg_eco: None,
-        }
+        Inputs { passive: None, fw_recent: false, battery: true, on_battery: false, mode: Some(2), fg_eco: None }
     }
 
     /// A desktop: no battery, nothing limiting, 6% CPU.
@@ -943,186 +845,64 @@ mod tests {
         let (tone, head, lines, vis) = describe(&desktop());
         assert_eq!(tone, Tone::Good);
         assert_eq!(head, "Full power. Nothing is holding this PC back.");
-        assert_eq!(
-            vis,
-            Visual::Gauge {
-                ceiling: Some(100.0),
-                used: 6.0,
-                reason: "none".into()
-            }
-        );
+        assert_eq!(vis, Visual::Gauge { ceiling: Some(100.0), used: 6.0, reason: "none".into() });
         assert_eq!(lines[0], "Power mode: Balanced. In front: Code.");
         no_battery_words(&lines, &head);
         // Energy saver on a desktop is named as such, never "battery saver".
-        let i = Inputs {
-            battery: false,
-            mode: Some(0),
-            ..base()
-        };
+        let i = Inputs { battery: false, mode: Some(0), ..base() };
         assert_eq!(reason(&i), Reason::EnergySaver);
-        let st = State {
-            ceiling: Some(70.0),
-            capped: true,
-            reason: reason(&i),
-            mode: Some(0),
-            ..desktop()
-        };
+        let st = State { ceiling: Some(70.0), capped: true, reason: reason(&i), mode: Some(0), ..desktop() };
         let (tone, head, lines, vis) = describe(&st);
         assert_eq!(tone, Tone::Warn);
         assert_eq!(head, "Capped at 70%. Energy saver is on.");
         assert_eq!(lines[0], "Power mode: Energy saver. In front: Code.");
         no_battery_words(&lines, &head);
-        assert_eq!(
-            vis,
-            Visual::Gauge {
-                ceiling: Some(70.0),
-                used: 6.0,
-                reason: "Energy saver is on".into()
-            }
-        );
+        assert_eq!(vis, Visual::Gauge { ceiling: Some(70.0), used: 6.0, reason: "Energy saver is on".into() });
     }
 
     #[test]
     fn limits_not_reported_still_show_cpu_use() {
-        let st = State {
-            ceiling: None,
-            perf: None,
-            ..desktop()
-        };
+        let st = State { ceiling: None, perf: None, ..desktop() };
         let (tone, head, lines, vis) = describe(&st);
         assert_eq!(tone, Tone::Unavailable);
         assert_eq!(head, "This PC does not report CPU limits.");
-        assert_eq!(
-            vis,
-            Visual::Gauge {
-                ceiling: None,
-                used: 6.0,
-                reason: "none".into()
-            }
-        );
+        assert_eq!(vis, Visual::Gauge { ceiling: None, used: 6.0, reason: "none".into() });
         no_battery_words(&lines, &head);
     }
 
     #[test]
     fn laptop_wording() {
-        let st = State {
-            battery: true,
-            on_battery: true,
-            ..desktop()
-        };
+        let st = State { battery: true, on_battery: true, ..desktop() };
         let (tone, head, lines, _) = describe(&st);
         assert_eq!(tone, Tone::Good);
         assert_eq!(head, "Full power. Nothing is holding this PC back.");
-        assert_eq!(
-            lines[0],
-            "Power mode: Balanced. On battery. In front: Code."
-        );
-        let st = State {
-            battery: true,
-            ceiling: Some(62.0),
-            capped: true,
-            reason: Reason::Thermal,
-            passive: Some(62.0),
-            cpu: 140.0,
-            ..desktop()
-        };
+        assert_eq!(lines[0], "Power mode: Balanced. On battery. In front: Code.");
+        let st = State { battery: true, ceiling: Some(62.0), capped: true, reason: Reason::Thermal, passive: Some(62.0), cpu: 140.0, ..desktop() };
         let (tone, head, lines, vis) = describe(&st);
         assert_eq!(tone, Tone::Bad);
         assert_eq!(head, "Capped at 62%. Firmware thermal limit.");
-        assert_eq!(
-            lines[0],
-            "Power mode: Balanced. Plugged in. In front: Code."
-        );
-        assert!(lines
-            .iter()
-            .any(|l| l == "Current speed 64% of normal. Thermal limit 62%."));
-        assert_eq!(
-            vis,
-            Visual::Gauge {
-                ceiling: Some(62.0),
-                used: 100.0,
-                reason: "Firmware thermal limit".into()
-            }
-        );
-        let st = State {
-            front: Some(("Code", Some(true))),
-            ..desktop()
-        };
+        assert_eq!(lines[0], "Power mode: Balanced. Plugged in. In front: Code.");
+        assert!(lines.iter().any(|l| l == "Current speed 64% of normal. Thermal limit 62%."));
+        assert_eq!(vis, Visual::Gauge { ceiling: Some(62.0), used: 100.0, reason: "Firmware thermal limit".into() });
+        let st = State { front: Some(("Code", Some(true))), ..desktop() };
         let (tone, head, ..) = describe(&st);
-        assert_eq!(
-            (tone, head.as_str()),
-            (Tone::Info, "Code is in Efficiency mode. It may feel slow.")
-        );
+        assert_eq!((tone, head.as_str()), (Tone::Info, "Code is in Efficiency mode. It may feel slow."));
     }
 
     #[test]
     fn reason_priority() {
-        let all = Inputs {
-            passive: Some(80.0),
-            fw_recent: true,
-            battery: true,
-            on_battery: true,
-            mode: Some(0),
-            fg_eco: Some("x"),
-        };
+        let all = Inputs { passive: Some(80.0), fw_recent: true, battery: true, on_battery: true, mode: Some(0), fg_eco: Some("x") };
         assert_eq!(reason(&all), Reason::Thermal);
-        assert_eq!(
-            reason(&Inputs {
-                passive: Some(100.0),
-                fw_recent: true,
-                ..base()
-            }),
-            Reason::Thermal
-        );
-        assert_eq!(
-            reason(&Inputs {
-                passive: Some(100.0),
-                ..all.clone()
-            }),
-            Reason::Thermal
-        ); // fw_recent
-        let no_heat = Inputs {
-            passive: Some(100.0),
-            fw_recent: false,
-            ..all
-        };
+        assert_eq!(reason(&Inputs { passive: Some(100.0), fw_recent: true, ..base() }), Reason::Thermal);
+        assert_eq!(reason(&Inputs { passive: Some(100.0), ..all.clone() }), Reason::Thermal); // fw_recent
+        let no_heat = Inputs { passive: Some(100.0), fw_recent: false, ..all };
         assert_eq!(reason(&no_heat), Reason::BatterySaver);
-        assert_eq!(
-            reason(&Inputs {
-                mode: Some(1),
-                ..no_heat.clone()
-            }),
-            Reason::EfficiencyOnBattery
-        );
-        assert_eq!(
-            reason(&Inputs {
-                mode: Some(1),
-                on_battery: false,
-                ..no_heat.clone()
-            }),
-            Reason::EfficiencyOnAc
-        );
-        assert_eq!(
-            reason(&Inputs {
-                mode: Some(2),
-                on_battery: false,
-                ..no_heat.clone()
-            }),
-            Reason::AppEco("x".into())
-        );
-        assert_eq!(
-            reason(&Inputs {
-                mode: Some(2),
-                fg_eco: None,
-                ..no_heat.clone()
-            }),
-            Reason::OnBattery(Some(2))
-        );
+        assert_eq!(reason(&Inputs { mode: Some(1), ..no_heat.clone() }), Reason::EfficiencyOnBattery);
+        assert_eq!(reason(&Inputs { mode: Some(1), on_battery: false, ..no_heat.clone() }), Reason::EfficiencyOnAc);
+        assert_eq!(reason(&Inputs { mode: Some(2), on_battery: false, ..no_heat.clone() }), Reason::AppEco("x".into()));
+        assert_eq!(reason(&Inputs { mode: Some(2), fg_eco: None, ..no_heat.clone() }), Reason::OnBattery(Some(2)));
         assert_eq!(reason(&base()), Reason::System);
-        assert_eq!(
-            Reason::AppEco("chrome".into()).text(),
-            "chrome is in Efficiency mode"
-        );
+        assert_eq!(Reason::AppEco("chrome".into()).text(), "chrome is in Efficiency mode");
         assert_eq!(Reason::OnBattery(Some(2)).text(), "Balanced on battery");
     }
 
@@ -1181,15 +961,7 @@ mod tests {
     fn episodes_capped_and_pruned() {
         let mut e = Episodes::default();
         for i in 0..60u64 {
-            e.push(
-                Episode {
-                    start_ms: i * 1000,
-                    dur_ms: 10,
-                    min_ceiling: Some(50.0),
-                    reason: "x".into(),
-                },
-                60_000,
-            );
+            e.push(Episode { start_ms: i * 1000, dur_ms: 10, min_ceiling: Some(50.0), reason: "x".into() }, 60_000);
         }
         assert_eq!(e.done.len(), EPISODE_CAP);
         assert_eq!(e.done[0].start_ms, 10_000);
@@ -1213,22 +985,10 @@ mod tests {
 
     #[test]
     fn fw_seconds_parsing() {
-        let mut ev = SysEvent {
-            provider: FW_PROVIDER.into(),
-            id: 37,
-            ..Default::default()
-        };
-        ev.data = vec![
-            ("Group".into(), "0".into()),
-            ("Number".into(), "3".into()),
-            ("Seconds".into(), "41".into()),
-        ];
+        let mut ev = SysEvent { provider: FW_PROVIDER.into(), id: 37, ..Default::default() };
+        ev.data = vec![("Group".into(), "0".into()), ("Number".into(), "3".into()), ("Seconds".into(), "41".into())];
         assert_eq!(fw_seconds(&ev), 41);
-        ev.data = vec![
-            ("0".into(), "0".into()),
-            ("1".into(), "3".into()),
-            ("2".into(), "17".into()),
-        ];
+        ev.data = vec![("0".into(), "0".into()), ("1".into(), "3".into()), ("2".into(), "17".into())];
         assert_eq!(fw_seconds(&ev), 17);
         ev.data.clear();
         assert_eq!(fw_seconds(&ev), 0);

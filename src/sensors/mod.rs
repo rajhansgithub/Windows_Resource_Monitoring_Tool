@@ -130,10 +130,7 @@ impl Clock {
         let mut f = 0i64;
         // SAFETY: valid out pointer.
         unsafe { QueryPerformanceFrequency(&mut f) };
-        Clock {
-            freq: f.max(1) as f64,
-            last: None,
-        }
+        Clock { freq: f.max(1) as f64, last: None }
     }
 
     /// Seconds since the previous call (0 on the first call).
@@ -141,9 +138,7 @@ impl Clock {
         let mut now = 0i64;
         // SAFETY: valid out pointer.
         unsafe { QueryPerformanceCounter(&mut now) };
-        let elapsed = self
-            .last
-            .map_or(0.0, |l| (now - l).max(0) as f64 / self.freq);
+        let elapsed = self.last.map_or(0.0, |l| (now - l).max(0) as f64 / self.freq);
         self.last = Some(now);
         elapsed
     }
@@ -204,17 +199,9 @@ impl Sensors {
             0.0
         };
 
-        (s.gpu, s.vram_used) = if opts.gpu {
-            self.gpu.sample()
-        } else {
-            (None, None)
-        };
+        (s.gpu, s.vram_used) = if opts.gpu { self.gpu.sample() } else { (None, None) };
 
-        (s.gpu_temp, s.gpu_fan_rpm) = if opts.gpu {
-            self.gpu_temp.sample()
-        } else {
-            (None, None)
-        };
+        (s.gpu_temp, s.gpu_fan_rpm) = if opts.gpu { self.gpu_temp.sample() } else { (None, None) };
         s.gpu_power_w = None;
         (s.disk_used, s.disk_total, s.disk_used_pct) = self.sys_drive.sample(elapsed);
 

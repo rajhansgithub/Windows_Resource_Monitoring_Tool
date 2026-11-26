@@ -97,13 +97,7 @@ pub fn breakdown(m: &MemSample) -> Breakdown {
     let kernel = take(m.pool());
     let compressed = take(m.compressed.unwrap_or(0));
     let cache = take(m.cache.saturating_sub(m.avail));
-    Breakdown {
-        apps: rest,
-        compressed,
-        kernel,
-        cache,
-        free,
-    }
+    Breakdown { apps: rest, compressed, kernel, cache, free }
 }
 
 /// Boot id: boot time in unix minutes (now - uptime, rounded). `GetTickCount64` counts sleep,
@@ -136,8 +130,7 @@ impl Trend {
             self.last_pt_ms = 0;
         }
         self.last_uptime = uptime_secs;
-        let due =
-            now_ms.saturating_sub(self.last_pt_ms) >= POINT_EVERY_MS || now_ms < self.last_pt_ms;
+        let due = now_ms.saturating_sub(self.last_pt_ms) >= POINT_EVERY_MS || now_ms < self.last_pt_ms;
         if self.pts.is_empty() || due {
             self.last_pt_ms = now_ms;
             self.pts.push((uptime_secs as f32 / 3600.0, pool_gb));
@@ -160,9 +153,7 @@ impl Trend {
 
     /// The points of the last `FIT_WINDOW_DAYS` of uptime (what the slope is fitted on).
     pub fn recent(&self) -> &[(f32, f32)] {
-        let Some(last) = self.pts.last() else {
-            return &self.pts;
-        };
+        let Some(last) = self.pts.last() else { return &self.pts };
         let from = last.0 - FIT_WINDOW_DAYS * 24.0;
         let i = self.pts.iter().position(|p| p.0 >= from).unwrap_or(0);
         &self.pts[i..]
@@ -192,8 +183,7 @@ pub fn slope_per_day(pts: &[(f32, f32)]) -> Option<f32> {
         sxy += dx * (y as f64 - my);
         sxx += dx * dx;
     }
-    let spread = pts.iter().map(|p| p.0).fold(f32::MIN, f32::max)
-        - pts.iter().map(|p| p.0).fold(f32::MAX, f32::min);
+    let spread = pts.iter().map(|p| p.0).fold(f32::MIN, f32::max) - pts.iter().map(|p| p.0).fold(f32::MAX, f32::min);
     if sxx <= 0.0 || spread < 1.0 {
         return None;
     }
@@ -203,40 +193,24 @@ pub fn slope_per_day(pts: &[(f32, f32)]) -> Option<f32> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Verdict {
     Learning,
-    Steady {
-        pool_gb: f32,
-    },
+    Steady { pool_gb: f32 },
     /// Growing, but not for long enough to call it a leak.
-    Growing {
-        per_day: f32,
-    },
-    Leak {
-        per_day: f32,
-        days: f32,
-    },
-    Large {
-        pool_gb: f32,
-        share: f32,
-    },
+    Growing { per_day: f32 },
+    Leak { per_day: f32, days: f32 },
+    Large { pool_gb: f32, share: f32 },
 }
 
 /// Judge the kernel pool. `slope` in GB/day over `span_days` of the current boot.
 pub fn verdict(pool_gb: f32, total_gb: f32, slope: Option<f32>, span_days: f32) -> Verdict {
     if total_gb > 0.0 && pool_gb / total_gb > LARGE_SHARE {
-        return Verdict::Large {
-            pool_gb,
-            share: pool_gb / total_gb,
-        };
+        return Verdict::Large { pool_gb, share: pool_gb / total_gb };
     }
     let Some(per_day) = slope.filter(|_| span_days >= LEARN_MIN_DAYS) else {
         return Verdict::Learning;
     };
     if per_day >= LEAK_GB_PER_DAY {
         if span_days >= LEAK_MIN_DAYS {
-            Verdict::Leak {
-                per_day,
-                days: span_days,
-            }
+            Verdict::Leak { per_day, days: span_days }
         } else {
             Verdict::Growing { per_day }
         }
@@ -293,11 +267,7 @@ fn median(v: &[f32]) -> f32 {
     let mut s = v.to_vec();
     s.sort_by(f32::total_cmp);
     let n = s.len();
-    if n % 2 == 1 {
-        s[n / 2]
-    } else {
-        (s[n / 2 - 1] + s[n / 2]) / 2.0
-    }
+    if n % 2 == 1 { s[n / 2] } else { (s[n / 2 - 1] + s[n / 2]) / 2.0 }
 }
 
 /// Open handle to the Memory Compression process.
@@ -382,27 +352,13 @@ impl Ghost {
         }
         let boot = self.trend.boot;
         let uptime_h = uptime_secs as f32 / 3600.0;
-        let mut save =
-            new_boot || now_ms.saturating_sub(self.last_row_save_ms) >= ROW_SAVE_EVERY_MS;
+        let mut save = new_boot || now_ms.saturating_sub(self.last_row_save_ms) >= ROW_SAVE_EVERY_MS;
         let i = match self.rows.iter().position(|r| r.day == day) {
             Some(i) => i,
             None => {
                 save = true;
-                let at = self
-                    .rows
-                    .iter()
-                    .position(|r| r.day > day)
-                    .unwrap_or(self.rows.len());
-                self.rows.insert(
-                    at,
-                    DayRow {
-                        day,
-                        max_gb: pool_gb,
-                        med_gb: pool_gb,
-                        uptime_h,
-                        boot,
-                    },
-                );
+                let at = self.rows.iter().position(|r| r.day > day).unwrap_or(self.rows.len());
+                self.rows.insert(at, DayRow { day, max_gb: pool_gb, med_gb: pool_gb, uptime_h, boot });
                 at
             }
         };
@@ -457,12 +413,7 @@ impl Ghost {
                 ])
             })
             .collect();
-        let pts = self
-            .trend
-            .pts
-            .iter()
-            .map(|p| Json::Arr(vec![r2(p.0), r2(p.1)]))
-            .collect();
+        let pts = self.trend.pts.iter().map(|p| Json::Arr(vec![r2(p.0), r2(p.1)])).collect();
         obj(vec![
             ("rows", Json::Arr(rows)),
             ("boot", Json::Num(self.trend.boot as f64)),
@@ -482,13 +433,7 @@ impl Ghost {
                     if !(ok(d) && ok(mx) && ok(md) && ok(u) && b >= 0.0) {
                         return None;
                     }
-                    Some(DayRow {
-                        day: d as u32,
-                        max_gb: mx as f32,
-                        med_gb: md as f32,
-                        uptime_h: u as f32,
-                        boot: b as u64,
-                    })
+                    Some(DayRow { day: d as u32, max_gb: mx as f32, med_gb: md as f32, uptime_h: u as f32, boot: b as u64 })
                 })
                 .collect();
             rows.sort_by_key(|r| r.day);
@@ -506,9 +451,7 @@ impl Ghost {
             .map(|a| {
                 a.iter()
                     .filter_map(|p| match p.as_arr()? {
-                        [Json::Num(x), Json::Num(y)] if ok(*x) && ok(*y) => {
-                            Some((*x as f32, *y as f32))
-                        }
+                        [Json::Num(x), Json::Num(y)] if ok(*x) && ok(*y) => Some((*x as f32, *y as f32)),
                         _ => None,
                     })
                     .take(POINTS_CAP)
@@ -537,14 +480,9 @@ impl Ghost {
         };
         let recent = self.trend.recent();
         let slope = slope_per_day(recent);
-        (p.tone, p.headline) =
-            headline(verdict(gb(m.pool()), gb(m.total), slope, span_days(recent)));
+        (p.tone, p.headline) = headline(verdict(gb(m.pool()), gb(m.total), slope, span_days(recent)));
         if m.commit_limit > 0 {
-            p.lines.push(format!(
-                "Committed: {:.1} of {:.1} GB.",
-                gb(m.commit),
-                gb(m.commit_limit)
-            ));
+            p.lines.push(format!("Committed: {:.1} of {:.1} GB.", gb(m.commit), gb(m.commit_limit)));
         }
         p.lines.push("Kernel pool is memory no app owns. Windows can't say which driver holds it without admin.".into());
         p.visual = Some(split(&breakdown(&m), m.compressed.is_some()));
@@ -561,11 +499,7 @@ impl Ghost {
                 markers,
                 bars: true,
                 slots: 0,
-                x_labels: super::day_span(
-                    self.rows[0].day,
-                    self.rows[self.rows.len() - 1].day,
-                    now_ms,
-                ),
+                x_labels: super::day_span(self.rows[0].day, self.rows[self.rows.len() - 1].day, now_ms),
                 tones: Vec::new(),
             });
         }
@@ -595,10 +529,7 @@ fn perf_info() -> Option<MemSample> {
     let mut pi: PERFORMANCE_INFORMATION = unsafe { std::mem::zeroed() };
     pi.cb = std::mem::size_of::<PERFORMANCE_INFORMATION>() as u32;
     // SAFETY: valid, sized out pointer.
-    if unsafe { GetPerformanceInfo(&mut pi, pi.cb) } == 0
-        || pi.PageSize == 0
-        || pi.PhysicalTotal == 0
-    {
+    if unsafe { GetPerformanceInfo(&mut pi, pi.cb) } == 0 || pi.PageSize == 0 || pi.PhysicalTotal == 0 {
         return None;
     }
     let pg = |n: usize| (n as u64).saturating_mul(pi.PageSize as u64);
@@ -623,9 +554,7 @@ fn open_process(pid: u32) -> Option<Comp> {
 
 /// Working set of a live process; `None` if it exited or the call fails.
 fn working_set(handle: isize) -> Option<u64> {
-    use windows_sys::Win32::System::ProcessStatus::{
-        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
-    };
+    use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
     use windows_sys::Win32::System::Threading::GetExitCodeProcess;
     const STILL_ACTIVE: u32 = 259;
     let mut code = 0u32;
@@ -678,19 +607,9 @@ mod tests {
         assert_eq!(b.apps, 7 * G);
         // Odd inputs: parts larger than used memory, missing compression, avail > total.
         for m in [
-            MemSample {
-                kpaged: 40 * G,
-                ..sample()
-            },
-            MemSample {
-                compressed: None,
-                cache: 0,
-                ..sample()
-            },
-            MemSample {
-                avail: 20 * G,
-                ..sample()
-            },
+            MemSample { kpaged: 40 * G, ..sample() },
+            MemSample { compressed: None, cache: 0, ..sample() },
+            MemSample { avail: 20 * G, ..sample() },
             MemSample::default(),
         ] {
             assert_eq!(sum(&breakdown(&m)), m.total);
@@ -700,26 +619,16 @@ mod tests {
     #[test]
     fn split_bar_parts() {
         let m = sample();
-        let Visual::Split { parts, unit } = split(&breakdown(&m), true) else {
-            panic!()
-        };
+        let Visual::Split { parts, unit } = split(&breakdown(&m), true) else { panic!() };
         assert_eq!(unit, "GB");
         let names: Vec<_> = parts.iter().map(|p| p.0).collect();
-        assert_eq!(
-            names,
-            ["Apps", "Compressed", "Kernel pool", "Cache", "Free"]
-        );
+        assert_eq!(names, ["Apps", "Compressed", "Kernel pool", "Cache", "Free"]);
         let total: f32 = parts.iter().map(|p| p.1).sum();
         assert!((total - 16.0).abs() < 1e-3, "{}", total);
         assert_eq!(parts[2].2, Role::Warn);
         // Without Memory Compression the part is left out, not shown as 0.
-        let m = MemSample {
-            compressed: None,
-            ..sample()
-        };
-        let Visual::Split { parts, .. } = split(&breakdown(&m), false) else {
-            panic!()
-        };
+        let m = MemSample { compressed: None, ..sample() };
+        let Visual::Split { parts, .. } = split(&breakdown(&m), false) else { panic!() };
         assert!(parts.iter().all(|p| p.0 != "Compressed"));
         let total: f32 = parts.iter().map(|p| p.1).sum();
         assert!((total - 16.0).abs() < 1e-3);
@@ -728,9 +637,7 @@ mod tests {
     #[test]
     fn slope_of_a_line() {
         // +0.5 GB a day, sampled every 6 hours for 4 days.
-        let pts: Vec<(f32, f32)> = (0..17)
-            .map(|i| (i as f32 * 6.0, 1.0 + i as f32 * 0.125))
-            .collect();
+        let pts: Vec<(f32, f32)> = (0..17).map(|i| (i as f32 * 6.0, 1.0 + i as f32 * 0.125)).collect();
         let s = slope_per_day(&pts).unwrap();
         assert!((s - 0.5).abs() < 1e-3, "{}", s);
         let flat: Vec<(f32, f32)> = (0..10).map(|i| (i as f32, 0.9)).collect();
@@ -743,43 +650,16 @@ mod tests {
     fn verdicts() {
         assert_eq!(verdict(0.9, 16.0, None, 0.0), Verdict::Learning);
         assert_eq!(verdict(0.9, 16.0, Some(0.05), 0.5), Verdict::Learning);
-        assert_eq!(
-            verdict(0.9, 16.0, Some(0.05), 2.0),
-            Verdict::Steady { pool_gb: 0.9 }
-        );
-        assert_eq!(
-            verdict(2.0, 16.0, Some(0.6), 2.0),
-            Verdict::Growing { per_day: 0.6 }
-        );
-        assert_eq!(
-            verdict(5.0, 32.0, Some(0.6), 9.0),
-            Verdict::Leak {
-                per_day: 0.6,
-                days: 9.0
-            }
-        );
+        assert_eq!(verdict(0.9, 16.0, Some(0.05), 2.0), Verdict::Steady { pool_gb: 0.9 });
+        assert_eq!(verdict(2.0, 16.0, Some(0.6), 2.0), Verdict::Growing { per_day: 0.6 });
+        assert_eq!(verdict(5.0, 32.0, Some(0.6), 9.0), Verdict::Leak { per_day: 0.6, days: 9.0 });
         // 5 GB of pool on a 16 GB PC is bad on its own, whatever the trend.
-        assert!(matches!(
-            verdict(5.0, 16.0, Some(0.6), 9.0),
-            Verdict::Large { .. }
-        ));
-        assert!(matches!(
-            verdict(4.2, 16.0, None, 0.0),
-            Verdict::Large { .. }
-        ));
-        let (tone, h) = headline(Verdict::Leak {
-            per_day: 0.6,
-            days: 9.0,
-        });
+        assert!(matches!(verdict(5.0, 16.0, Some(0.6), 9.0), Verdict::Large { .. }));
+        assert!(matches!(verdict(4.2, 16.0, None, 0.0), Verdict::Large { .. }));
+        let (tone, h) = headline(Verdict::Leak { per_day: 0.6, days: 9.0 });
         assert_eq!(tone, Tone::Warn);
-        assert_eq!(
-            h,
-            "Kernel pool +0.6 GB a day for 9 days. A driver is leaking. A restart buys time."
-        );
-        assert_eq!(
-            headline(Verdict::Steady { pool_gb: 0.94 }).1,
-            "No ghosts. Kernel memory is steady at 0.9 GB."
-        );
+        assert_eq!(h, "Kernel pool +0.6 GB a day for 9 days. A driver is leaking. A restart buys time.");
+        assert_eq!(headline(Verdict::Steady { pool_gb: 0.94 }).1, "No ghosts. Kernel memory is steady at 0.9 GB.");
     }
 
     #[test]
@@ -810,11 +690,7 @@ mod tests {
         let boot_ms = 1_700_000_000_000u64;
         for h in 1..=(24 * 24u64) {
             let d = h as f32 / 24.0;
-            let gb = if d <= 20.0 {
-                1.0
-            } else {
-                1.0 + (d - 20.0) * 0.6
-            };
+            let gb = if d <= 20.0 { 1.0 } else { 1.0 + (d - 20.0) * 0.6 };
             t.observe(boot_ms + h * 3_600_000, h * 3600, gb);
         }
         let whole = slope_per_day(&t.pts).unwrap();
@@ -863,12 +739,7 @@ mod tests {
         assert_eq!(h.trend.pts.len(), g.trend.pts.len());
         // Garbage is tolerated.
         h.load(&Json::Str("x".into()));
-        h.load(
-            &crate::achievements::json::parse(
-                r#"{"rows":[{"d":-1},{"d":"a"}],"pts":[[1],[2,"x"]]}"#,
-            )
-            .unwrap(),
-        );
+        h.load(&crate::achievements::json::parse(r#"{"rows":[{"d":-1},{"d":"a"}],"pts":[[1],[2,"x"]]}"#).unwrap());
         assert!(h.rows.is_empty());
         assert!(h.trend.pts.is_empty());
     }

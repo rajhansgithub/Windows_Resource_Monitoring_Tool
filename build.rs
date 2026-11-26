@@ -10,11 +10,7 @@ fn main() {
     let out = std::env::var("OUT_DIR").unwrap();
     let res = |f: &str| format!("{dir}/res/{f}").replace('\\', "/");
     let num = |k: &str| std::env::var(k).unwrap().parse::<u16>().unwrap_or(0);
-    let (ma, mi, pa) = (
-        num("CARGO_PKG_VERSION_MAJOR"),
-        num("CARGO_PKG_VERSION_MINOR"),
-        num("CARGO_PKG_VERSION_PATCH"),
-    );
+    let (ma, mi, pa) = (num("CARGO_PKG_VERSION_MAJOR"), num("CARGO_PKG_VERSION_MINOR"), num("CARGO_PKG_VERSION_PATCH"));
     let ver = std::env::var("CARGO_PKG_VERSION").unwrap();
     let desc = std::env::var("CARGO_PKG_DESCRIPTION").unwrap();
     let rc = format!(
@@ -53,9 +49,7 @@ END
     );
     let path = format!("{out}/resmon.rc");
     std::fs::write(&path, rc).unwrap();
-    embed_resource::compile(&path, embed_resource::NONE)
-        .manifest_optional()
-        .unwrap();
+    embed_resource::compile(&path, embed_resource::NONE).manifest_optional().unwrap();
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=res/resmon.manifest");
     println!("cargo:rerun-if-changed=res/app.ico");

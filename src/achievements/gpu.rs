@@ -34,13 +34,10 @@ use std::sync::Mutex;
 use windows::core::Interface;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::{
-    ID3DBlob, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL_11_0,
-    D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+    ID3DBlob, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL_11_0, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
 };
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8_UNORM, DXGI_SAMPLE_DESC,
-};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET};
 
 #[path = "shaders.rs"]
@@ -115,14 +112,7 @@ pub struct Coin<'a> {
 pub const RING_N: u32 = 1024;
 /// The coin programs: (stone, age layer). Stone 0 die, 1 Diamond, 2 Ruby, 3 Emulsion; the layer programs only need the
 /// geometry, which Diamond and Ruby share.
-const COIN_VARIANTS: [(u8, bool); 6] = [
-    (0, false),
-    (1, false),
-    (2, false),
-    (3, false),
-    (0, true),
-    (1, true),
-];
+const COIN_VARIANTS: [(u8, bool); 6] = [(0, false), (1, false), (2, false), (3, false), (0, true), (1, true)];
 static COINS_OK: AtomicBool = AtomicBool::new(false);
 
 fn coin_stone(m: Material) -> u8 {
@@ -138,11 +128,7 @@ fn coin_stone(m: Material) -> u8 {
 fn coin_variant(m: Material, layer: u8) -> usize {
     let st = coin_stone(m);
     if layer > 0 {
-        if st == 0 {
-            4
-        } else {
-            5
-        }
+        if st == 0 { 4 } else { 5 }
     } else {
         st as usize
     }
@@ -162,19 +148,12 @@ fn coin_metal(m: Material) -> [f32; 3] {
 fn coin_rot(yaw: f32, pitch: f32) -> [[f32; 3]; 3] {
     let (a, b) = (yaw.to_radians(), pitch.to_radians());
     let (ca, sa, cb, sb) = (a.cos(), a.sin(), b.cos(), b.sin());
-    [
-        [ca, sa * sb, sa * cb],
-        [0.0, cb, -sb],
-        [-sa, ca * sb, ca * cb],
-    ]
+    [[ca, sa * sb, sa * cb], [0.0, cb, -sb], [-sa, ca * sb, ca * cb]]
 }
 
 /// Does this coin item carry dust or cobweb? (Same threshold as `ageLayers`: dust + web * 1.3 < .002 = clean.)
 fn coin_aged(p: &Params) -> bool {
-    p.coin.is_some()
-        && p.layer == 0
-        && p.material != Material::Emulsion
-        && p.wear[0] + p.wear[2] * 1.3 >= 0.002
+    p.coin.is_some() && p.layer == 0 && p.material != Material::Emulsion && p.wear[0] + p.wear[2] * 1.3 >= 0.002
 }
 
 /// Side of a coin's age layer: one texel per screen pixel of the face, in steps of 16 so near sizes share it.
@@ -264,9 +243,7 @@ fn ensure(h: &mut Holder) {
         h.0 = match Gpu::new() {
             Ok(g) => State::Ready(Box::new(g)),
             Err(e) => {
-                crate::util::diag(&format!(
-                    "achievements gpu: unavailable ({e}); using software badges"
-                ));
+                crate::util::diag(&format!("achievements gpu: unavailable ({e}); using software badges"));
                 State::Failed
             }
         };
@@ -392,9 +369,7 @@ fn fnv64(parts: &[&[u8]]) -> u64 {
 
 fn cache_path(src: &str, entry: &[u8], target: &[u8]) -> std::path::PathBuf {
     let key = fnv64(&[src.as_bytes(), entry, target, &CACHE_VER.to_le_bytes()]);
-    crate::util::data_dir()
-        .join("shader-cache")
-        .join(format!("{key:016x}.cso"))
+    crate::util::data_dir().join("shader-cache").join(format!("{key:016x}.cso"))
 }
 
 /// The compiled shader from the disk cache only (no compiler): None if it is not there yet.
@@ -403,12 +378,7 @@ fn cached_only(src: &str, entry: &[u8], target: &[u8]) -> Option<Vec<u8>> {
     (b.len() > 32 && &b[..4] == b"DXBC").then_some(b)
 }
 
-unsafe fn cached_compile(
-    f: D3DCompileFn,
-    src: &str,
-    entry: &'static [u8],
-    target: &'static [u8],
-) -> Result<Vec<u8>, String> {
+unsafe fn cached_compile(f: D3DCompileFn, src: &str, entry: &'static [u8], target: &'static [u8]) -> Result<Vec<u8>, String> {
     if let Some(b) = cached_only(src, entry, target) {
         return Ok(b);
     }
@@ -434,8 +404,7 @@ pub fn warm() {
         if have {
             continue;
         }
-        let code =
-            unsafe { cached_compile(f, &shaders::coin_src(stone, layer), b"main\0", b"ps_5_0\0") };
+        let code = unsafe { cached_compile(f, &shaders::coin_src(stone, layer), b"main\0", b"ps_5_0\0") };
         match code {
             Ok(code) => {
                 let mut g = lock();
@@ -444,9 +413,7 @@ pub fn warm() {
                 }
             }
             Err(e) => {
-                crate::util::diag(&format!(
-                    "achievements gpu: coin shader {stone}/{layer}: {e}"
-                ));
+                crate::util::diag(&format!("achievements gpu: coin shader {stone}/{layer}: {e}"));
                 return;
             }
         }
@@ -454,15 +421,15 @@ pub fn warm() {
 }
 
 type D3DCompileFn = unsafe extern "system" fn(
-    *const c_void,    // pSrcData
-    usize,            // SrcDataSize
-    *const u8,        // pSourceName
-    *const c_void,    // pDefines
-    *const c_void,    // pInclude
-    *const u8,        // pEntrypoint
-    *const u8,        // pTarget
-    u32,              // Flags1
-    u32,              // Flags2
+    *const c_void, // pSrcData
+    usize,         // SrcDataSize
+    *const u8,     // pSourceName
+    *const c_void, // pDefines
+    *const c_void, // pInclude
+    *const u8,     // pEntrypoint
+    *const u8,     // pTarget
+    u32,           // Flags1
+    u32,           // Flags2
     *mut *mut c_void, // ppCode
     *mut *mut c_void, // ppErrorMsgs
 ) -> i32;
@@ -477,20 +444,11 @@ fn load_d3dcompile() -> Option<D3DCompileFn> {
             return None;
         }
         let p = GetProcAddress(h, b"D3DCompile\0".as_ptr())?;
-        Some(std::mem::transmute::<
-            unsafe extern "system" fn() -> isize,
-            D3DCompileFn,
-        >(p))
+        Some(std::mem::transmute::<unsafe extern "system" fn() -> isize, D3DCompileFn>(p))
     }
 }
 
-unsafe fn compile(
-    f: D3DCompileFn,
-    src: &str,
-    entry: &'static [u8],
-    target: &'static [u8],
-    flags: u32,
-) -> Result<Vec<u8>, String> {
+unsafe fn compile(f: D3DCompileFn, src: &str, entry: &'static [u8], target: &'static [u8], flags: u32) -> Result<Vec<u8>, String> {
     let mut code: *mut c_void = std::ptr::null_mut();
     let mut err: *mut c_void = std::ptr::null_mut();
     let hr = f(
@@ -509,25 +467,17 @@ unsafe fn compile(
     let mut text = String::new();
     if !err.is_null() {
         let b = ID3DBlob::from_raw(err);
-        let bytes =
-            std::slice::from_raw_parts(b.GetBufferPointer() as *const u8, b.GetBufferSize());
+        let bytes = std::slice::from_raw_parts(b.GetBufferPointer() as *const u8, b.GetBufferSize());
         let full = String::from_utf8_lossy(bytes);
         // one line: the first line that says "error", else the first line
-        let line = full
-            .lines()
-            .find(|l| l.contains("error"))
-            .or_else(|| full.lines().next())
-            .unwrap_or("");
+        let line = full.lines().find(|l| l.contains("error")).or_else(|| full.lines().next()).unwrap_or("");
         text = line.trim().to_string();
     }
     if hr < 0 || code.is_null() {
         if !code.is_null() {
             drop(ID3DBlob::from_raw(code));
         }
-        return Err(format!(
-            "shader compile failed (hr {:#x}) {}",
-            hr as u32, text
-        ));
+        return Err(format!("shader compile failed (hr {:#x}) {}", hr as u32, text));
     }
     let b = ID3DBlob::from_raw(code);
     Ok(std::slice::from_raw_parts(b.GetBufferPointer() as *const u8, b.GetBufferSize()).to_vec())
@@ -643,22 +593,16 @@ impl Gpu {
             let dev = dev.ok_or("no device")?;
             let ctx = ctx.ok_or("no context")?;
 
-            let vs_code = cached_compile(compiler, shaders::VS, b"vsmain\0", b"vs_5_0\0")
-                .map_err(|e| format!("vs: {e}"))?;
-            let gem_code = cached_compile(compiler, &shaders::gem_src(), b"main\0", b"ps_5_0\0")
-                .map_err(|e| format!("gem ps: {e}"))?;
-            let bub_code = cached_compile(compiler, &shaders::bubble_src(), b"main\0", b"ps_5_0\0")
-                .map_err(|e| format!("bubble ps: {e}"))?;
+            let vs_code = cached_compile(compiler, shaders::VS, b"vsmain\0", b"vs_5_0\0").map_err(|e| format!("vs: {e}"))?;
+            let gem_code = cached_compile(compiler, &shaders::gem_src(), b"main\0", b"ps_5_0\0").map_err(|e| format!("gem ps: {e}"))?;
+            let bub_code = cached_compile(compiler, &shaders::bubble_src(), b"main\0", b"ps_5_0\0").map_err(|e| format!("bubble ps: {e}"))?;
 
             let mut vs: Option<ID3D11VertexShader> = None;
-            dev.CreateVertexShader(&vs_code, None, Some(&mut vs))
-                .map_err(|e| format!("CreateVertexShader: {e}"))?;
+            dev.CreateVertexShader(&vs_code, None, Some(&mut vs)).map_err(|e| format!("CreateVertexShader: {e}"))?;
             let mut ps_gem: Option<ID3D11PixelShader> = None;
-            dev.CreatePixelShader(&gem_code, None, Some(&mut ps_gem))
-                .map_err(|e| format!("CreatePixelShader gem: {e}"))?;
+            dev.CreatePixelShader(&gem_code, None, Some(&mut ps_gem)).map_err(|e| format!("CreatePixelShader gem: {e}"))?;
             let mut ps_bubble: Option<ID3D11PixelShader> = None;
-            dev.CreatePixelShader(&bub_code, None, Some(&mut ps_bubble))
-                .map_err(|e| format!("CreatePixelShader bubble: {e}"))?;
+            dev.CreatePixelShader(&bub_code, None, Some(&mut ps_bubble)).map_err(|e| format!("CreatePixelShader bubble: {e}"))?;
 
             let bd = D3D11_BUFFER_DESC {
                 ByteWidth: std::mem::size_of::<CbData>() as u32,
@@ -669,15 +613,10 @@ impl Gpu {
                 StructureByteStride: 0,
             };
             let mut cb: Option<ID3D11Buffer> = None;
-            dev.CreateBuffer(&bd, None, Some(&mut cb))
-                .map_err(|e| format!("CreateBuffer: {e}"))?;
-            let bk = D3D11_BUFFER_DESC {
-                ByteWidth: 64,
-                ..bd
-            };
+            dev.CreateBuffer(&bd, None, Some(&mut cb)).map_err(|e| format!("CreateBuffer: {e}"))?;
+            let bk = D3D11_BUFFER_DESC { ByteWidth: 64, ..bd };
             let mut cbk: Option<ID3D11Buffer> = None;
-            dev.CreateBuffer(&bk, None, Some(&mut cbk))
-                .map_err(|e| format!("CreateBuffer K: {e}"))?;
+            dev.CreateBuffer(&bk, None, Some(&mut cbk)).map_err(|e| format!("CreateBuffer K: {e}"))?;
 
             let rt = D3D11_RENDER_TARGET_BLEND_DESC {
                 BlendEnable: true.into(),
@@ -689,14 +628,9 @@ impl Gpu {
                 BlendOpAlpha: D3D11_BLEND_OP_ADD,
                 RenderTargetWriteMask: D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8,
             };
-            let bld = D3D11_BLEND_DESC {
-                AlphaToCoverageEnable: false.into(),
-                IndependentBlendEnable: false.into(),
-                RenderTarget: [rt; 8],
-            };
+            let bld = D3D11_BLEND_DESC { AlphaToCoverageEnable: false.into(), IndependentBlendEnable: false.into(), RenderTarget: [rt; 8] };
             let mut blend: Option<ID3D11BlendState> = None;
-            dev.CreateBlendState(&bld, Some(&mut blend))
-                .map_err(|e| format!("CreateBlendState: {e}"))?;
+            dev.CreateBlendState(&bld, Some(&mut blend)).map_err(|e| format!("CreateBlendState: {e}"))?;
 
             let sd = D3D11_SAMPLER_DESC {
                 Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
@@ -711,8 +645,7 @@ impl Gpu {
                 MaxLOD: f32::MAX,
             };
             let mut samp: Option<ID3D11SamplerState> = None;
-            dev.CreateSamplerState(&sd, Some(&mut samp))
-                .map_err(|e| format!("CreateSamplerState: {e}"))?;
+            dev.CreateSamplerState(&sd, Some(&mut samp)).map_err(|e| format!("CreateSamplerState: {e}"))?;
 
             let rd = D3D11_RASTERIZER_DESC {
                 FillMode: D3D11_FILL_SOLID,
@@ -727,8 +660,7 @@ impl Gpu {
                 AntialiasedLineEnable: false.into(),
             };
             let mut rast: Option<ID3D11RasterizerState> = None;
-            dev.CreateRasterizerState(&rd, Some(&mut rast))
-                .map_err(|e| format!("CreateRasterizerState: {e}"))?;
+            dev.CreateRasterizerState(&rd, Some(&mut rast)).map_err(|e| format!("CreateRasterizerState: {e}"))?;
 
             let mut g = Gpu {
                 dev,
@@ -751,9 +683,7 @@ impl Gpu {
             // coin programs already compiled by an earlier start (or before a lost device): no compiler here
             COINS_OK.store(false, Ordering::Relaxed);
             for (i, &(stone, layer)) in COIN_VARIANTS.iter().enumerate() {
-                if let Some(code) =
-                    cached_only(&shaders::coin_src(stone, layer), b"main\0", b"ps_5_0\0")
-                {
+                if let Some(code) = cached_only(&shaders::coin_src(stone, layer), b"main\0", b"ps_5_0\0") {
                     g.install_coin(i, &code);
                 }
             }
@@ -791,31 +721,22 @@ impl Gpu {
                 MipLevels: 1,
                 ArraySize: 1,
                 Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
                 Usage: D3D11_USAGE_DEFAULT,
                 BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
                 CPUAccessFlags: 0,
                 MiscFlags: 0,
             };
             let mut rt: Option<ID3D11Texture2D> = None;
-            self.dev
-                .CreateTexture2D(&d, None, Some(&mut rt))
-                .map_err(|e| self.fail("atlas", e))?;
+            self.dev.CreateTexture2D(&d, None, Some(&mut rt)).map_err(|e| self.fail("atlas", e))?;
             let rt = rt.ok_or_else(|| Fail::Other("atlas".into()))?;
             let mut rtv: Option<ID3D11RenderTargetView> = None;
-            self.dev
-                .CreateRenderTargetView(&rt, None, Some(&mut rtv))
-                .map_err(|e| self.fail("atlas rtv", e))?;
+            self.dev.CreateRenderTargetView(&rt, None, Some(&mut rtv)).map_err(|e| self.fail("atlas rtv", e))?;
             d.Usage = D3D11_USAGE_STAGING;
             d.BindFlags = 0;
             d.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
             let mut stage: Option<ID3D11Texture2D> = None;
-            self.dev
-                .CreateTexture2D(&d, None, Some(&mut stage))
-                .map_err(|e| self.fail("staging", e))?;
+            self.dev.CreateTexture2D(&d, None, Some(&mut stage)).map_err(|e| self.fail("staging", e))?;
             Ok(Atlas {
                 rt,
                 rtv: rtv.ok_or_else(|| Fail::Other("rtv".into()))?,
@@ -846,11 +767,7 @@ impl Gpu {
         let chain = mip_chain(w, h, data);
         let subs: Vec<D3D11_SUBRESOURCE_DATA> = chain
             .iter()
-            .map(|(lw, _, d)| D3D11_SUBRESOURCE_DATA {
-                pSysMem: d.as_ptr() as *const c_void,
-                SysMemPitch: *lw,
-                SysMemSlicePitch: 0,
-            })
+            .map(|(lw, _, d)| D3D11_SUBRESOURCE_DATA { pSysMem: d.as_ptr() as *const c_void, SysMemPitch: *lw, SysMemSlicePitch: 0 })
             .collect();
         let desc = D3D11_TEXTURE2D_DESC {
             Width: w,
@@ -858,10 +775,7 @@ impl Gpu {
             MipLevels: chain.len() as u32,
             ArraySize: 1,
             Format: DXGI_FORMAT_R8_UNORM,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
             Usage: D3D11_USAGE_IMMUTABLE,
             BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
             CPUAccessFlags: 0,
@@ -869,22 +783,12 @@ impl Gpu {
         };
         unsafe {
             let mut t: Option<ID3D11Texture2D> = None;
-            self.dev
-                .CreateTexture2D(&desc, Some(subs.as_ptr()), Some(&mut t))
-                .ok()?;
+            self.dev.CreateTexture2D(&desc, Some(subs.as_ptr()), Some(&mut t)).ok()?;
             let t = t?;
             let mut srv: Option<ID3D11ShaderResourceView> = None;
-            self.dev
-                .CreateShaderResourceView(&t, None, Some(&mut srv))
-                .ok()?;
+            self.dev.CreateShaderResourceView(&t, None, Some(&mut srv)).ok()?;
             let srv = srv?;
-            self.tex.insert(
-                key,
-                CachedTex {
-                    srv: srv.clone(),
-                    stamp: self.frame,
-                },
-            );
+            self.tex.insert(key, CachedTex { srv: srv.clone(), stamp: self.frame });
             Some(srv)
         }
     }
@@ -897,55 +801,33 @@ impl Gpu {
             MipLevels: 1,
             ArraySize: 1,
             Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
             Usage: D3D11_USAGE_IMMUTABLE,
             BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
             CPUAccessFlags: 0,
             MiscFlags: 0,
         };
-        let sub = D3D11_SUBRESOURCE_DATA {
-            pSysMem: px.as_ptr() as *const c_void,
-            SysMemPitch: w * 4,
-            SysMemSlicePitch: 0,
-        };
+        let sub = D3D11_SUBRESOURCE_DATA { pSysMem: px.as_ptr() as *const c_void, SysMemPitch: w * 4, SysMemSlicePitch: 0 };
         unsafe {
             let mut t: Option<ID3D11Texture2D> = None;
-            self.dev
-                .CreateTexture2D(&desc, Some(&sub), Some(&mut t))
-                .map_err(|e| self.fail("age texture", e))?;
+            self.dev.CreateTexture2D(&desc, Some(&sub), Some(&mut t)).map_err(|e| self.fail("age texture", e))?;
             let t = t.ok_or_else(|| Fail::Other("age texture".into()))?;
             let mut srv: Option<ID3D11ShaderResourceView> = None;
-            self.dev
-                .CreateShaderResourceView(&t, None, Some(&mut srv))
-                .map_err(|e| self.fail("age srv", e))?;
+            self.dev.CreateShaderResourceView(&t, None, Some(&mut srv)).map_err(|e| self.fail("age srv", e))?;
             srv.ok_or_else(|| Fail::Other("age srv".into()))
         }
     }
 
     /// The age layer of every aged coin in `items` (None for the rest). Dust and cobweb stay put on the coin, so each
     /// coin's layer (front | back, face on) is drawn once per size, wear step and seed and kept; a frame only samples it.
-    fn coin_ages(
-        &mut self,
-        items: &[Params],
-    ) -> Result<Vec<Option<ID3D11ShaderResourceView>>, Fail> {
+    fn coin_ages(&mut self, items: &[Params]) -> Result<Vec<Option<ID3D11ShaderResourceView>>, Fail> {
         let key_of = |p: &Params| -> (u64, u32) {
             let ext = p.coin.as_ref().map_or(1.24, |c| c.ext);
-            let ring = p
-                .coin
-                .as_ref()
-                .and_then(|c| c.ring)
-                .map_or(0, |r| hash_mask(r, 7));
+            let ring = p.coin.as_ref().and_then(|c| c.ring).map_or(0, |r| hash_mask(r, 7));
             let ap = p.coin.as_ref().map_or(0, |c| c.age_px);
             let n = age_n(if ap > 0 { ap } else { p.size_px }, ext);
             let geo = [coin_variant(p.material, 1) as u8];
-            let w: Vec<u8> = p
-                .wear
-                .iter()
-                .flat_map(|v| v.to_bits().to_le_bytes())
-                .collect();
+            let w: Vec<u8> = p.wear.iter().flat_map(|v| v.to_bits().to_le_bytes()).collect();
             (fnv64(&[&geo, &n.to_le_bytes(), &w, &ring.to_le_bytes()]), n)
         };
         let mut need: Vec<(u64, usize, u32)> = Vec::new();
@@ -975,15 +857,7 @@ impl Gpu {
                         icon_mask: None,
                         detail_mask: None,
                         layer,
-                        coin: Some(Coin {
-                            yaw: 0.0,
-                            pitch: 0.0,
-                            ext: 1.0,
-                            ring: p.coin.and_then(|c| c.ring),
-                            back: None,
-                            age_px: 0,
-                            ss: 1,
-                        }),
+                        coin: Some(Coin { yaw: 0.0, pitch: 0.0, ext: 1.0, ring: p.coin.and_then(|c| c.ring), back: None, age_px: 0, ss: 1 }),
                     });
                 }
             }
@@ -1004,32 +878,14 @@ impl Gpu {
                     px[y * 2 * n + n..(y + 1) * 2 * n].copy_from_slice(&b[y * n..(y + 1) * n]);
                 }
                 let srv = self.bgra_srv(&px, 2 * n as u32, n as u32)?;
-                self.age.insert(
-                    k,
-                    CachedTex {
-                        srv,
-                        stamp: self.frame,
-                    },
-                );
+                self.age.insert(k, CachedTex { srv, stamp: self.frame });
             }
         }
-        Ok(items
-            .iter()
-            .map(|p| {
-                if coin_aged(p) {
-                    self.age.get(&key_of(p).0).map(|t| t.srv.clone())
-                } else {
-                    None
-                }
-            })
-            .collect())
+        Ok(items.iter().map(|p| if coin_aged(p) { self.age.get(&key_of(p).0).map(|t| t.srv.clone()) } else { None }).collect())
     }
 
     fn render(&mut self, items: &[Params], out: &mut Vec<Vec<u32>>) -> Result<(), Fail> {
-        if items
-            .iter()
-            .any(|p| p.coin.is_some() && self.ps_coin[coin_variant(p.material, p.layer)].is_none())
-        {
+        if items.iter().any(|p| p.coin.is_some() && self.ps_coin[coin_variant(p.material, p.layer)].is_none()) {
             return Err(Fail::NotReady);
         }
         let ages = self.coin_ages(items)?;
@@ -1061,28 +917,13 @@ impl Gpu {
                 return Err(Fail::Other("item does not fit the atlas".into()));
             }
             let ah = ry + rh;
-            self.draw_chunk(
-                &items[start..end],
-                &ages[start..end],
-                &places,
-                aw,
-                ah,
-                &mut out[start..end],
-            )?;
+            self.draw_chunk(&items[start..end], &ages[start..end], &places, aw, ah, &mut out[start..end])?;
             start = end;
         }
         Ok(())
     }
 
-    fn draw_chunk(
-        &mut self,
-        items: &[Params],
-        ages: &[Option<ID3D11ShaderResourceView>],
-        places: &[(u32, u32)],
-        aw: u32,
-        ah: u32,
-        out: &mut [Vec<u32>],
-    ) -> Result<(), Fail> {
+    fn draw_chunk(&mut self, items: &[Params], ages: &[Option<ID3D11ShaderResourceView>], places: &[(u32, u32)], aw: u32, ah: u32, out: &mut [Vec<u32>]) -> Result<(), Fail> {
         // (re)create the atlas when it is too small; grow in steps of 256 px so it settles
         let need_new = match &self.atlas {
             Some(a) => a.w < aw || a.h < ah,
@@ -1099,24 +940,14 @@ impl Gpu {
         let mut icons: Vec<Option<ID3D11ShaderResourceView>> = Vec::with_capacity(items.len());
         let mut texts: Vec<[Option<ID3D11ShaderResourceView>; 2]> = Vec::with_capacity(items.len());
         for p in items {
-            let metal = !matches!(
-                p.material,
-                Material::Diamond | Material::Ruby | Material::Emulsion
-            );
+            let metal = !matches!(p.material, Material::Diamond | Material::Ruby | Material::Emulsion);
             icons.push(match p.icon_mask {
-                Some(m) if metal && !(p.coin.is_some() && p.layer > 0) => {
-                    self.mask_srv(m, ICON_N, ICON_N)
-                }
+                Some(m) if metal && !(p.coin.is_some() && p.layer > 0) => self.mask_srv(m, ICON_N, ICON_N),
                 _ => None,
             });
             let c = p.coin.as_ref();
-            let ring = c
-                .and_then(|c| c.ring)
-                .and_then(|m| self.mask_srv(m, RING_N, RING_N));
-            let back = c
-                .and_then(|c| c.back)
-                .filter(|_| p.layer == 0)
-                .and_then(|m| self.mask_srv(m, RING_N, RING_N));
+            let ring = c.and_then(|c| c.ring).and_then(|m| self.mask_srv(m, RING_N, RING_N));
+            let back = c.and_then(|c| c.back).filter(|_| p.layer == 0).and_then(|m| self.mask_srv(m, RING_N, RING_N));
             texts.push([ring, back]);
         }
         let atlas = match &self.atlas {
@@ -1136,30 +967,18 @@ impl Gpu {
 
             let put = |buf: &ID3D11Buffer, v: &[f32]| -> Result<(), Fail> {
                 let mut ms = D3D11_MAPPED_SUBRESOURCE::default();
-                ctx.Map(buf, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut ms))
-                    .map_err(|e| self.fail("map cb", e))?;
+                ctx.Map(buf, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut ms)).map_err(|e| self.fail("map cb", e))?;
                 std::ptr::copy_nonoverlapping(v.as_ptr(), ms.pData as *mut f32, v.len());
                 ctx.Unmap(buf, 0);
                 Ok(())
             };
             let view = |x: f32, y: f32, s: f32| {
-                ctx.RSSetViewports(Some(&[D3D11_VIEWPORT {
-                    TopLeftX: x,
-                    TopLeftY: y,
-                    Width: s,
-                    Height: s,
-                    MinDepth: 0.0,
-                    MaxDepth: 1.0,
-                }]));
+                ctx.RSSetViewports(Some(&[D3D11_VIEWPORT { TopLeftX: x, TopLeftY: y, Width: s, Height: s, MinDepth: 0.0, MaxDepth: 1.0 }]));
             };
             for (i, p) in items.iter().enumerate() {
                 let s = p.size_px as f32;
                 let (x, y) = places[i];
-                let m = if p.coin.is_some() {
-                    coin_metal(p.material)
-                } else {
-                    metal_rgb(p.material)
-                };
+                let m = if p.coin.is_some() { coin_metal(p.material) } else { metal_rgb(p.material) };
                 let mut c = [0f32; 20];
                 c[0] = s;
                 c[1] = s;
@@ -1200,46 +1019,16 @@ impl Gpu {
                     let r = coin_rot(cn.yaw, cn.pitch);
                     let on = |b: bool| if b { 1.0 } else { 0.0 };
                     let k = [
-                        r[0][0],
-                        r[0][1],
-                        r[0][2],
-                        cn.ext,
-                        r[1][0],
-                        r[1][1],
-                        r[1][2],
-                        on(texts[i][0].is_some()),
-                        r[2][0],
-                        r[2][1],
-                        r[2][2],
-                        on(texts[i][1].is_some()),
-                        m[0],
-                        m[1],
-                        m[2],
-                        on(ages[i].is_some()),
+                        r[0][0], r[0][1], r[0][2], cn.ext,
+                        r[1][0], r[1][1], r[1][2], on(texts[i][0].is_some()),
+                        r[2][0], r[2][1], r[2][2], on(texts[i][1].is_some()),
+                        m[0], m[1], m[2], on(ages[i].is_some()),
                     ];
                     put(&self.cbk, &k)?;
-                    ctx.PSSetShader(
-                        self.ps_coin[coin_variant(p.material, p.layer)].as_ref(),
-                        None,
-                    );
-                    ctx.PSSetShaderResources(
-                        0,
-                        Some(&[
-                            icons[i].clone(),
-                            texts[i][0].clone(),
-                            texts[i][1].clone(),
-                            ages[i].clone(),
-                        ]),
-                    );
+                    ctx.PSSetShader(self.ps_coin[coin_variant(p.material, p.layer)].as_ref(), None);
+                    ctx.PSSetShaderResources(0, Some(&[icons[i].clone(), texts[i][0].clone(), texts[i][1].clone(), ages[i].clone()]));
                 } else {
-                    ctx.PSSetShader(
-                        if p.material == Material::Emulsion {
-                            &self.ps_bubble
-                        } else {
-                            &self.ps_gem
-                        },
-                        None,
-                    );
+                    ctx.PSSetShader(if p.material == Material::Emulsion { &self.ps_bubble } else { &self.ps_gem }, None);
                     ctx.PSSetShaderResources(0, Some(&[icons[i].clone(), None, None, None]));
                 }
                 put(&self.cb, &c)?;
@@ -1249,18 +1038,10 @@ impl Gpu {
             ctx.PSSetShaderResources(0, Some(&[None, None, None, None]));
 
             // one copy to the staging texture, one map
-            let bx = D3D11_BOX {
-                left: 0,
-                top: 0,
-                front: 0,
-                right: aw,
-                bottom: ah,
-                back: 1,
-            };
+            let bx = D3D11_BOX { left: 0, top: 0, front: 0, right: aw, bottom: ah, back: 1 };
             ctx.CopySubresourceRegion(&atlas.stage, 0, 0, 0, 0, &atlas.rt, 0, Some(&bx));
             let mut ms = D3D11_MAPPED_SUBRESOURCE::default();
-            ctx.Map(&atlas.stage, 0, D3D11_MAP_READ, 0, Some(&mut ms))
-                .map_err(|e| self.fail("map staging", e))?;
+            ctx.Map(&atlas.stage, 0, D3D11_MAP_READ, 0, Some(&mut ms)).map_err(|e| self.fail("map staging", e))?;
             let pitch = ms.RowPitch as usize;
             let base = ms.pData as *const u8;
             if base.is_null() {
@@ -1274,8 +1055,7 @@ impl Gpu {
                 dst.clear();
                 dst.resize(n * n, 0);
                 for row in 0..n {
-                    let src =
-                        std::slice::from_raw_parts(base.add((y + row) * pitch + x * 4), n * 4);
+                    let src = std::slice::from_raw_parts(base.add((y + row) * pitch + x * 4), n * 4);
                     let d = &mut dst[row * n..(row + 1) * n];
                     for (px, b) in d.iter_mut().zip(src.chunks_exact(4)) {
                         *px = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
@@ -1328,18 +1108,7 @@ mod tests {
     }
 
     fn params<'a>(m: Material, t: f32, tilt: (f32, f32), ic: &'a [u8]) -> Params<'a> {
-        Params {
-            material: m,
-            size_px: PX,
-            time_s: t,
-            seed: 0.0,
-            tilt,
-            wear: [0.0; 3],
-            icon_mask: Some(ic),
-            detail_mask: None,
-            layer: 0,
-            coin: None,
-        }
+        Params { material: m, size_px: PX, time_s: t, seed: 0.0, tilt, wear: [0.0; 3], icon_mask: Some(ic), detail_mask: None, layer: 0, coin: None }
     }
 
     fn render(gpu: &mut Gpu, items: &[Params]) -> Vec<Vec<u32>> {
@@ -1360,11 +1129,7 @@ mod tests {
             if a < 128 {
                 continue;
             }
-            let (r, g, b) = (
-                ((p >> 16) & 0xff) as f32,
-                ((p >> 8) & 0xff) as f32,
-                (p & 0xff) as f32,
-            );
+            let (r, g, b) = (((p >> 16) & 0xff) as f32, ((p >> 8) & 0xff) as f32, (p & 0xff) as f32);
             let l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
             n += 1.0;
             s += l;
@@ -1378,11 +1143,7 @@ mod tests {
             return (0.0, 0.0, rgb);
         }
         let mean = s / n;
-        (
-            cov,
-            (s2 / n - mean * mean).max(0.0).sqrt(),
-            [rgb[0] / n, rgb[1] / n, rgb[2] / n],
-        )
+        (cov, (s2 / n - mean * mean).max(0.0).sqrt(), [rgb[0] / n, rgb[1] / n, rgb[2] / n])
     }
 
     /// Timings for the "lags and freezes" check (printed, not asserted; CI runs on WARP, so draw times are pessimistic).
@@ -1395,33 +1156,17 @@ mod tests {
         for (name, flags) in [("O1", 0u32), ("O0", 1 << 14), ("O3", 1 << 15)] {
             let t = Instant::now();
             let a = unsafe { compile(f, &src, b"main\0", b"ps_5_0\0", flags) }.expect("gem");
-            println!(
-                "perf: gem ps compile {name} {:.0} ms, {} bytes",
-                t.elapsed().as_secs_f64() * 1e3,
-                a.len()
-            );
+            println!("perf: gem ps compile {name} {:.0} ms, {} bytes", t.elapsed().as_secs_f64() * 1e3, a.len());
         }
         let t = Instant::now();
-        let c = unsafe { compile(f, &shaders::bubble_src(), b"main\0", b"ps_5_0\0", 0) }
-            .expect("bubble");
-        println!(
-            "perf: bubble ps compile {:.0} ms, {} bytes",
-            t.elapsed().as_secs_f64() * 1e3,
-            c.len()
-        );
+        let c = unsafe { compile(f, &shaders::bubble_src(), b"main\0", b"ps_5_0\0", 0) }.expect("bubble");
+        println!("perf: bubble ps compile {:.0} ms, {} bytes", t.elapsed().as_secs_f64() * 1e3, c.len());
         let t = Instant::now();
         let mut gpu = Gpu::new().expect("gpu");
-        println!(
-            "perf: Gpu::new {:.0} ms ({})",
-            t.elapsed().as_secs_f64() * 1e3,
-            if gpu.hardware { "hardware" } else { "WARP" }
-        );
+        println!("perf: Gpu::new {:.0} ms ({})", t.elapsed().as_secs_f64() * 1e3, if gpu.hardware { "hardware" } else { "WARP" });
         let t = Instant::now();
         drop(Gpu::new().expect("gpu"));
-        println!(
-            "perf: Gpu::new again (shader cache) {:.0} ms",
-            t.elapsed().as_secs_f64() * 1e3
-        );
+        println!("perf: Gpu::new again (shader cache) {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
         let ic = icon();
         let mut tiles: Vec<Params> = Vec::new();
         for i in 0..42 {
@@ -1433,16 +1178,8 @@ mod tests {
         }
         let t = Instant::now();
         render(&mut gpu, &tiles);
-        println!(
-            "perf: 42 aged tiles at 76 px {:.0} ms",
-            t.elapsed().as_secs_f64() * 1e3
-        );
-        for (name, wear) in [
-            ("clean", [0.0f32, 0.3, 0.0]),
-            ("dust", [0.8, 0.3, 0.0]),
-            ("web", [0.0, 0.3, 0.9]),
-            ("aged", [0.8, 0.3, 0.9]),
-        ] {
+        println!("perf: 42 aged tiles at 76 px {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+        for (name, wear) in [("clean", [0.0f32, 0.3, 0.0]), ("dust", [0.8, 0.3, 0.0]), ("web", [0.0, 0.3, 0.9]), ("aged", [0.8, 0.3, 0.9])] {
             let mut p = params(Material::Gold, 1.0, (0.1, 0.1), &ic);
             p.size_px = 560;
             p.wear = wear;
@@ -1454,10 +1191,7 @@ mod tests {
                 q.wear = wear;
                 render(&mut gpu, &[q]);
             }
-            println!(
-                "perf: full view 560 px {name}: {:.1} ms a frame",
-                t.elapsed().as_secs_f64() * 1e3 / 5.0
-            );
+            println!("perf: full view 560 px {name}: {:.1} ms a frame", t.elapsed().as_secs_f64() * 1e3 / 5.0);
         }
     }
 
@@ -1482,10 +1216,7 @@ mod tests {
             let t = Instant::now();
             let mut f = render(&mut gpu, &[p(0, [0.0, 0.3, 0.0])]).swap_remove(0);
             age_apply(&mut f, &lay[0], &lay[1]);
-            println!(
-                "perf: {m:?} full view 560 px aged via layers: {:.1} ms (draw + apply)",
-                t.elapsed().as_secs_f64() * 1e3
-            );
+            println!("perf: {m:?} full view 560 px aged via layers: {:.1} ms (draw + apply)", t.elapsed().as_secs_f64() * 1e3);
             let (mut worst, mut sum, mut n) = (0i32, 0f64, 0f64);
             for (a, b) in one.iter().zip(f.iter()) {
                 for s in [0, 8, 16, 24] {
@@ -1495,15 +1226,8 @@ mod tests {
                     n += 1.0;
                 }
             }
-            println!(
-                "perf: {m:?} layers vs aged shader: mean diff {:.2}, worst {worst} (of 255)",
-                sum / n
-            );
-            assert!(
-                sum / n < 1.0 && worst <= 24,
-                "{m:?}: layers differ from the aged shader (mean {:.2}, worst {worst})",
-                sum / n
-            );
+            println!("perf: {m:?} layers vs aged shader: mean diff {:.2}, worst {worst} (of 255)", sum / n);
+            assert!(sum / n < 1.0 && worst <= 24, "{m:?}: layers differ from the aged shader (mean {:.2}, worst {worst})", sum / n);
         }
     }
 
@@ -1515,14 +1239,8 @@ mod tests {
         };
         println!("device: {}", if gpu.hardware { "hardware" } else { "WARP" });
         let ic = icon();
-        let still: Vec<Params> = ALL
-            .iter()
-            .map(|&m| params(m, still_time(m), (0.0, 0.0), &ic))
-            .collect();
-        let live: Vec<Params> = ALL
-            .iter()
-            .map(|&m| params(m, 2.5, (0.35, -0.25), &ic))
-            .collect();
+        let still: Vec<Params> = ALL.iter().map(|&m| params(m, still_time(m), (0.0, 0.0), &ic)).collect();
+        let live: Vec<Params> = ALL.iter().map(|&m| params(m, 2.5, (0.35, -0.25), &ic)).collect();
         let a = render(&mut gpu, &still);
         let b = render(&mut gpu, &live);
         assert_eq!(a.len(), ALL.len());
@@ -1531,39 +1249,21 @@ mod tests {
         for (i, m) in ALL.iter().enumerate() {
             assert_eq!(a[i].len(), (PX * PX) as usize);
             let (cov, sd, mean) = stats(&a[i]);
-            println!(
-                "{m:?}: covered {:.0}%, luminance sd {sd:.1}, mean rgb {:.0} {:.0} {:.0}",
-                cov * 100.0,
-                mean[0],
-                mean[1],
-                mean[2]
-            );
+            println!("{m:?}: covered {:.0}%, luminance sd {sd:.1}, mean rgb {:.0} {:.0} {:.0}", cov * 100.0, mean[0], mean[1], mean[2]);
             // a round badge in a square covers pi/4 = 79% at most; anything far off is a broken shader
-            assert!(
-                cov > 0.25 && cov < 0.95,
-                "{m:?}: {:.0}% of the tile covered",
-                cov * 100.0
-            );
+            assert!(cov > 0.25 && cov < 0.95, "{m:?}: {:.0}% of the tile covered", cov * 100.0);
             // a flat disc has no shading; the real medal / stone / film varies strongly
             assert!(sd > 6.0, "{m:?}: looks flat (luminance sd {sd:.1})");
-            assert!(
-                a[i].iter().all(|&p| {
-                    let al = p >> 24;
-                    ((p >> 16) & 0xff) <= al && ((p >> 8) & 0xff) <= al && (p & 0xff) <= al
-                }),
-                "{m:?}: not premultiplied (colour above alpha)"
-            );
+            assert!(a[i].iter().all(|&p| {
+                let al = p >> 24;
+                ((p >> 16) & 0xff) <= al && ((p >> 8) & 0xff) <= al && (p & 0xff) <= al
+            }), "{m:?}: not premultiplied (colour above alpha)");
             assert_ne!(a[i], b[i], "{m:?}: time and tilt change nothing");
             means.push(mean);
         }
         // the metals must actually differ in colour: gold is warmer (r - b) than silver
         let warm = |c: [f32; 3]| c[0] - c[2];
-        assert!(
-            warm(means[2]) > warm(means[1]) + 10.0,
-            "gold and silver look alike: {:?} vs {:?}",
-            means[2],
-            means[1]
-        );
+        assert!(warm(means[2]) > warm(means[1]) + 10.0, "gold and silver look alike: {:?} vs {:?}", means[2], means[1]);
 
         // contact sheet over the app's dark background
         let (w, h) = (PX * ALL.len() as u32, PX * 2);
@@ -1583,9 +1283,7 @@ mod tests {
                 }
             }
         }
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("medal-shots");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("medal-shots");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("medals.png"), png_rgb(w, h, &img)).unwrap();
     }
@@ -1596,10 +1294,7 @@ mod tests {
         let mut v = vec![0u8; (n * n) as usize];
         for y in 0..n {
             for x in 0..n {
-                let (dx, dy) = (
-                    (x - n / 2) as f32 / (n / 2) as f32,
-                    (y - n / 2) as f32 / (n / 2) as f32,
-                );
+                let (dx, dy) = ((x - n / 2) as f32 / (n / 2) as f32, (y - n / 2) as f32 / (n / 2) as f32);
                 let r = (dx * dx + dy * dy).sqrt();
                 if (r - 0.775).abs() < 0.022 && dy > 0.3 && (dx * 40.0).sin() > 0.0 {
                     v[(y * n + x) as usize] = 255;
@@ -1620,70 +1315,40 @@ mod tests {
         let f = load_d3dcompile().expect("d3dcompiler_47.dll");
         for (i, &(st, l)) in COIN_VARIANTS.iter().enumerate() {
             let t0 = std::time::Instant::now();
-            let code = unsafe { compile(f, &shaders::coin_src(st, l), b"main\0", b"ps_5_0\0", 0) }
-                .unwrap_or_else(|e| panic!("coin {st}/{l}: {e}"));
-            println!(
-                "coin program stone {st} layer {l}: {} ms, {} bytes",
-                t0.elapsed().as_millis(),
-                code.len()
-            );
+            let code = unsafe { compile(f, &shaders::coin_src(st, l), b"main\0", b"ps_5_0\0", 0) }.unwrap_or_else(|e| panic!("coin {st}/{l}: {e}"));
+            println!("coin program stone {st} layer {l}: {} ms, {} bytes", t0.elapsed().as_millis(), code.len());
             gpu.install_coin(i, &code);
         }
         assert!(gpu.ps_coin.iter().all(|p| p.is_some()));
         let (ic, ring) = (icon(), ring_mask());
-        let coin =
-            |m: Material, t: f32, yaw: f32, pitch: f32, wear: [f32; 3], px: u32, ss: u8| Params {
-                material: m,
-                size_px: px,
-                time_s: t,
-                seed: 0.0,
-                tilt: (0.0, 0.0),
-                wear,
-                icon_mask: Some(&ic),
-                detail_mask: None,
-                layer: 0,
-                coin: Some(Coin {
-                    yaw,
-                    pitch,
-                    ext: 1.24,
-                    ring: Some(&ring),
-                    back: Some(&ring),
-                    age_px: 0,
-                    ss,
-                }),
-            };
+        let coin = |m: Material, t: f32, yaw: f32, pitch: f32, wear: [f32; 3], px: u32, ss: u8| Params {
+            material: m,
+            size_px: px,
+            time_s: t,
+            seed: 0.0,
+            tilt: (0.0, 0.0),
+            wear,
+            icon_mask: Some(&ic),
+            detail_mask: None,
+            layer: 0,
+            coin: Some(Coin { yaw, pitch, ext: 1.24, ring: Some(&ring), back: Some(&ring), age_px: 0, ss }),
+        };
         let old = [0.85, 0.4, 1.0];
-        let a = render(
-            &mut gpu,
-            &ALL.map(|m| coin(m, 9.0, 28.0, -16.0, [0.0; 3], PX, 4)),
-        );
-        let b = render(
-            &mut gpu,
-            &ALL.map(|m| coin(m, 2.5, 160.0, 25.0, [0.0; 3], PX, 4)),
-        );
-        let c = render(
-            &mut gpu,
-            &ALL.map(|m| coin(m, 9.0, 28.0, -16.0, old, PX, 4)),
-        );
+        let a = render(&mut gpu, &ALL.map(|m| coin(m, 9.0, 28.0, -16.0, [0.0; 3], PX, 4)));
+        let b = render(&mut gpu, &ALL.map(|m| coin(m, 2.5, 160.0, 25.0, [0.0; 3], PX, 4)));
+        let c = render(&mut gpu, &ALL.map(|m| coin(m, 9.0, 28.0, -16.0, old, PX, 4)));
         for (i, m) in ALL.iter().enumerate() {
             let (cov, sd, mean) = stats(&a[i]);
             let (cov2, sd2, mean2) = stats(&c[i]);
             println!("coin {m:?}: covered {:.0}%, sd {sd:.1}, mean {:.0} {:.0} {:.0}; aged sd {sd2:.1}, mean {:.0} {:.0} {:.0}", cov * 100.0, mean[0], mean[1], mean[2], mean2[0], mean2[1], mean2[2]);
             // the coin fills 1/1.24 of the tile's width, seen at an angle: about 40% of the square
-            assert!(
-                cov > 0.25 && cov < 0.7,
-                "{m:?}: {:.0}% of the tile covered",
-                cov * 100.0
-            );
+            assert!(cov > 0.25 && cov < 0.7, "{m:?}: {:.0}% of the tile covered", cov * 100.0);
             assert!(sd > 6.0, "{m:?}: looks flat (sd {sd:.1})");
             for set in [&a, &b, &c] {
-                assert!(
-                    set[i].iter().all(|&p| {
-                        let al = p >> 24;
-                        ((p >> 16) & 0xff) <= al && ((p >> 8) & 0xff) <= al && (p & 0xff) <= al
-                    }),
-                    "{m:?}: not premultiplied"
-                );
+                assert!(set[i].iter().all(|&p| {
+                    let al = p >> 24;
+                    ((p >> 16) & 0xff) <= al && ((p >> 8) & 0xff) <= al && (p & 0xff) <= al
+                }), "{m:?}: not premultiplied");
             }
             assert_ne!(a[i], b[i], "{m:?}: turning changes nothing");
             assert!((cov - cov2).abs() < 0.01, "{m:?}: age changed the outline");
@@ -1699,24 +1364,9 @@ mod tests {
                 let _ = render(&mut gpu, &[coin(m, 1.0, 20.0, -10.0, old, 512, ss)]);
                 let t0 = std::time::Instant::now();
                 for k in 0..8 {
-                    let _ = render(
-                        &mut gpu,
-                        &[coin(
-                            m,
-                            1.0 + k as f32 * 0.016,
-                            20.0 + k as f32,
-                            -10.0,
-                            old,
-                            512,
-                            ss,
-                        )],
-                    );
+                    let _ = render(&mut gpu, &[coin(m, 1.0 + k as f32 * 0.016, 20.0 + k as f32, -10.0, old, 512, ss)]);
                 }
-                println!(
-                    "coin {m:?} 512 px live frame, {ss} sample(s): {:.1} ms ({})",
-                    t0.elapsed().as_secs_f32() * 1000.0 / 8.0,
-                    if gpu.hardware { "hardware" } else { "WARP" }
-                );
+                println!("coin {m:?} 512 px live frame, {ss} sample(s): {:.1} ms ({})", t0.elapsed().as_secs_f32() * 1000.0 / 8.0, if gpu.hardware { "hardware" } else { "WARP" });
             }
         }
         let (w, h) = (PX * ALL.len() as u32, PX * 3);
@@ -1736,9 +1386,7 @@ mod tests {
                 }
             }
         }
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("medal-shots");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("medal-shots");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("coins.png"), png_rgb(w, h, &img)).unwrap();
         // half size into the log too (base64 between markers): the sheet can be looked at without the artifact
@@ -1748,12 +1396,7 @@ mod tests {
             for x in 0..hw {
                 for ch in 0..3 {
                     let at = |xx: u32, yy: u32| img[((yy * w + xx) * 3 + ch) as usize] as u32;
-                    half[((y * hw + x) * 3 + ch) as usize] = ((at(2 * x, 2 * y)
-                        + at(2 * x + 1, 2 * y)
-                        + at(2 * x, 2 * y + 1)
-                        + at(2 * x + 1, 2 * y + 1)
-                        + 2)
-                        / 4) as u8;
+                    half[((y * hw + x) * 3 + ch) as usize] = ((at(2 * x, 2 * y) + at(2 * x + 1, 2 * y) + at(2 * x, 2 * y + 1) + at(2 * x + 1, 2 * y + 1) + 2) / 4) as u8;
                 }
             }
         }
@@ -1761,15 +1404,9 @@ mod tests {
         const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let mut b64 = String::with_capacity(png.len() * 4 / 3 + 4);
         for c in png.chunks(3) {
-            let v = (c[0] as u32) << 16
-                | (*c.get(1).unwrap_or(&0) as u32) << 8
-                | *c.get(2).unwrap_or(&0) as u32;
+            let v = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
             for k in 0..4 {
-                b64.push(if k <= c.len() {
-                    B64[((v >> (18 - 6 * k)) & 63) as usize] as char
-                } else {
-                    '='
-                });
+                b64.push(if k <= c.len() { B64[((v >> (18 - 6 * k)) & 63) as usize] as char } else { '=' });
             }
         }
         println!("COINS_PNG_B64_BEGIN");
@@ -1797,24 +1434,16 @@ mod tests {
             let sat = |c: [f32; 3]| c[0].max(c[1]).max(c[2]) - c[0].min(c[1]).min(c[2]);
             println!("{m:?} wear: covered {:.0}% -> {:.0}%, sd {sd0:.1} -> {sd1:.1}, saturation {:.1} -> {:.1}", c0 * 100.0, c1 * 100.0, sat(m0), sat(m1));
             assert!((c0 - c1).abs() < 0.01, "{m:?}: wear changed the outline");
-            assert!(
-                r[1].iter().all(|&p| {
-                    let al = p >> 24;
-                    ((p >> 16) & 0xff) <= al && ((p >> 8) & 0xff) <= al && (p & 0xff) <= al
-                }),
-                "{m:?}: worn medal not premultiplied"
-            );
+            assert!(r[1].iter().all(|&p| {
+                let al = p >> 24;
+                ((p >> 16) & 0xff) <= al && ((p >> 8) & 0xff) <= al && (p & 0xff) <= al
+            }), "{m:?}: worn medal not premultiplied");
             if m == Material::Emulsion {
                 assert_eq!(r[0], r[1], "the bubble must not age");
             } else {
                 assert_ne!(r[0], r[1], "{m:?}: wear changes nothing");
                 if m == Material::Gold {
-                    assert!(
-                        sat(m1) < sat(m0),
-                        "gold: dust should grey the colour ({:.1} -> {:.1})",
-                        sat(m0),
-                        sat(m1)
-                    );
+                    assert!(sat(m1) < sat(m0), "gold: dust should grey the colour ({:.1} -> {:.1})", sat(m0), sat(m1));
                 }
             }
         }
@@ -1827,11 +1456,7 @@ mod tests {
             for &b in data {
                 c ^= b as u32;
                 for _ in 0..8 {
-                    c = if c & 1 != 0 {
-                        0xedb8_8320 ^ (c >> 1)
-                    } else {
-                        c >> 1
-                    };
+                    c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
                 }
             }
             !c

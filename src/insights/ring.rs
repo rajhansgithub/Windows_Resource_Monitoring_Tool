@@ -155,12 +155,7 @@ impl Names {
         } else {
             // Reuse the slot seen longest ago. Usually older than the whole ring; if not,
             // a few old ticks may show the new name (accepted: 255 busy names in an hour).
-            let (i, _) = self
-                .last_used
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, &t)| t)
-                .unwrap_or((0, &0));
+            let (i, _) = self.last_used.iter().enumerate().min_by_key(|(_, &t)| t).unwrap_or((0, &0));
             let old = std::mem::replace(&mut self.names[i], name.to_string());
             self.index.remove(&old);
             self.last_used[i] = now_s;
@@ -204,24 +199,14 @@ fn kb(bps: f64) -> u32 {
 
 impl Ring {
     pub fn new() -> Ring {
-        Ring {
-            buf: Vec::new(),
-            head: 0,
-            names: Names::default(),
-            prev_procs: false,
-            prev_interval_ms: 0,
-        }
+        Ring { buf: Vec::new(), head: 0, names: Names::default(), prev_procs: false, prev_interval_ms: 0 }
     }
 
     /// Record one sample. O(1); allocates only on the first push and for unseen names.
     pub fn push(&mut self, c: &Ctx) {
         let s = c.snap;
         let t_s = (c.now_ms / 1000).min(u32::MAX as u64) as u32;
-        let elapsed_ms = if s.elapsed.is_finite() {
-            (s.elapsed * 1000.0).max(0.0)
-        } else {
-            0.0
-        };
+        let elapsed_ms = if s.elapsed.is_finite() { (s.elapsed * 1000.0).max(0.0) } else { 0.0 };
         // Right after an interval change (Settings, display on / off) this gap was timed by the
         // old interval: measure lateness against the longer one so it is not a false freeze.
         let interval_ms = c.interval_ms.max(self.prev_interval_ms);
@@ -235,16 +220,11 @@ impl Ring {
             ram_mb: (s.ram_used / (1024 * 1024)).min(u32::MAX as u64) as u32,
             disk_kbps: kb(s.disk_read + s.disk_write),
             net_kbps: kb(s.net_up + s.net_down),
-            fan_rpm: s
-                .gpu_fan_rpm
-                .map_or(NONE16, |r| r.min(NONE16 as u32 - 1) as u16),
+            fan_rpm: s.gpu_fan_rpm.map_or(NONE16, |r| r.min(NONE16 as u32 - 1) as u16),
             cpu: pct(s.cpu),
             ram: pct(s.ram_pct),
             gpu: s.gpu.map_or(NONE8, pct),
-            gpu_temp: s
-                .gpu_temp
-                .filter(|v| v.is_finite())
-                .map_or(NONE8, |v| v.round().clamp(0.0, 254.0) as u8),
+            gpu_temp: s.gpu_temp.filter(|v| v.is_finite()).map_or(NONE8, |v| v.round().clamp(0.0, 254.0) as u8),
             disk: s.disk_active.map_or(NONE8, pct),
             ..Tick::default()
         };
@@ -261,10 +241,7 @@ impl Ring {
             t.flags |= flag::PROCS;
             for (slot, p) in t.top.iter_mut().zip(&s.top_cpu) {
                 let v = pct(p.cpu);
-                *slot = (
-                    self.names.intern(&p.name, t_s),
-                    if v == 0 && p.cpu > 0.0 { 1 } else { v },
-                );
+                *slot = (self.names.intern(&p.name, t_s), if v == 0 && p.cpu > 0.0 { 1 } else { v });
             }
             if let Some(p) = s.top_io.first() {
                 t.io = self.names.intern(&p.name, t_s);
@@ -328,8 +305,7 @@ impl Ring {
 
     /// Ticks with `from_ms <= t <= to_ms`, oldest first.
     pub fn span(&self, from_ms: u64, to_ms: u64) -> impl Iterator<Item = &Tick> + '_ {
-        self.iter()
-            .filter(move |t| t.t_ms() >= from_ms / 1000 * 1000 && t.t_ms() <= to_ms)
+        self.iter().filter(move |t| t.t_ms() >= from_ms / 1000 * 1000 && t.t_ms() <= to_ms)
     }
 
     /// Ticks at or after `since_ms`, oldest first.
@@ -350,9 +326,7 @@ impl Ring {
 
     /// Field values of the last `n` ticks, oldest first (`NaN` where the tick has no data).
     pub fn series(&self, field: Field, n: usize) -> Vec<f32> {
-        self.last_n(n)
-            .map(|t| field.of(t).unwrap_or(f32::NAN))
-            .collect()
+        self.last_n(n).map(|t| field.of(t).unwrap_or(f32::NAN)).collect()
     }
 
     /// Interned process name.
@@ -397,12 +371,7 @@ impl Ring {
         if n == 0 {
             return Vec::new();
         }
-        let mut v: Vec<(u8, u32)> = sum
-            .iter()
-            .enumerate()
-            .filter(|(_, &s)| s > 0)
-            .map(|(i, &s)| (i as u8, s))
-            .collect();
+        let mut v: Vec<(u8, u32)> = sum.iter().enumerate().filter(|(_, &s)| s > 0).map(|(i, &s)| (i as u8, s)).collect();
         v.sort_by(|a, b| b.1.cmp(&a.1));
         v.into_iter()
             .take(k)
@@ -421,14 +390,7 @@ mod tests {
             cpu,
             ram_pct: 40.0,
             elapsed: 1.0,
-            top_cpu: procs
-                .iter()
-                .map(|(n, c)| ProcStat {
-                    name: n.to_string(),
-                    cpu: *c,
-                    ..Default::default()
-                })
-                .collect(),
+            top_cpu: procs.iter().map(|(n, c)| ProcStat { name: n.to_string(), cpu: *c, ..Default::default() }).collect(),
             ..Default::default()
         };
         let c = Ctx {
@@ -446,30 +408,16 @@ mod tests {
     fn wraps_and_keeps_order() {
         let mut r = Ring::new();
         for i in 0..(CAP as u32 + 10) {
-            r.push_tick(Tick {
-                t_s: i,
-                cpu: (i % 100) as u8,
-                ..Tick::default()
-            });
+            r.push_tick(Tick { t_s: i, cpu: (i % 100) as u8, ..Tick::default() });
         }
         assert_eq!(r.len(), CAP);
         assert_eq!(r.last().map(|t| t.t_s), Some(CAP as u32 + 9));
         assert_eq!(r.iter().next().map(|t| t.t_s), Some(10));
         assert_eq!(r.prev().map(|t| t.t_s), Some(CAP as u32 + 8));
         let s = r.series(Field::Cpu, 3);
-        assert_eq!(
-            s,
-            vec![
-                ((CAP + 7) % 100) as f32,
-                ((CAP + 8) % 100) as f32,
-                ((CAP + 9) % 100) as f32
-            ]
-        );
+        assert_eq!(s, vec![((CAP + 7) % 100) as f32, ((CAP + 8) % 100) as f32, ((CAP + 9) % 100) as f32]);
         assert_eq!(r.since((CAP as u64 + 5) * 1000).count(), 5);
-        assert_eq!(
-            r.at((CAP as u64 + 3) * 1000 + 400, 1000).map(|t| t.t_s),
-            Some(CAP as u32 + 3)
-        );
+        assert_eq!(r.at((CAP as u64 + 3) * 1000 + 400, 1000).map(|t| t.t_s), Some(CAP as u32 + 3));
         assert!(r.at(1, 1000).is_none());
     }
 
@@ -486,12 +434,7 @@ mod tests {
         let mut r = Ring::new();
         ctx_push(&mut r, 100, 90.0, &[("MsMpEng", 99.0)]); // first procs tick: no rates yet
         for i in 1..=4 {
-            ctx_push(
-                &mut r,
-                100 + i,
-                90.0,
-                &[("MsMpEng", 40.0), ("svchost", 10.0)],
-            );
+            ctx_push(&mut r, 100 + i, 90.0, &[("MsMpEng", 40.0), ("svchost", 10.0)]);
         }
         ctx_push(&mut r, 105, 90.0, &[("svchost", 50.0)]);
         let top = r.top_cpu(100_000, 105_000, 2);
@@ -506,18 +449,8 @@ mod tests {
     fn interval_change_and_wall_gap() {
         let mut r = Ring::new();
         let push = |r: &mut Ring, t_s: u64, elapsed: f64, interval_ms: u32| {
-            let snap = Snapshot {
-                elapsed,
-                ..Default::default()
-            };
-            let c = Ctx {
-                now_ms: t_s * 1000,
-                snap: &snap,
-                display_on: true,
-                input_idle_ms: 0,
-                interval_ms,
-                procs_sampled: false,
-            };
+            let snap = Snapshot { elapsed, ..Default::default() };
+            let c = Ctx { now_ms: t_s * 1000, snap: &snap, display_on: true, input_idle_ms: 0, interval_ms, procs_sampled: false };
             r.push(&c);
         };
         push(&mut r, 100, 5.0, 5000);

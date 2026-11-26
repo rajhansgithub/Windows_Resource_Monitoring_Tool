@@ -137,10 +137,7 @@ impl Page {
     }
 
     pub fn from_key(k: &str) -> Option<Page> {
-        Page::ALL
-            .iter()
-            .copied()
-            .find(|p| p.key().eq_ignore_ascii_case(k.trim()))
+        Page::ALL.iter().copied().find(|p| p.key().eq_ignore_ascii_case(k.trim()))
     }
 
     /// Position of this page's panel in `Insights::panels()` (Insights pages only).
@@ -157,15 +154,7 @@ impl Page {
 
     /// The Insights page showing panel `i`.
     pub fn of_panel(i: usize) -> Option<Page> {
-        [
-            Page::Incidents,
-            Page::Sleep,
-            Page::HeldBack,
-            Page::Baseline,
-            Page::Ghost,
-        ]
-        .get(i)
-        .copied()
+        [Page::Incidents, Page::Sleep, Page::HeldBack, Page::Baseline, Page::Ghost].get(i).copied()
     }
 
     /// The Insights page of a panel / notice key ("incidents", "sleep", ...).
@@ -180,10 +169,7 @@ impl Page {
 
     /// A settings page (General .. Data).
     pub fn is_settings(self) -> bool {
-        matches!(
-            self,
-            Page::General | Page::Metrics | Page::Colours | Page::Alerts | Page::Data
-        )
+        matches!(self, Page::General | Page::Metrics | Page::Colours | Page::Alerts | Page::Data)
     }
 
     /// The next (`dir` > 0) or previous page in navigation order, wrapping.
@@ -195,12 +181,11 @@ impl Page {
 
 /// The pages a keyboard user walks with Up / Down in the pane (menu, then footer).
 pub fn nav_order() -> impl Iterator<Item = Page> {
-    MENU.iter()
-        .filter_map(|e| match e {
-            Entry::Item(p) => Some(*p),
-            _ => None,
-        })
-        .chain(FOOTER)
+    MENU.iter().filter_map(|e| match e {
+        Entry::Item(p) => Some(*p),
+        _ => None,
+    })
+    .chain(FOOTER)
 }
 
 /// How the pane is shown.
@@ -233,9 +218,7 @@ impl History {
     pub const CAP: usize = 20;
 
     pub fn new() -> History {
-        History {
-            stack: Vec::with_capacity(History::CAP),
-        }
+        History { stack: Vec::with_capacity(History::CAP) }
     }
 
     /// Leaving `from` for another page.
@@ -283,32 +266,16 @@ impl Placement {
         }
         let n = |i: usize| v[i].parse::<i32>().ok();
         let (x, y, w, h) = (n(0)?, n(1)?, n(2)?, n(3)?);
-        let max = v
-            .get(4)
-            .is_some_and(|m| matches!(*m, "1" | "true" | "yes" | "on"));
-        (w >= 100 && h >= 100 && w <= 100_000 && h <= 100_000).then_some(Placement {
-            x,
-            y,
-            w,
-            h,
-            max,
-        })
+        let max = v.get(4).is_some_and(|m| matches!(*m, "1" | "true" | "yes" | "on"));
+        (w >= 100 && h >= 100 && w <= 100_000 && h <= 100_000).then_some(Placement { x, y, w, h, max })
     }
 
     pub fn format(&self) -> String {
-        format!(
-            "{},{},{},{},{}",
-            self.x, self.y, self.w, self.h, self.max as u8
-        )
+        format!("{},{},{},{},{}", self.x, self.y, self.w, self.h, self.max as u8)
     }
 
     pub fn rect(&self) -> Rect {
-        Rect {
-            l: self.x,
-            t: self.y,
-            r: self.x + self.w,
-            b: self.y + self.h,
-        }
+        Rect { l: self.x, t: self.y, r: self.x + self.w, b: self.y + self.h }
     }
 }
 
@@ -320,12 +287,7 @@ pub fn clamp_rect(r: Rect, work: Rect) -> Rect {
     let h = r.h().min(work.h()).max(1);
     let l = r.l.clamp(work.l, work.r - w);
     let t = r.t.clamp(work.t, work.b - h);
-    Rect {
-        l,
-        t,
-        r: l + w,
-        b: t + h,
-    }
+    Rect { l, t, r: l + w, b: t + h }
 }
 
 /// A rectangle `w`×`h` centred in `work` (never above its top).
@@ -333,12 +295,7 @@ pub fn centre_in(w: i32, h: i32, work: Rect) -> Rect {
     let (w, h) = (w.min(work.w()), h.min(work.h()));
     let l = work.l + (work.w() - w) / 2;
     let t = work.t + ((work.h() - h) / 2).max(0);
-    Rect {
-        l,
-        t,
-        r: l + w,
-        b: t + h,
-    }
+    Rect { l, t, r: l + w, b: t + h }
 }
 
 #[cfg(test)]
@@ -387,11 +344,7 @@ mod tests {
         assert!(Page::Overview.shows_insights());
         assert!(!Page::General.shows_insights());
         assert!(!Page::Achievements.shows_insights());
-        assert!(
-            Page::Alerts.is_settings()
-                && !Page::About.is_settings()
-                && !Page::Overview.is_settings()
-        );
+        assert!(Page::Alerts.is_settings() && !Page::About.is_settings() && !Page::Overview.is_settings());
     }
 
     #[test]
@@ -430,16 +383,7 @@ mod tests {
     #[test]
     fn placement_parse() {
         let p = Placement::parse("10, -20, 1200, 800, 1").unwrap();
-        assert_eq!(
-            p,
-            Placement {
-                x: 10,
-                y: -20,
-                w: 1200,
-                h: 800,
-                max: true
-            }
-        );
+        assert_eq!(p, Placement { x: 10, y: -20, w: 1200, h: 800, max: true });
         assert_eq!(Placement::parse(&p.format()), Some(p));
         assert_eq!(Placement::parse("1,2,300,400").map(|p| p.max), Some(false));
         assert_eq!(Placement::parse("1,2,3"), None);
@@ -450,80 +394,28 @@ mod tests {
 
     #[test]
     fn clamp_keeps_window_visible() {
-        let work = Rect {
-            l: 0,
-            t: 0,
-            r: 1920,
-            b: 1040,
-        };
-        let inside = Rect {
-            l: 100,
-            t: 100,
-            r: 1100,
-            b: 800,
-        };
+        let work = Rect { l: 0, t: 0, r: 1920, b: 1040 };
+        let inside = Rect { l: 100, t: 100, r: 1100, b: 800 };
         assert_eq!(clamp_rect(inside, work), inside);
         // Off the right / bottom: moved back in, size kept.
-        let r = clamp_rect(
-            Rect {
-                l: 1500,
-                t: 900,
-                r: 2500,
-                b: 1600,
-            },
-            work,
-        );
+        let r = clamp_rect(Rect { l: 1500, t: 900, r: 2500, b: 1600 }, work);
         assert_eq!((r.w(), r.h()), (1000, 700));
         assert!(r.l >= 0 && r.r <= 1920 && r.t >= 0 && r.b <= 1040);
         // On a monitor that is gone (far left): comes onto this one.
-        let r = clamp_rect(
-            Rect {
-                l: -3000,
-                t: -500,
-                r: -2000,
-                b: 200,
-            },
-            work,
-        );
+        let r = clamp_rect(Rect { l: -3000, t: -500, r: -2000, b: 200 }, work);
         assert_eq!((r.l, r.t), (0, 0));
         // Larger than the work area: shrunk to it.
-        let r = clamp_rect(
-            Rect {
-                l: -10,
-                t: -10,
-                r: 4000,
-                b: 3000,
-            },
-            work,
-        );
+        let r = clamp_rect(Rect { l: -10, t: -10, r: 4000, b: 3000 }, work);
         assert_eq!(r, work);
         // Work area not at the origin (taskbar on the left, second monitor).
-        let w2 = Rect {
-            l: 1920,
-            t: 48,
-            r: 3840,
-            b: 1080,
-        };
-        let r = clamp_rect(
-            Rect {
-                l: 1900,
-                t: 0,
-                r: 2900,
-                b: 700,
-            },
-            w2,
-        );
+        let w2 = Rect { l: 1920, t: 48, r: 3840, b: 1080 };
+        let r = clamp_rect(Rect { l: 1900, t: 0, r: 2900, b: 700 }, w2);
         assert_eq!((r.l, r.t), (1920, 48));
     }
 
     #[test]
     fn centred_default() {
-        let work = Rect {
-            l: 0,
-            t: 0,
-            r: 1920,
-            b: 1040,
-        };
+        let work = Rect { l: 0, t: 0, r: 1920, b: 1040 };
         let r = centre_in(1000, 700, work);
         assert_eq!((r.l, r.t, r.w(), r.h()), (460, 170, 1000, 700));
         let r = centre_in(3000, 2000, work);

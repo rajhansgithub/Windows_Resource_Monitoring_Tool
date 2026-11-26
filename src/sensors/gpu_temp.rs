@@ -38,10 +38,7 @@ impl GpuTemp {
     fn enumerate(&mut self) {
         self.close_all();
         self.enumerated = true;
-        let mut req = D3DKMT_ENUMADAPTERS2 {
-            NumAdapters: 0,
-            pAdapters: std::ptr::null_mut(),
-        };
+        let mut req = D3DKMT_ENUMADAPTERS2 { NumAdapters: 0, pAdapters: std::ptr::null_mut() };
         // SAFETY: a null array asks only for the adapter count.
         if unsafe { D3DKMTEnumAdapters2(&mut req) } < 0 || req.NumAdapters == 0 {
             return;
@@ -49,10 +46,7 @@ impl GpuTemp {
         let n = req.NumAdapters.min(MAX_ADAPTERS);
         // SAFETY: D3DKMT_ADAPTERINFO is plain old data; zeroed is a valid value.
         let mut infos: Vec<D3DKMT_ADAPTERINFO> = vec![unsafe { std::mem::zeroed() }; n as usize];
-        req = D3DKMT_ENUMADAPTERS2 {
-            NumAdapters: n,
-            pAdapters: infos.as_mut_ptr(),
-        };
+        req = D3DKMT_ENUMADAPTERS2 { NumAdapters: n, pAdapters: infos.as_mut_ptr() };
         // SAFETY: pAdapters points to `n` writable entries.
         if unsafe { D3DKMTEnumAdapters2(&mut req) } < 0 {
             return;

@@ -199,12 +199,7 @@ fn chart_max(c: &Chart) -> f32 {
     if c.max > 0.0 {
         return c.max;
     }
-    let hi = c
-        .points
-        .iter()
-        .copied()
-        .filter(|v| v.is_finite())
-        .fold(0.0f32, f32::max);
+    let hi = c.points.iter().copied().filter(|v| v.is_finite()).fold(0.0f32, f32::max);
     if hi <= 0.0 {
         return 1.0;
     }
@@ -233,11 +228,7 @@ fn fmt_val(v: f32, unit: &str) -> String {
 
 /// Slots on the x axis and the slot of `points[0]` (points fill the newest slots).
 fn axis(c: &Chart) -> (usize, usize) {
-    let n = if c.bars {
-        c.points.len()
-    } else {
-        c.slots.max(c.points.len())
-    };
+    let n = if c.bars { c.points.len() } else { c.slots.max(c.points.len()) };
     (n, n - c.points.len())
 }
 
@@ -267,10 +258,7 @@ fn x_of(i: usize, w: i32, n: usize, bars: bool) -> f32 {
 /// Share of the whole for each part of a split bar (negative and non-finite parts
 /// count as 0). Sums to 1, or all zeros when there is nothing to split.
 pub fn split_fracs(vals: &[f32]) -> Vec<f32> {
-    let v: Vec<f32> = vals
-        .iter()
-        .map(|x| if x.is_finite() { x.max(0.0) } else { 0.0 })
-        .collect();
+    let v: Vec<f32> = vals.iter().map(|x| if x.is_finite() { x.max(0.0) } else { 0.0 }).collect();
     let total: f32 = v.iter().sum();
     if total <= 0.0 {
         return vec![0.0; v.len()];
@@ -287,11 +275,7 @@ pub fn split_spans(vals: &[f32], w: i32) -> Vec<(i32, i32)> {
         .into_iter()
         .map(|f| {
             acc += f;
-            let x1 = if acc > 0.0 {
-                (acc * w as f32).round().min(w as f32) as i32
-            } else {
-                0
-            };
+            let x1 = if acc > 0.0 { (acc * w as f32).round().min(w as f32) as i32 } else { 0 };
             let span = (x0, x1.max(x0));
             x0 = span.1;
             span
@@ -301,11 +285,7 @@ pub fn split_spans(vals: &[f32], w: i32) -> Vec<(i32, i32)> {
 
 /// Angle of `pct` (0..100) on the gauge, radians clockwise from 3 o'clock.
 pub fn gauge_angle(pct: f32) -> f32 {
-    let t = if pct.is_finite() {
-        (pct / 100.0).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
+    let t = if pct.is_finite() { (pct / 100.0).clamp(0.0, 1.0) } else { 0.0 };
     GAUGE_A0 + (GAUGE_A1 - GAUGE_A0) * t
 }
 
@@ -344,11 +324,7 @@ pub fn signature(enabled: bool, panels: &[Panel], visual_of: Option<usize>) -> u
                         r.hash(&mut h);
                     }
                 }
-                Some(Visual::Gauge {
-                    ceiling,
-                    used,
-                    reason,
-                }) => {
+                Some(Visual::Gauge { ceiling, used, reason }) => {
                     ceiling.map(|c| c.round() as i32).hash(&mut h);
                     (used.round() as i32).hash(&mut h);
                     reason.hash(&mut h);
@@ -419,32 +395,12 @@ pub fn demo_panels(now: u64, battery: bool) -> Vec<Panel> {
             }
         })
         .collect();
-    let idle: Vec<f32> = (0..21)
-        .map(|i| {
-            if i < 12 {
-                3.1 + 0.1 * noise(i)
-            } else {
-                3.4 + 0.1 * noise(i)
-            }
-        })
-        .collect();
-    let ghost: Vec<f32> = (0..14)
-        .map(|i| 0.9 + i as f32 * 0.02 + if i >= 9 { 0.5 * (i - 8) as f32 } else { 0.0 })
-        .collect();
-    let tone_of = |v: f32, good: f32, warn: f32| {
-        if v <= good {
-            Tone::Good
-        } else if v <= warn {
-            Tone::Warn
-        } else {
-            Tone::Bad
-        }
-    };
+    let idle: Vec<f32> = (0..21).map(|i| if i < 12 { 3.1 + 0.1 * noise(i) } else { 3.4 + 0.1 * noise(i) }).collect();
+    let ghost: Vec<f32> = (0..14).map(|i| 0.9 + i as f32 * 0.02 + if i >= 9 { 0.5 * (i - 8) as f32 } else { 0.0 }).collect();
+    let tone_of = |v: f32, good: f32, warn: f32| if v <= good { Tone::Good } else if v <= warn { Tone::Warn } else { Tone::Bad };
 
     let (sleep, held) = if battery {
-        let drain = [
-            0.4f32, 0.3, 1.2, 0.5, 0.6, 2.4, 0.4, 0.5, 0.3, 0.4, 1.1, 0.5, 0.4, 1.7,
-        ];
+        let drain = [0.4f32, 0.3, 1.2, 0.5, 0.6, 2.4, 0.4, 0.5, 0.3, 0.4, 1.1, 0.5, 0.4, 1.7];
         let sleep = Panel {
             key: "sleep",
             title: "Sleep Verdict",
@@ -470,35 +426,12 @@ pub fn demo_panels(now: u64, battery: bool) -> Vec<Panel> {
                 tones: drain.iter().map(|&d| tone_of(d, 1.0, 2.0)).collect(),
             }),
             items: vec![
-                it(
-                    2 * HOUR,
-                    Tone::Bad,
-                    "Lost 14% in 8h. Awake 22% of the time. Teams was busy.",
-                    "23:10 to 07:12 \u{b7} woke by Network adapter",
-                ),
-                it(
-                    DAY + 2 * HOUR,
-                    Tone::Good,
-                    "Slept 7h 50m. Lost 3%. Good.",
-                    "23:30 to 07:20 \u{b7} woke by Power button",
-                ),
-                it(
-                    2 * DAY + 2 * HOUR,
-                    Tone::Good,
-                    "Slept 8h 5m. Lost 2%. Good.",
-                    "23:05 to 07:10 \u{b7} woke by Lid",
-                ),
+                it(2 * HOUR, Tone::Bad, "Lost 14% in 8h. Awake 22% of the time. Teams was busy.", "23:10 to 07:12 \u{b7} woke by Network adapter"),
+                it(DAY + 2 * HOUR, Tone::Good, "Slept 7h 50m. Lost 3%. Good.", "23:30 to 07:20 \u{b7} woke by Power button"),
+                it(2 * DAY + 2 * HOUR, Tone::Good, "Slept 8h 5m. Lost 2%. Good.", "23:05 to 07:10 \u{b7} woke by Lid"),
             ],
         };
-        let limit: Vec<f32> = (0..240)
-            .map(|i| {
-                if i < 140 {
-                    100.0
-                } else {
-                    62.0 + 3.0 * noise(i)
-                }
-            })
-            .collect();
+        let limit: Vec<f32> = (0..240).map(|i| if i < 140 { 100.0 } else { 62.0 + 3.0 * noise(i) }).collect();
         let held = Panel {
             key: "heldback",
             title: "Held Back",
@@ -509,11 +442,7 @@ pub fn demo_panels(now: u64, battery: bool) -> Vec<Panel> {
                 "Power plan: Balanced.".into(),
                 "Current speed 71% of normal. Thermal limit 62%.".into(),
             ],
-            visual: Some(Visual::Gauge {
-                ceiling: Some(62.0),
-                used: 48.0,
-                reason: "Firmware thermal limit".into(),
-            }),
+            visual: Some(Visual::Gauge { ceiling: Some(62.0), used: 48.0, reason: "Firmware thermal limit".into() }),
             chart: Some(Chart {
                 label: "CPU ceiling, last hour".into(),
                 points: limit,
@@ -526,18 +455,8 @@ pub fn demo_panels(now: u64, battery: bool) -> Vec<Panel> {
                 tones: vec![],
             }),
             items: vec![
-                it(
-                    23 * MIN,
-                    Tone::Bad,
-                    "Capped at 59% for 23 min.",
-                    "Firmware thermal limit.",
-                ),
-                it(
-                    5 * HOUR,
-                    Tone::Warn,
-                    "Capped at 80% for 40 min.",
-                    "Battery saver.",
-                ),
+                it(23 * MIN, Tone::Bad, "Capped at 59% for 23 min.", "Firmware thermal limit."),
+                it(5 * HOUR, Tone::Warn, "Capped at 80% for 40 min.", "Battery saver."),
             ],
         };
         (sleep, held)
@@ -564,24 +483,11 @@ pub fn demo_panels(now: u64, battery: bool) -> Vec<Panel> {
                 bars: true,
                 slots: 0,
                 x_labels: x_labels("Older", "", "Last night"),
-                tones: awake
-                    .iter()
-                    .map(|&a| if a > 50.0 { Tone::Warn } else { Tone::Info })
-                    .collect(),
+                tones: awake.iter().map(|&a| if a > 50.0 { Tone::Warn } else { Tone::Info }).collect(),
             }),
             items: vec![
-                it(
-                    2 * HOUR,
-                    Tone::Info,
-                    "Slept 7h 42m. Awake 4% of the time.",
-                    "23:30 to 07:12 \u{b7} woke by Power button",
-                ),
-                it(
-                    2 * DAY + 2 * HOUR,
-                    Tone::Warn,
-                    "Stayed awake 61% of 6h. MsMpEng was busy.",
-                    "00:10 to 06:10 \u{b7} woke by Keyboard",
-                ),
+                it(2 * HOUR, Tone::Info, "Slept 7h 42m. Awake 4% of the time.", "23:30 to 07:12 \u{b7} woke by Power button"),
+                it(2 * DAY + 2 * HOUR, Tone::Warn, "Stayed awake 61% of 6h. MsMpEng was busy.", "00:10 to 06:10 \u{b7} woke by Keyboard"),
             ],
         };
         let held = Panel {
@@ -594,11 +500,7 @@ pub fn demo_panels(now: u64, battery: bool) -> Vec<Panel> {
                 "Power plan: Balanced.".into(),
                 "Current speed 64% of normal.".into(),
             ],
-            visual: Some(Visual::Gauge {
-                ceiling: Some(100.0),
-                used: 6.0,
-                reason: "none".into(),
-            }),
+            visual: Some(Visual::Gauge { ceiling: Some(100.0), used: 6.0, reason: "none".into() }),
             chart: Some(Chart {
                 label: "CPU ceiling, last hour".into(),
                 points: vec![100.0; 240],
@@ -707,11 +609,7 @@ pub fn demo_panels(now: u64, battery: bool) -> Vec<Panel> {
 // ------------------------------------------------------------------ drawing helpers
 
 fn shift(r: Rect, dy: i32) -> Rect {
-    Rect {
-        t: r.t + dy,
-        b: r.b + dy,
-        ..r
-    }
+    Rect { t: r.t + dy, b: r.b + dy, ..r }
 }
 
 /// One pixel column from `y0` to `y1` with anti-aliased ends.
@@ -720,30 +618,14 @@ fn vspan(cv: &mut Canvas, x: i32, y0: f32, y1: f32, c: Rgba) {
     while (y as f32) < y1 {
         let cov = ((y + 1) as f32).min(y1) - (y as f32).max(y0);
         if cov > 0.0 {
-            cv.fill_rect(
-                Rect {
-                    l: x,
-                    t: y,
-                    r: x + 1,
-                    b: y + 1,
-                },
-                c.with_a((c.3 as f32 * cov.min(1.0)).round() as u8),
-            );
+            cv.fill_rect(Rect { l: x, t: y, r: x + 1, b: y + 1 }, c.with_a((c.3 as f32 * cov.min(1.0)).round() as u8));
         }
         y += 1;
     }
 }
 
 /// Tone pill ("● Worth a look") with its top-left at (x, y). Returns its width.
-pub fn draw_pill(
-    cv: &mut Canvas,
-    f: &Fonts,
-    c: &Colors,
-    dpi: u32,
-    x: i32,
-    y: i32,
-    tone: Tone,
-) -> i32 {
+pub fn draw_pill(cv: &mut Canvas, f: &Fonts, c: &Colors, dpi: u32, x: i32, y: i32, tone: Tone) -> i32 {
     let sc = |v: i32| (v * dpi as i32 + 48) / 96;
     let col = c.tone(tone);
     let label = tone_label(tone);
@@ -751,30 +633,12 @@ pub fn draw_pill(
     let h = sc(24);
     let dot = sc(8);
     let w = sc(10) + dot + sc(6) + tw + sc(12);
-    let r = Rect {
-        l: x,
-        t: y,
-        r: x + w,
-        b: y + h,
-    };
-    cv.fill_round(
-        r,
-        h as f32 / 2.0,
-        col.with_a(if c.dark { 0x2E } else { 0x26 }),
-    );
+    let r = Rect { l: x, t: y, r: x + w, b: y + h };
+    cv.fill_round(r, h as f32 / 2.0, col.with_a(if c.dark { 0x2E } else { 0x26 }));
     cv.stroke_round(r, h as f32 / 2.0, col.with_a(0x55));
     let cy = y + h / 2;
     let dl = x + sc(10);
-    cv.fill_round(
-        Rect {
-            l: dl,
-            t: cy - dot / 2,
-            r: dl + dot,
-            b: cy - dot / 2 + dot,
-        },
-        dot as f32 / 2.0,
-        col,
-    );
+    cv.fill_round(Rect { l: dl, t: cy - dot / 2, r: dl + dot, b: cy - dot / 2 + dot }, dot as f32 / 2.0, col);
     cv.text(f.small, label, dl + dot + sc(6), cy - th / 2, c.fg);
     w
 }
@@ -790,40 +654,14 @@ enum F {
 
 /// Laid-out content of a panel (content coordinates).
 enum Block {
-    Text {
-        x: i32,
-        y: i32,
-        font: F,
-        dim: bool,
-        s: String,
-    },
-    Pill {
-        x: i32,
-        y: i32,
-        tone: Tone,
-    },
+    Text { x: i32, y: i32, font: F, dim: bool, s: String },
+    Pill { x: i32, y: i32, tone: Tone },
     /// The split bar and the top-left of each legend entry.
-    Split {
-        bar: Rect,
-        legend: Vec<(i32, i32)>,
-    },
+    Split { bar: Rect, legend: Vec<(i32, i32)> },
     /// Gauge card, the square the ring sits in and the top-left of the first list row.
-    Gauge {
-        card: Rect,
-        ring: Rect,
-        list: (i32, i32),
-    },
-    Chart {
-        rect: Rect,
-    },
-    Item {
-        rect: Rect,
-        tone: Tone,
-        time: String,
-        title: String,
-        detail: Vec<String>,
-        tx: i32,
-    },
+    Gauge { card: Rect, ring: Rect, list: (i32, i32) },
+    Chart { rect: Rect },
+    Item { rect: Rect, tone: Tone, time: String, title: String, detail: Vec<String>, tx: i32 },
 }
 
 /// Colour of a split-bar part.
@@ -841,11 +679,7 @@ fn role(c: &Colors, r: Role) -> Rgba {
 fn gauge_rows(ceiling: Option<f32>, used: f32, reason: &str) -> Vec<(&'static str, String)> {
     let pct = |v: f32| format!("{}%", v.round() as i32);
     match ceiling {
-        Some(c) => vec![
-            ("Ceiling", pct(c)),
-            ("CPU use", pct(used)),
-            ("Reason", reason.to_string()),
-        ],
+        Some(c) => vec![("Ceiling", pct(c)), ("CPU use", pct(used)), ("Reason", reason.to_string())],
         None => vec![("Ceiling", "not reported".into()), ("CPU use", pct(used))],
     }
 }
@@ -854,12 +688,7 @@ fn gauge_rows(ceiling: Option<f32>, used: f32, reason: &str) -> Vec<(&'static st
 fn clipped(cv: &mut Canvas, r: Rect, f: impl FnOnce(&mut Canvas)) {
     let old = cv.clip();
     let n = match old {
-        Some(o) => Rect {
-            l: r.l.max(o.l),
-            t: r.t.max(o.t),
-            r: r.r.min(o.r),
-            b: r.b.min(o.b),
-        },
+        Some(o) => Rect { l: r.l.max(o.l), t: r.t.max(o.t), r: r.r.min(o.r), b: r.b.min(o.b) },
         None => r,
     };
     if n.l < n.r && n.t < n.b {
@@ -881,12 +710,7 @@ pub struct View {
 
 impl View {
     pub fn new() -> View {
-        View {
-            blocks: Vec::new(),
-            dpi: 96,
-            r: 0,
-            plot: None,
-        }
+        View { blocks: Vec::new(), dpi: 96, r: 0, plot: None }
     }
 
     fn sc(&self, v: i32) -> i32 {
@@ -900,17 +724,7 @@ impl View {
 
     /// Lay out `p` in the column `l..r` from content y `y0`. Returns the bottom.
     #[allow(clippy::too_many_arguments)]
-    pub fn layout(
-        &mut self,
-        p: &Panel,
-        mdc: HDC,
-        f: &Fonts,
-        dpi: u32,
-        l: i32,
-        r: i32,
-        y0: i32,
-        now_ms: u64,
-    ) -> i32 {
+    pub fn layout(&mut self, p: &Panel, mdc: HDC, f: &Fonts, dpi: u32, l: i32, r: i32, y0: i32, now_ms: u64) -> i32 {
         self.dpi = dpi;
         self.r = r;
         self.plot = None;
@@ -923,32 +737,16 @@ impl View {
         // Headline, wrapped.
         let hh = lh(f.head);
         for s in wrap(&m(f.head), &p.headline, w - self.sc(4)) {
-            blocks.push(Block::Text {
-                x: l + self.sc(2),
-                y,
-                font: F::Head,
-                dim: false,
-                s,
-            });
+            blocks.push(Block::Text { x: l + self.sc(2), y, font: F::Head, dim: false, s });
             y += hh + self.sc(2);
         }
         y += self.sc(8);
-        blocks.push(Block::Pill {
-            x: l + self.sc(2),
-            y,
-            tone: p.tone,
-        });
+        blocks.push(Block::Pill { x: l + self.sc(2), y, tone: p.tone });
         y += self.sc(24) + self.sc(12);
         let bh = lh(f.body);
         for line in &p.lines {
             for s in wrap(&m(f.body), line, w - self.sc(4)) {
-                blocks.push(Block::Text {
-                    x: l + self.sc(2),
-                    y,
-                    font: F::Body,
-                    dim: true,
-                    s,
-                });
+                blocks.push(Block::Text { x: l + self.sc(2), y, font: F::Body, dim: true, s });
                 y += bh + self.sc(2);
             }
         }
@@ -957,22 +755,14 @@ impl View {
         match &p.visual {
             Some(Visual::Split { parts, unit }) if !parts.is_empty() => {
                 y += self.sc(12);
-                let bar = Rect {
-                    l,
-                    t: y,
-                    r,
-                    b: y + self.sc(SPLIT_H),
-                };
+                let bar = Rect { l, t: y, r, b: y + self.sc(SPLIT_H) };
                 y = bar.b + self.sc(8);
                 // Legend: "■ Apps 7.2 GB" entries, wrapped to the column.
                 let mut legend = Vec::with_capacity(parts.len());
                 let (gap_x, row_h) = (self.sc(16), smh + self.sc(6));
                 let mut x = l;
                 for (label, v, _) in parts {
-                    let ew = self.sc(15)
-                        + tw(f.small, label)
-                        + self.sc(4)
-                        + tw(f.cap, &split_val(*v, unit));
+                    let ew = self.sc(15) + tw(f.small, label) + self.sc(4) + tw(f.cap, &split_val(*v, unit));
                     if x > l && x + ew > r {
                         x = l;
                         y += row_h;
@@ -983,130 +773,59 @@ impl View {
                 y += smh;
                 blocks.push(Block::Split { bar, legend });
             }
-            Some(Visual::Gauge {
-                ceiling,
-                used,
-                reason,
-            }) => {
+            Some(Visual::Gauge { ceiling, used, reason }) => {
                 y += self.sc(12);
                 let rows = gauge_rows(*ceiling, *used, reason);
                 let row_h = smh + self.sc(4);
                 let list_h = rows.len() as i32 * row_h - self.sc(4);
                 let g = self.sc(GAUGE);
                 let vpad = self.sc(8);
-                let label_w = rows
-                    .iter()
-                    .map(|(k, v)| tw(f.small, k) + self.sc(6) + tw(f.cap, v))
-                    .max()
-                    .unwrap_or(0);
+                let label_w = rows.iter().map(|(k, v)| tw(f.small, k) + self.sc(6) + tw(f.cap, v)).max().unwrap_or(0);
                 // Ring and list side by side; the list goes under the ring when narrow.
                 let side = w >= pad * 2 + g + self.sc(16) + label_w.min(self.sc(200));
-                let ring = Rect {
-                    l: l + pad,
-                    t: y + vpad,
-                    r: l + pad + g,
-                    b: y + vpad + g,
-                };
+                let ring = Rect { l: l + pad, t: y + vpad, r: l + pad + g, b: y + vpad + g };
                 let (list, bottom) = if side {
-                    (
-                        (ring.r + self.sc(16), ring.t + (g - list_h) / 2),
-                        ring.b + vpad,
-                    )
+                    ((ring.r + self.sc(16), ring.t + (g - list_h) / 2), ring.b + vpad)
                 } else {
-                    (
-                        (l + pad, ring.b + self.sc(4)),
-                        ring.b + self.sc(4) + list_h + pad,
-                    )
+                    ((l + pad, ring.b + self.sc(4)), ring.b + self.sc(4) + list_h + pad)
                 };
-                let card = Rect {
-                    l,
-                    t: y,
-                    r,
-                    b: bottom,
-                };
+                let card = Rect { l, t: y, r, b: bottom };
                 y = card.b;
                 blocks.push(Block::Gauge { card, ring, list });
             }
             _ => {}
         }
-        if let Some(c) = p
-            .chart
-            .as_ref()
-            .filter(|c| c.points.iter().any(|v| v.is_finite()))
-        {
+        if let Some(c) = p.chart.as_ref().filter(|c| c.points.iter().any(|v| v.is_finite())) {
             y += self.sc(16);
             let tiny_h = lh(f.tiny);
             let gutter = y_labels(c).iter().map(|s| tw(f.tiny, s)).max().unwrap_or(0) + self.sc(8);
             let xl = c.x_labels.iter().any(|s| !s.is_empty());
             let top = y + self.sc(12) + lh(f.semi) + self.sc(12);
-            let plot = Rect {
-                l: l + pad + gutter,
-                t: top,
-                r: r - pad,
-                b: top + self.sc(PLOT_H),
-            };
+            let plot = Rect { l: l + pad + gutter, t: top, r: r - pad, b: top + self.sc(PLOT_H) };
             let bottom = plot.b + if xl { self.sc(6) + tiny_h } else { 0 } + self.sc(12);
             self.plot = Some(plot);
-            blocks.push(Block::Chart {
-                rect: Rect {
-                    l,
-                    t: y,
-                    r,
-                    b: bottom,
-                },
-            });
+            blocks.push(Block::Chart { rect: Rect { l, t: y, r, b: bottom } });
             y = bottom;
         }
         // Cards.
         y += self.sc(24);
         let sh = lh(f.semi);
-        blocks.push(Block::Text {
-            x: l + self.sc(2),
-            y,
-            font: F::Semi,
-            dim: false,
-            s: items_heading(p.key).into(),
-        });
+        blocks.push(Block::Text { x: l + self.sc(2), y, font: F::Semi, dim: false, s: items_heading(p.key).into() });
         y += sh + self.sc(10);
         if p.items.is_empty() {
-            blocks.push(Block::Text {
-                x: l + self.sc(2),
-                y,
-                font: F::Body,
-                dim: true,
-                s: empty_text(p.key).into(),
-            });
+            blocks.push(Block::Text { x: l + self.sc(2), y, font: F::Body, dim: true, s: empty_text(p.key).into() });
             y += bh + self.sc(8);
         } else {
             let times: Vec<String> = p.items.iter().map(|it| when(it.t_ms, now_ms)).collect();
-            let time_w = times
-                .iter()
-                .map(|t| measure_dc(mdc, f.small, t).0)
-                .max()
-                .unwrap_or(0);
+            let time_w = times.iter().map(|t| measure_dc(mdc, f.small, t).0).max().unwrap_or(0);
             let tx = l + self.sc(24) + if time_w > 0 { time_w + self.sc(16) } else { 0 };
             let text_w = (r - pad - tx).max(self.sc(80));
             for (it, time) in p.items.iter().zip(times) {
                 let detail = wrap(&m(f.small), &it.detail, text_w);
-                let h = pad * 2 - self.sc(4)
-                    + sh
-                    + detail.len() as i32 * smh
-                    + if detail.is_empty() { 0 } else { self.sc(2) };
-                let rect = Rect {
-                    l,
-                    t: y,
-                    r,
-                    b: y + h.max(self.sc(48)),
-                };
+                let h = pad * 2 - self.sc(4) + sh + detail.len() as i32 * smh + if detail.is_empty() { 0 } else { self.sc(2) };
+                let rect = Rect { l, t: y, r, b: y + h.max(self.sc(48)) };
                 y = rect.b + self.sc(4);
-                blocks.push(Block::Item {
-                    rect,
-                    tone: it.tone,
-                    time,
-                    title: it.title.clone(),
-                    detail,
-                    tx,
-                });
+                blocks.push(Block::Item { rect, tone: it.tone, time, title: it.title.clone(), detail, tx });
             }
         }
         self.blocks = blocks;
@@ -1121,17 +840,7 @@ impl View {
     /// Paint with content y shifted by `dy` (client = content + dy); `vt..vb`
     /// is the visible band. `hover_x` = client x over the chart plot.
     #[allow(clippy::too_many_arguments)]
-    pub fn draw(
-        &self,
-        cv: &mut Canvas,
-        p: &Panel,
-        f: &Fonts,
-        c: &Colors,
-        dy: i32,
-        vt: i32,
-        vb: i32,
-        hover_x: Option<i32>,
-    ) {
+    pub fn draw(&self, cv: &mut Canvas, p: &Panel, f: &Fonts, c: &Colors, dy: i32, vt: i32, vb: i32, hover_x: Option<i32>) {
         let rad = self.sc(6) as f32;
         let lh = |cv: &Canvas, font: HFONT| cv.measure(font, "Ag").1;
         for b in &self.blocks {
@@ -1153,9 +862,7 @@ impl View {
                     draw_pill(cv, f, c, self.dpi, *x, y + dy, *tone);
                 }
                 Block::Split { bar, legend } => {
-                    let Some(Visual::Split { parts, unit }) = &p.visual else {
-                        continue;
-                    };
+                    let Some(Visual::Split { parts, unit }) = &p.visual else { continue };
                     let bar = shift(*bar, dy);
                     if bar.t > vb || legend.last().is_some_and(|l| l.1 + dy + self.sc(30) < vt) {
                         continue;
@@ -1163,14 +870,7 @@ impl View {
                     self.draw_split(cv, f, c, bar, legend, parts, unit, dy);
                 }
                 Block::Gauge { card, ring, list } => {
-                    let Some(Visual::Gauge {
-                        ceiling,
-                        used,
-                        reason,
-                    }) = &p.visual
-                    else {
-                        continue;
-                    };
+                    let Some(Visual::Gauge { ceiling, used, reason }) = &p.visual else { continue };
                     let card = shift(*card, dy);
                     if card.b < vt || card.t > vb {
                         continue;
@@ -1198,14 +898,7 @@ impl View {
                         self.draw_chart(cv, f, c, r, shift(plot, dy), ch, hover_x);
                     }
                 }
-                Block::Item {
-                    rect,
-                    tone,
-                    time,
-                    title,
-                    detail,
-                    tx,
-                } => {
+                Block::Item { rect, tone, time, title, detail, tx } => {
                     let r = shift(*rect, dy);
                     if r.b < vt || r.t > vb {
                         continue;
@@ -1213,24 +906,13 @@ impl View {
                     cv.fill_round(r, rad, c.card);
                     cv.stroke_round(r, rad, c.card_border);
                     let pad = self.sc(CARD_PAD);
-                    let stripe = Rect {
-                        l: r.l + self.sc(8),
-                        t: r.t + self.sc(10),
-                        r: r.l + self.sc(11),
-                        b: r.b - self.sc(10),
-                    };
+                    let stripe = Rect { l: r.l + self.sc(8), t: r.t + self.sc(10), r: r.l + self.sc(11), b: r.b - self.sc(10) };
                     cv.fill_round(stripe, stripe.w() as f32 / 2.0, c.tone(*tone));
                     let ty = r.t + pad - self.sc(2);
                     let sh = lh(cv, f.semi);
                     if !time.is_empty() {
                         let th = lh(cv, f.small);
-                        cv.text(
-                            f.small,
-                            time,
-                            r.l + self.sc(24),
-                            ty + (sh - th) / 2 + self.sc(1),
-                            c.dim,
-                        );
+                        cv.text(f.small, time, r.l + self.sc(24), ty + (sh - th) / 2 + self.sc(1), c.dim);
                     }
                     let maxw = r.r - pad - tx;
                     let t = cv.ellipsize(f.semi, title, maxw);
@@ -1249,32 +931,14 @@ impl View {
 
     /// Stacked bar (rounded ends, parts clipped out of one rounded shape) and legend.
     #[allow(clippy::too_many_arguments)]
-    fn draw_split(
-        &self,
-        cv: &mut Canvas,
-        f: &Fonts,
-        c: &Colors,
-        bar: Rect,
-        legend: &[(i32, i32)],
-        parts: &[(&str, f32, Role)],
-        unit: &str,
-        dy: i32,
-    ) {
+    fn draw_split(&self, cv: &mut Canvas, f: &Fonts, c: &Colors, bar: Rect, legend: &[(i32, i32)], parts: &[(&str, f32, Role)], unit: &str, dy: i32) {
         let rad = self.sc(6) as f32;
         let vals: Vec<f32> = parts.iter().map(|p| p.1).collect();
         // The track first, so a zero total still shows an empty bar.
         cv.fill_round(bar, rad, role(c, Role::Track));
         for ((x0, x1), (_, _, r)) in split_spans(&vals, bar.w()).into_iter().zip(parts) {
             if x1 > x0 && *r != Role::Track {
-                clipped(
-                    cv,
-                    Rect {
-                        l: bar.l + x0,
-                        r: bar.l + x1,
-                        ..bar
-                    },
-                    |cv| cv.fill_round(bar, rad, role(c, *r)),
-                );
+                clipped(cv, Rect { l: bar.l + x0, r: bar.l + x1, ..bar }, |cv| cv.fill_round(bar, rad, role(c, *r)));
             }
         }
         cv.stroke_round(bar, rad, c.card_border);
@@ -1283,12 +947,7 @@ impl View {
         for ((x, y), (label, v, r)) in legend.iter().zip(parts) {
             let y = y + dy;
             let sy = y + (smh - sq) / 2;
-            let sw = Rect {
-                l: *x,
-                t: sy,
-                r: x + sq,
-                b: sy + sq,
-            };
+            let sw = Rect { l: *x, t: sy, r: x + sq, b: sy + sq };
             cv.fill_round(sw, self.sc(2) as f32, role(c, *r));
             if *r == Role::Track {
                 cv.stroke_round(sw, self.sc(2) as f32, c.card_border);
@@ -1302,15 +961,7 @@ impl View {
 
     /// Gauge ring: track, the part above the ceiling tinted, CPU use in accent,
     /// a dot on the ceiling, the value in the middle.
-    fn draw_gauge(
-        &self,
-        cv: &mut Canvas,
-        f: &Fonts,
-        c: &Colors,
-        ring: Rect,
-        ceiling: Option<f32>,
-        used: f32,
-    ) {
+    fn draw_gauge(&self, cv: &mut Canvas, f: &Fonts, c: &Colors, ring: Rect, ceiling: Option<f32>, used: f32) {
         let s = ring.w() as f32;
         let (cx, cy) = (ring.l as f32 + s / 2.0, ring.t as f32 + s * 0.54);
         let rr = s * 0.385;
@@ -1318,15 +969,7 @@ impl View {
         cv.stroke_arc(cx, cy, rr, th, GAUGE_A0, GAUGE_A1, c.fg.with_a(0x1C));
         let top = ceiling.unwrap_or(100.0);
         if ceiling.is_some_and(|x| x < 100.0) {
-            cv.stroke_arc(
-                cx,
-                cy,
-                rr,
-                th,
-                gauge_angle(top),
-                GAUGE_A1,
-                c.warn.with_a(0x59),
-            );
+            cv.stroke_arc(cx, cy, rr, th, gauge_angle(top), GAUGE_A1, c.warn.with_a(0x59));
         }
         let fill = used.min(top);
         if fill >= 0.5 {
@@ -1335,21 +978,9 @@ impl View {
         if let Some(x) = ceiling {
             let a = gauge_angle(x);
             let d = (s * 0.085).round() as i32;
-            let (dx, dy) = (
-                (cx + rr * a.cos()).round() as i32,
-                (cy + rr * a.sin()).round() as i32,
-            );
+            let (dx, dy) = ((cx + rr * a.cos()).round() as i32, (cy + rr * a.sin()).round() as i32);
             let col = if x < 95.0 { c.warn } else { c.good };
-            cv.fill_round(
-                Rect {
-                    l: dx - d / 2,
-                    t: dy - d / 2,
-                    r: dx - d / 2 + d,
-                    b: dy - d / 2 + d,
-                },
-                d as f32 / 2.0,
-                col,
-            );
+            cv.fill_round(Rect { l: dx - d / 2, t: dy - d / 2, r: dx - d / 2 + d, b: dy - d / 2 + d }, d as f32 / 2.0, col);
         }
         let (big, cap) = match ceiling {
             Some(x) => (format!("{}%", x.round() as i32), "ceiling"),
@@ -1362,16 +993,7 @@ impl View {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn draw_chart(
-        &self,
-        cv: &mut Canvas,
-        f: &Fonts,
-        p: &Colors,
-        card: Rect,
-        pr: Rect,
-        c: &Chart,
-        hover_x: Option<i32>,
-    ) {
+    fn draw_chart(&self, cv: &mut Canvas, f: &Fonts, p: &Colors, card: Rect, pr: Rect, c: &Chart, hover_x: Option<i32>) {
         let rad = self.sc(6) as f32;
         cv.fill_round(card, rad, p.card);
         cv.stroke_round(card, rad, p.card_border);
@@ -1383,13 +1005,7 @@ impl View {
         let head_t = card.t + self.sc(12);
         cv.text(f.semi, &label, card.l + pad, head_t, p.fg);
         let (sh, smh) = (cv.measure(f.semi, "Ag").1, cv.measure(f.small, "Ag").1);
-        cv.text_right(
-            f.small,
-            &max_s,
-            card.r - pad,
-            head_t + (sh - smh) / 2,
-            p.dim,
-        );
+        cv.text_right(f.small, &max_s, card.r - pad, head_t + (sh - smh) / 2, p.dim);
         let (w, h) = (pr.w(), pr.h());
         if w <= 2 || h <= 2 {
             return;
@@ -1399,27 +1015,11 @@ impl View {
         let ys = [pr.t, pr.t + (h - 1) / 2, pr.b - 1];
         for (k, (yy, s)) in ys.iter().zip(y_labels(c)).enumerate() {
             if k == 2 {
-                cv.fill_rect(
-                    Rect {
-                        l: pr.l,
-                        t: *yy,
-                        r: pr.r,
-                        b: yy + 1,
-                    },
-                    p.line.mix(p.dim, 0.3),
-                );
+                cv.fill_rect(Rect { l: pr.l, t: *yy, r: pr.r, b: yy + 1 }, p.line.mix(p.dim, 0.3));
             } else {
                 let mut x = pr.l;
                 while x < pr.r {
-                    cv.fill_rect(
-                        Rect {
-                            l: x,
-                            t: *yy,
-                            r: (x + self.sc(3)).min(pr.r),
-                            b: yy + 1,
-                        },
-                        p.line,
-                    );
+                    cv.fill_rect(Rect { l: x, t: *yy, r: (x + self.sc(3)).min(pr.r), b: yy + 1 }, p.line);
                     x += self.sc(7);
                 }
             }
@@ -1445,60 +1045,30 @@ impl View {
         }
         // Value of slot `i`; None = no data (before the series starts, or a gap).
         let val = |i: usize| -> Option<f32> {
-            i.checked_sub(off)
-                .and_then(|j| c.points.get(j))
-                .copied()
-                .filter(|v| v.is_finite())
-                .map(|v| v.max(0.0))
+            i.checked_sub(off).and_then(|j| c.points.get(j)).copied().filter(|v| v.is_finite()).map(|v| v.max(0.0))
         };
         let y_of = |v: f32| pr.b as f32 - 1.0 - (v / max).clamp(0.0, 1.0) * (h - 2) as f32;
-        let hover_i = hover_x
-            .and_then(|hx| index_at(hx - pr.l, w, n, bars))
-            .filter(|i| val(*i).is_some());
+        let hover_i = hover_x.and_then(|hx| index_at(hx - pr.l, w, n, bars)).filter(|i| val(*i).is_some());
         let acc = p.accent;
         let fill_a = if p.dark { 0x50 } else { 0x40 } as f32;
 
         if bars {
             let slot = w as f32 / n as f32;
             // Few points: keep bars slim instead of filling the whole card.
-            let bw = (slot * 0.62)
-                .max(self.sc(2) as f32)
-                .min(slot)
-                .min(self.sc(28) as f32);
+            let bw = (slot * 0.62).max(self.sc(2) as f32).min(slot).min(self.sc(28) as f32);
             let br_rad = self.sc(3);
             for i in 0..n {
                 let Some(v) = val(i) else { continue };
                 let cx = pr.l as f32 + x_of(i, w, n, true);
                 let top = y_of(v).min(pr.b as f32 - 2.0);
-                let (bl, brr) = (
-                    (cx - bw / 2.0).round() as i32,
-                    (cx + bw / 2.0).round() as i32,
-                );
-                let br = Rect {
-                    l: bl,
-                    t: top.round() as i32,
-                    r: brr,
-                    b: pr.b - 1,
-                };
+                let (bl, brr) = ((cx - bw / 2.0).round() as i32, (cx + bw / 2.0).round() as i32);
+                let br = Rect { l: bl, t: top.round() as i32, r: brr, b: pr.b - 1 };
                 let col = c.tones.get(i - off).map_or(acc, |t| p.tone(*t));
                 // The newest bar (and the one under the mouse) at full strength.
                 let full = i + 1 == n || hover_i == Some(i);
-                let col = if full {
-                    col
-                } else {
-                    col.with_a((col.3 as f32 * 0.75) as u8)
-                };
+                let col = if full { col } else { col.with_a((col.3 as f32 * 0.75) as u8) };
                 // Rounded top, square bottom: a taller rounded bar cut at the baseline.
-                clipped(cv, br, |cv| {
-                    cv.fill_round(
-                        Rect {
-                            b: br.b + br_rad,
-                            ..br
-                        },
-                        br_rad as f32,
-                        col,
-                    )
-                });
+                clipped(cv, br, |cv| cv.fill_round(Rect { b: br.b + br_rad, ..br }, br_rad as f32, col));
             }
         } else {
             let th = (self.sc(2) as f32).max(1.5);
@@ -1517,21 +1087,9 @@ impl View {
                     let span = (pr.b - 1) as f32 - yv;
                     let mut yy = yv.ceil() as i32;
                     while yy < pr.b - 1 {
-                        let t = if span > 0.0 {
-                            (yy as f32 - yv) / span
-                        } else {
-                            1.0
-                        };
+                        let t = if span > 0.0 { (yy as f32 - yv) / span } else { 1.0 };
                         let al = fill_a * (1.0 - 0.8 * t);
-                        cv.fill_rect(
-                            Rect {
-                                l: x,
-                                t: yy,
-                                r: x + 1,
-                                b: yy + 1,
-                            },
-                            acc.with_a(al as u8),
-                        );
+                        cv.fill_rect(Rect { l: x, t: yy, r: x + 1, b: yy + 1 }, acc.with_a(al as u8));
                         yy += 1;
                     }
                     let py = prev.unwrap_or(yv);
@@ -1544,25 +1102,10 @@ impl View {
             for i in 0..n {
                 let Some(v) = val(i) else { continue };
                 let lone = (i == 0 || val(i - 1).is_none()) && (i + 1 >= n || val(i + 1).is_none());
-                let d = if i + 1 == n {
-                    self.sc(7)
-                } else if lone {
-                    self.sc(6)
-                } else {
-                    continue;
-                };
+                let d = if i + 1 == n { self.sc(7) } else if lone { self.sc(6) } else { continue };
                 let cx = pr.l + x_of(i, w, n, false).round() as i32;
                 let cy = y_of(v).round() as i32;
-                cv.fill_round(
-                    Rect {
-                        l: cx - d / 2,
-                        t: cy - d / 2,
-                        r: cx - d / 2 + d,
-                        b: cy - d / 2 + d,
-                    },
-                    d as f32 / 2.0,
-                    acc,
-                );
+                cv.fill_round(Rect { l: cx - d / 2, t: cy - d / 2, r: cx - d / 2 + d, b: cy - d / 2 + d }, d as f32 / 2.0, acc);
             }
         }
 
@@ -1576,23 +1119,11 @@ impl View {
             let mx = pr.l + x_of(slot, w, n, bars).round() as i32;
             let mut yy = pr.t;
             while yy < pr.b {
-                cv.fill_rect(
-                    Rect {
-                        l: mx,
-                        t: yy,
-                        r: mx + 1,
-                        b: (yy + self.sc(3)).min(pr.b),
-                    },
-                    p.warn.with_a(0xC0),
-                );
+                cv.fill_rect(Rect { l: mx, t: yy, r: mx + 1, b: (yy + self.sc(3)).min(pr.b) }, p.warn.with_a(0xC0));
                 yy += self.sc(6);
             }
             let (lw, _) = cv.measure(f.tiny, lab);
-            let lx = if mx + self.sc(4) + lw > pr.r {
-                mx - self.sc(4) - lw
-            } else {
-                mx + self.sc(4)
-            };
+            let lx = if mx + self.sc(4) + lw > pr.r { mx - self.sc(4) - lw } else { mx + self.sc(4) };
             if lx > last_r + self.sc(4) {
                 cv.text(f.tiny, lab, lx, pr.t + self.sc(3), p.warn);
                 last_r = lx + lw;
@@ -1605,26 +1136,9 @@ impl View {
             let v = val(i).unwrap_or(0.0);
             let hy = y_of(v).round() as i32;
             if !bars {
-                cv.fill_rect(
-                    Rect {
-                        l: hx,
-                        t: pr.t,
-                        r: hx + 1,
-                        b: pr.b,
-                    },
-                    p.dim.with_a(0xA0),
-                );
+                cv.fill_rect(Rect { l: hx, t: pr.t, r: hx + 1, b: pr.b }, p.dim.with_a(0xA0));
                 let d = self.sc(8);
-                cv.fill_round(
-                    Rect {
-                        l: hx - d / 2,
-                        t: hy - d / 2,
-                        r: hx - d / 2 + d,
-                        b: hy - d / 2 + d,
-                    },
-                    d as f32 / 2.0,
-                    acc,
-                );
+                cv.fill_round(Rect { l: hx - d / 2, t: hy - d / 2, r: hx - d / 2 + d, b: hy - d / 2 + d }, d as f32 / 2.0, acc);
             }
             let mut s = fmt_val(v, c.unit);
             if let Some((_, lab)) = c.markers.iter().find(|(m, _)| m + off == i) {
@@ -1637,12 +1151,7 @@ impl View {
                 bl = hx - self.sc(10) - bw;
             }
             let bt = (hy - bh - self.sc(8)).max(pr.t + self.sc(2));
-            let br = Rect {
-                l: bl,
-                t: bt,
-                r: bl + bw,
-                b: bt + bh,
-            };
+            let br = Rect { l: bl, t: bt, r: bl + bw, b: bt + bh };
             cv.fill_round(br, self.sc(4) as f32, p.bubble);
             cv.stroke_round(br, self.sc(4) as f32, p.card_border.with_a(0x40));
             cv.text(f.small, &s, bl + self.sc(8), bt + self.sc(4), p.fg);
@@ -1666,10 +1175,7 @@ mod tests {
         assert_eq!(wrap(&chars, "short", 40), vec!["short"]);
         assert!(wrap(&chars, "   ", 10).is_empty());
         // A word longer than the line stays whole on its own line.
-        assert_eq!(
-            wrap(&chars, "a verylongwordhere b", 6),
-            vec!["a", "verylongwordhere", "b"]
-        );
+        assert_eq!(wrap(&chars, "a verylongwordhere b", 6), vec!["a", "verylongwordhere", "b"]);
     }
 
     #[test]
@@ -1683,11 +1189,7 @@ mod tests {
 
     #[test]
     fn axis_max() {
-        let c = |pts: Vec<f32>, max| Chart {
-            points: pts,
-            max,
-            ..Default::default()
-        };
+        let c = |pts: Vec<f32>, max| Chart { points: pts, max, ..Default::default() };
         assert_eq!(chart_max(&c(vec![1.0, 2.0], 100.0)), 100.0);
         assert_eq!(chart_max(&c(vec![3.2, 4.8], 0.0)), 5.0);
         assert_eq!(chart_max(&c(vec![6.4], 0.0)), 10.0);
@@ -1707,24 +1209,11 @@ mod tests {
 
     #[test]
     fn chart_x_mapping_round_trips() {
-        for &(n, bars) in &[
-            (120usize, false),
-            (21, true),
-            (1, true),
-            (1, false),
-            (2, false),
-            (60, false),
-        ] {
+        for &(n, bars) in &[(120usize, false), (21, true), (1, true), (1, false), (2, false), (60, false)] {
             let w = 600;
             for i in 0..n {
                 let x = x_of(i, w, n, bars).round() as i32;
-                assert_eq!(
-                    index_at(x.min(w - 1), w, n, bars),
-                    Some(i),
-                    "n={} i={}",
-                    n,
-                    i
-                );
+                assert_eq!(index_at(x.min(w - 1), w, n, bars), Some(i), "n={} i={}", n, i);
             }
         }
         assert_eq!(index_at(-1, 600, 10, true), None);
@@ -1735,31 +1224,15 @@ mod tests {
     #[test]
     fn fixed_window_keeps_full_axis() {
         // 3 of 60 minutes filled: still 60 slots, data at the right end.
-        let c = Chart {
-            points: vec![1.0, 2.0, 3.0],
-            slots: 60,
-            ..Default::default()
-        };
+        let c = Chart { points: vec![1.0, 2.0, 3.0], slots: 60, ..Default::default() };
         assert_eq!(axis(&c), (60, 57));
         // Bars ignore `slots`; a plain series is as long as its points.
-        let b = Chart {
-            points: vec![1.0, 2.0],
-            slots: 60,
-            bars: true,
-            ..Default::default()
-        };
+        let b = Chart { points: vec![1.0, 2.0], slots: 60, bars: true, ..Default::default() };
         assert_eq!(axis(&b), (2, 0));
-        let s = Chart {
-            points: vec![1.0; 5],
-            ..Default::default()
-        };
+        let s = Chart { points: vec![1.0; 5], ..Default::default() };
         assert_eq!(axis(&s), (5, 0));
         // More points than slots never underflows.
-        let o = Chart {
-            points: vec![1.0; 70],
-            slots: 60,
-            ..Default::default()
-        };
+        let o = Chart { points: vec![1.0; 70], slots: 60, ..Default::default() };
         assert_eq!(axis(&o), (70, 0));
     }
 
@@ -1792,11 +1265,7 @@ mod tests {
         assert_ne!(s, signature(true, &b, None));
         // A live gauge value counts only while its page is on screen.
         let mut b = a.clone();
-        b[2].visual = Some(Visual::Gauge {
-            ceiling: Some(62.0),
-            used: 90.0,
-            reason: "Firmware thermal limit".into(),
-        });
+        b[2].visual = Some(Visual::Gauge { ceiling: Some(62.0), used: 90.0, reason: "Firmware thermal limit".into() });
         assert_eq!(s, signature(true, &b, None));
         assert_ne!(signature(true, &a, Some(2)), signature(true, &b, Some(2)));
     }
@@ -1806,10 +1275,7 @@ mod tests {
         for battery in [true, false] {
             let p = demo_panels(1_764_000_000_000, battery);
             let keys: Vec<_> = p.iter().map(|x| x.key).collect();
-            assert_eq!(
-                keys,
-                ["incidents", "sleep", "heldback", "baseline", "ghost"]
-            );
+            assert_eq!(keys, ["incidents", "sleep", "heldback", "baseline", "ghost"]);
             for x in &p {
                 let c = x.chart.as_ref().unwrap();
                 assert!(!c.points.is_empty());
@@ -1831,11 +1297,7 @@ mod tests {
             text.extend(x.items.into_iter().flat_map(|i| [i.title, i.detail]));
             for t in text {
                 let t = t.to_ascii_lowercase();
-                assert!(
-                    !t.contains("battery") && !t.contains("lid") && !t.contains("drain"),
-                    "{}",
-                    t
-                );
+                assert!(!t.contains("battery") && !t.contains("lid") && !t.contains("drain"), "{}", t);
             }
         }
     }
@@ -1870,10 +1332,7 @@ mod tests {
             assert!(s.windows(2).all(|p| p[0].1 == p[1].0), "{:?}", s);
         }
         // Thirds of 100 px: rounding on the running sum, never off by more than 1.
-        assert_eq!(
-            split_spans(&[1.0, 1.0, 1.0], 100),
-            vec![(0, 33), (33, 67), (67, 100)]
-        );
+        assert_eq!(split_spans(&[1.0, 1.0, 1.0], 100), vec![(0, 33), (33, 67), (67, 100)]);
         assert_eq!(split_spans(&[0.0, 0.0], 50), vec![(0, 0), (0, 0)]);
     }
 
@@ -1896,39 +1355,17 @@ mod tests {
     #[test]
     fn gauge_list() {
         let r = gauge_rows(Some(100.0), 6.2, "none");
-        assert_eq!(
-            r,
-            vec![
-                ("Ceiling", "100%".to_string()),
-                ("CPU use", "6%".into()),
-                ("Reason", "none".into())
-            ]
-        );
+        assert_eq!(r, vec![("Ceiling", "100%".to_string()), ("CPU use", "6%".into()), ("Reason", "none".into())]);
         // Not reported: no reason row, CPU use still shown.
         let r = gauge_rows(None, 6.0, "none");
-        assert_eq!(
-            r,
-            vec![
-                ("Ceiling", "not reported".to_string()),
-                ("CPU use", "6%".into())
-            ]
-        );
+        assert_eq!(r, vec![("Ceiling", "not reported".to_string()), ("CPU use", "6%".into())]);
     }
 
     #[test]
     fn y_axis_labels() {
-        let c = Chart {
-            points: vec![1.0, 4.4],
-            unit: "GB",
-            ..Default::default()
-        };
+        let c = Chart { points: vec![1.0, 4.4], unit: "GB", ..Default::default() };
         assert_eq!(y_labels(&c), ["5 GB".to_string(), "2.5".into(), "0".into()]);
-        let c = Chart {
-            points: vec![10.0],
-            max: 100.0,
-            unit: "%",
-            ..Default::default()
-        };
+        let c = Chart { points: vec![10.0], max: 100.0, unit: "%", ..Default::default() };
         assert_eq!(y_labels(&c), ["100%".to_string(), "50".into(), "0".into()]);
     }
 }

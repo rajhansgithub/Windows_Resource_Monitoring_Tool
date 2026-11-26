@@ -117,10 +117,7 @@ pub fn write_str(s: &str, out: &mut String) {
 
 /// Parse one JSON document. `None` on any syntax error or trailing garbage.
 pub fn parse(text: &str) -> Option<Json> {
-    let mut p = P {
-        b: text.as_bytes(),
-        i: 0,
-    };
+    let mut p = P { b: text.as_bytes(), i: 0 };
     let v = p.value(0)?;
     p.ws();
     if p.i == p.b.len() {
@@ -217,12 +214,7 @@ impl P<'_> {
 
     fn number(&mut self) -> Option<Json> {
         let start = self.i;
-        while self.i < self.b.len()
-            && matches!(
-                self.b[self.i],
-                b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E'
-            )
-        {
+        while self.i < self.b.len() && matches!(self.b[self.i], b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E') {
             self.i += 1;
         }
         let s = std::str::from_utf8(&self.b[start..self.i]).ok()?;
@@ -263,14 +255,10 @@ impl P<'_> {
                             let mut cp = self.hex4()?;
                             if (0xD800..0xDC00).contains(&cp) {
                                 // surrogate pair
-                                if self.b.get(self.i) == Some(&b'\\')
-                                    && self.b.get(self.i + 1) == Some(&b'u')
-                                {
+                                if self.b.get(self.i) == Some(&b'\\') && self.b.get(self.i + 1) == Some(&b'u') {
                                     self.i += 2;
                                     let lo = self.hex4()?;
-                                    cp = 0x10000
-                                        + ((cp - 0xD800) << 10)
-                                        + (lo.wrapping_sub(0xDC00) & 0x3FF);
+                                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo.wrapping_sub(0xDC00) & 0x3FF);
                                 } else {
                                     return None;
                                 }
@@ -296,10 +284,7 @@ mod tests {
     fn round_trip_and_sorted() {
         let j = parse(r#"{"b":[1,2.5,true,null],"a":{"x":"h\"i\né"}}"#).unwrap();
         let s = j.to_string();
-        assert_eq!(
-            s,
-            "{\"a\":{\"x\":\"h\\\"i\\n\u{e9}\"},\"b\":[1,2.5,true,null]}"
-        );
+        assert_eq!(s, "{\"a\":{\"x\":\"h\\\"i\\n\u{e9}\"},\"b\":[1,2.5,true,null]}");
         assert_eq!(parse(&s).unwrap(), j);
     }
 

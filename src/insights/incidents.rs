@@ -68,23 +68,9 @@ pub enum Kind {
     DiskError = 12,
 }
 
-const LOAD: [Kind; 6] = [
-    Kind::Cpu,
-    Kind::Disk,
-    Kind::Ram,
-    Kind::Fan,
-    Kind::GpuHot,
-    Kind::Stutter,
-];
+const LOAD: [Kind; 6] = [Kind::Cpu, Kind::Disk, Kind::Ram, Kind::Fan, Kind::GpuHot, Kind::Stutter];
 /// Which load kind leads a merged card.
-const PRIORITY: [Kind; 6] = [
-    Kind::Stutter,
-    Kind::Cpu,
-    Kind::Disk,
-    Kind::Ram,
-    Kind::GpuHot,
-    Kind::Fan,
-];
+const PRIORITY: [Kind; 6] = [Kind::Stutter, Kind::Cpu, Kind::Disk, Kind::Ram, Kind::GpuHot, Kind::Fan];
 const ALL: [Kind; 13] = [
     Kind::Cpu,
     Kind::Disk,
@@ -275,13 +261,7 @@ fn facts(ring: &Ring, from_s: u32, to_s: u32) -> Facts {
         }
         f.cpu = f.cpu.max(t.cpu);
         f.ram = f.ram.max(t.ram);
-        let mx = |a: Option<u8>, v: u8| {
-            if v == NONE8 {
-                a
-            } else {
-                Some(a.map_or(v, |a| a.max(v)))
-            }
-        };
+        let mx = |a: Option<u8>, v: u8| if v == NONE8 { a } else { Some(a.map_or(v, |a| a.max(v))) };
         f.disk = mx(f.disk, t.disk);
         f.gpu = mx(f.gpu, t.gpu);
         f.temp = mx(f.temp, t.gpu_temp);
@@ -290,11 +270,7 @@ fn facts(ring: &Ring, from_s: u32, to_s: u32) -> Facts {
         }
     }
     f.away = n > 0 && idle * 2 > n;
-    f.top = ring
-        .top_cpu(from_ms, to_ms, 3)
-        .into_iter()
-        .filter(|(_, v)| *v >= 1.0)
-        .collect();
+    f.top = ring.top_cpu(from_ms, to_ms, 3).into_iter().filter(|(_, v)| *v >= 1.0).collect();
     f.io = ring.top_io(from_ms, to_ms).map(|(n, _)| n);
     f
 }
@@ -353,11 +329,7 @@ fn card_text(primary: Kind, d: &Draft, f: &Facts) -> (String, String, String) {
             Some(r) => format!("GPU fan up to {} rpm for {}", r, dur(pdur)),
             None => format!("GPU fan up for {}", dur(pdur)),
         },
-        Kind::GpuHot => format!(
-            "GPU hot at {} °C for {}",
-            f.temp.unwrap_or(GPU_HOT_C),
-            dur(pdur)
-        ),
+        Kind::GpuHot => format!("GPU hot at {} °C for {}", f.temp.unwrap_or(GPU_HOT_C), dur(pdur)),
         _ => format!("Froze for {} s", ((d.freeze_ms + 500) / 1000).max(2)),
     };
 
@@ -372,11 +344,7 @@ fn card_text(primary: Kind, d: &Draft, f: &Facts) -> (String, String, String) {
         }
     };
     let mut fx: Vec<String> = Vec::new();
-    for k in PRIORITY
-        .iter()
-        .copied()
-        .filter(|&k| k != primary && d.has(k))
-    {
+    for k in PRIORITY.iter().copied().filter(|&k| k != primary && d.has(k)) {
         fx.push(match k {
             Kind::Cpu => format!("CPU {}%{}", f.cpu, kdur(k)),
             Kind::Disk => format!("disk {}%{}", disk, kdur(k)),
@@ -422,11 +390,7 @@ fn card_text(primary: Kind, d: &Draft, f: &Facts) -> (String, String, String) {
             }
         }
     }
-    let mut more = if parts.is_empty() {
-        String::new()
-    } else {
-        capitalize(&parts.join(", ")) + "."
-    };
+    let mut more = if parts.is_empty() { String::new() } else { capitalize(&parts.join(", ")) + "." };
     if f.away && primary != Kind::Stutter {
         if !more.is_empty() {
             more.push(' ');
@@ -450,11 +414,7 @@ fn card_text(primary: Kind, d: &Draft, f: &Facts) -> (String, String, String) {
     }
     let mut detail = format!("Peaks: {}.", peaks.join(", "));
     if !f.top.is_empty() {
-        let t: Vec<String> = f
-            .top
-            .iter()
-            .map(|(n, v)| format!("{} {}%", n, v.round()))
-            .collect();
+        let t: Vec<String> = f.top.iter().map(|(n, v)| format!("{} {}%", n, v.round())).collect();
         detail.push_str(&format!(" Top CPU: {}.", t.join(", ")));
     }
     if let Some(io) = &f.io {
@@ -467,52 +427,28 @@ fn card_text(primary: Kind, d: &Draft, f: &Facts) -> (String, String, String) {
 fn classify(e: &SysEvent) -> Option<(Kind, String, String)> {
     let app = || {
         let raw = e.get("AppName").or_else(|| e.get("0")).unwrap_or("").trim();
-        let n = raw
-            .strip_suffix(".exe")
-            .or_else(|| raw.strip_suffix(".EXE"))
-            .unwrap_or(raw);
-        cut(
-            if n.is_empty() {
-                "An app".to_string()
-            } else {
-                n.to_string()
-            },
-            40,
-        )
+        let n = raw.strip_suffix(".exe").or_else(|| raw.strip_suffix(".EXE")).unwrap_or(raw);
+        cut(if n.is_empty() { "An app".to_string() } else { n.to_string() }, 40)
     };
     let (k, what) = match (e.provider.as_str(), e.id) {
         ("Display", 4101) => (Kind::DriverReset, "GPU driver reset".to_string()),
-        ("Microsoft-Windows-WHEA-Logger", 18) => {
-            (Kind::HwFatal, "Fatal hardware error".to_string())
-        }
-        ("Microsoft-Windows-WHEA-Logger", 17 | 19 | 47) => {
-            (Kind::HwError, "Hardware error corrected".to_string())
-        }
+        ("Microsoft-Windows-WHEA-Logger", 18) => (Kind::HwFatal, "Fatal hardware error".to_string()),
+        ("Microsoft-Windows-WHEA-Logger", 17 | 19 | 47) => (Kind::HwError, "Hardware error corrected".to_string()),
         ("Application Error", 1000) => (Kind::Crash, format!("{} crashed", app())),
         ("Application Hang", 1002) => (Kind::Hang, format!("{} stopped responding", app())),
-        ("Microsoft-Windows-Kernel-Power", 41) => (
-            Kind::Unclean,
-            "Restarted without a clean shutdown".to_string(),
-        ),
+        ("Microsoft-Windows-Kernel-Power", 41) => (Kind::Unclean, "Restarted without a clean shutdown".to_string()),
         ("disk", 7) => (Kind::DiskError, "Disk error, bad block".to_string()),
         ("disk", 51) => (Kind::DiskError, "Disk error while paging".to_string()),
         ("disk", 153) => (Kind::DiskError, "Disk had to retry".to_string()),
         _ => return None,
     };
-    let key = if matches!(k, Kind::Crash | Kind::Hang) {
-        format!("{}:{}", k as u8, what)
-    } else {
-        (k as u8).to_string()
-    };
+    let key = if matches!(k, Kind::Crash | Kind::Hang) { format!("{}:{}", k as u8, what) } else { (k as u8).to_string() };
     Some((k, what, key))
 }
 
 /// Event kinds that may raise a tray notice.
 fn event_toasts(k: Kind) -> bool {
-    matches!(
-        k,
-        Kind::DriverReset | Kind::HwFatal | Kind::Crash | Kind::Unclean
-    )
+    matches!(k, Kind::DriverReset | Kind::HwFatal | Kind::Crash | Kind::Unclean)
 }
 
 pub struct Incidents {
@@ -561,9 +497,7 @@ impl Incidents {
     /// Per tick, right after `ring.push(c)`. A handful of comparisons; ring aggregation
     /// only when a card is written.
     pub fn on_sample(&mut self, c: &Ctx, ring: &Ring) -> Vec<Notice> {
-        let Some(&t) = ring.last() else {
-            return Vec::new();
-        };
+        let Some(&t) = ring.last() else { return Vec::new() };
         let prev = ring.prev().copied();
         let now = t.t_s;
         self.chart_point(&t);
@@ -591,20 +525,10 @@ impl Incidents {
         let fan_up = self.fan_up(t, now, ring);
         let steps = [
             (Kind::Cpu, t.cpu >= CPU_HIGH, CPU_NEED_S, false),
-            (
-                Kind::Disk,
-                disk.is_some_and(|d| d >= DISK_HIGH),
-                DISK_NEED_S,
-                false,
-            ),
+            (Kind::Disk, disk.is_some_and(|d| d >= DISK_HIGH), DISK_NEED_S, false),
             (Kind::Ram, t.ram >= RAM_HIGH || rise, RAM_NEED_S, rise),
             (Kind::Fan, fan_up, FAN_NEED_S, false),
-            (
-                Kind::GpuHot,
-                temp.is_some_and(|v| v >= GPU_HOT_C),
-                GPU_HOT_NEED_S,
-                false,
-            ),
+            (Kind::GpuHot, temp.is_some_and(|v| v >= GPU_HOT_C), GPU_HOT_NEED_S, false),
         ];
         for (k, cond, need, instant) in steps {
             let st = self.holds[k as usize].step(now, cond, need, instant);
@@ -614,10 +538,7 @@ impl Incidents {
 
     fn apply(&mut self, k: Kind, st: Step, now: u32) {
         match st {
-            Step::Began(since) => self
-                .draft
-                .get_or_insert_with(Draft::default)
-                .add(k, since, now),
+            Step::Began(since) => self.draft.get_or_insert_with(Draft::default).add(k, since, now),
             Step::Ended(_, last) => {
                 if let Some(d) = &mut self.draft {
                     d.touch(k, last);
@@ -643,16 +564,10 @@ impl Incidents {
             self.ram_min.pop_front();
         }
         self.ram_min.push_back((now, ram));
-        while self
-            .ram_min
-            .front()
-            .is_some_and(|&(t, _)| now.saturating_sub(t) > RAM_RISE_WINDOW_S)
-        {
+        while self.ram_min.front().is_some_and(|&(t, _)| now.saturating_sub(t) > RAM_RISE_WINDOW_S) {
             self.ram_min.pop_front();
         }
-        self.ram_min
-            .front()
-            .is_some_and(|&(_, m)| ram.saturating_sub(m) >= RAM_RISE)
+        self.ram_min.front().is_some_and(|&(_, m)| ram.saturating_sub(m) >= RAM_RISE)
     }
 
     /// Fan at least 40% over its 5 min median. The median is refreshed every 30 s, and not
@@ -662,9 +577,7 @@ impl Incidents {
             return false;
         }
         let busy = self.holds[Kind::Fan as usize].busy();
-        if !busy
-            && (self.fan_base.is_none() || now.saturating_sub(self.fan_base_at) >= FAN_BASE_EVERY_S)
-        {
+        if !busy && (self.fan_base.is_none() || now.saturating_sub(self.fan_base_at) >= FAN_BASE_EVERY_S) {
             self.fan_base_at = now;
             self.fan_base = fan_median(ring);
         }
@@ -703,29 +616,19 @@ impl Incidents {
         let fresh: Vec<Kind> = LOAD
             .iter()
             .copied()
-            .filter(|&k| {
-                d.has(k)
-                    && self.last_end[k as usize]
-                        .map_or(true, |e| d.start_s.saturating_sub(e) >= COOLDOWN_S)
-            })
+            .filter(|&k| d.has(k) && self.last_end[k as usize].map_or(true, |e| d.start_s.saturating_sub(e) >= COOLDOWN_S))
             .collect();
         for k in LOAD.iter().copied().filter(|&k| d.has(k)) {
             self.last_end[k as usize] = Some(d.end_s);
         }
-        let Some(primary) = PRIORITY.iter().copied().find(|k| fresh.contains(k)) else {
-            return;
-        };
+        let Some(primary) = PRIORITY.iter().copied().find(|k| fresh.contains(k)) else { return };
         // Culprits over the incident itself; for a freeze also the linger after it (the
         // process lists only start right after the late tick).
         let to = if d.has(Kind::Stutter) { now } else { d.end_s };
         let f = facts(ring, d.start_s, to);
         let (what, more, detail) = card_text(primary, &d, &f);
         let span = d.spans[primary as usize];
-        let dur_s = if primary == Kind::Stutter {
-            (d.freeze_ms + 500) / 1000
-        } else {
-            span_s(span)
-        };
+        let dur_s = if primary == Kind::Stutter { (d.freeze_ms + 500) / 1000 } else { span_s(span) };
         let card = Card {
             t_ms: d.start_s as u64 * 1000,
             dur_s,
@@ -738,11 +641,7 @@ impl Incidents {
             detail,
         };
         if card.away && primary != Kind::Stutter && dur_s >= AWAY_TOAST_MIN_S {
-            self.queue(Notice {
-                key: "incidents",
-                title: "While you were away".into(),
-                text: card.title(),
-            });
+            self.queue(Notice { key: "incidents", title: "While you were away".into(), text: card.title() });
         }
         self.add_card(card);
     }
@@ -750,11 +649,7 @@ impl Incidents {
     fn add_card(&mut self, card: Card) {
         let cutoff = card.t_ms.saturating_sub(KEEP_MS);
         self.cards.retain(|c| c.t_ms >= cutoff);
-        let at = self
-            .cards
-            .iter()
-            .position(|c| c.t_ms > card.t_ms)
-            .unwrap_or(self.cards.len());
+        let at = self.cards.iter().position(|c| c.t_ms > card.t_ms).unwrap_or(self.cards.len());
         self.cards.insert(at, card);
         if self.cards.len() > MAX_CARDS {
             let extra = self.cards.len() - MAX_CARDS;
@@ -800,9 +695,7 @@ impl Incidents {
 
     /// An Event Log record: a card at once, fused with what the ring saw at that moment.
     pub fn on_event(&mut self, e: &SysEvent, ring: &Ring, now_ms: u64) -> Vec<Notice> {
-        let Some((k, what, key)) = classify(e) else {
-            return Vec::new();
-        };
+        let Some((k, what, key)) = classify(e) else { return Vec::new() };
         let t_ms = if e.t_ms == 0 { now_ms } else { e.t_ms };
         if now_ms.saturating_sub(t_ms) > KEEP_MS {
             return Vec::new();
@@ -834,17 +727,13 @@ impl Incidents {
             more,
             detail: cut(detail, 200),
         };
-        let notice = (event_toasts(k) && now_ms.saturating_sub(t_ms) <= DAY_MS).then(|| Notice {
-            key: "incidents",
-            title: card.what.clone(),
-            text: card.title(),
-        });
+        let notice = (event_toasts(k) && now_ms.saturating_sub(t_ms) <= DAY_MS)
+            .then(|| Notice { key: "incidents", title: card.what.clone(), text: card.title() });
         self.last_end[k as usize] = Some(t_s);
         self.add_card(card);
         // Only toast a card that was kept: an old one dropped at once by the 60-card cap is
         // not in the list, so a boot-event replay would otherwise toast it on every start.
-        if let Some(n) = notice.filter(|_| self.cards.iter().any(|c| c.kind == k && c.t_ms == t_ms))
-        {
+        if let Some(n) = notice.filter(|_| self.cards.iter().any(|c| c.kind == k && c.t_ms == t_ms)) {
             self.queue(n);
         }
         Vec::new()
@@ -911,46 +800,24 @@ impl Incidents {
     }
 
     pub fn panel(&self, now_ms: u64) -> Panel {
-        let recent: Vec<&Card> = self
-            .cards
-            .iter()
-            .filter(|c| c.t_ms.saturating_add(DAY_MS) >= now_ms)
-            .collect();
+        let recent: Vec<&Card> = self.cards.iter().filter(|c| c.t_ms.saturating_add(DAY_MS) >= now_ms).collect();
         let today = time::day(now_ms);
         let n_today = recent.iter().filter(|c| time::day(c.t_ms) == today).count();
         let (tone, headline) = match recent.last() {
-            None => (
-                Tone::Good,
-                "Quiet. Nothing odd in the last 24 hours.".to_string(),
-            ),
+            None => (Tone::Good, "Quiet. Nothing odd in the last 24 hours.".to_string()),
             Some(last) => {
                 let lead = if n_today > 0 {
                     format!("{} today", plural(n_today, "incident"))
                 } else {
                     format!("{} in the last 24 hours", plural(recent.len(), "incident"))
                 };
-                let tone = if recent.iter().any(|c| c.bad) {
-                    Tone::Bad
-                } else {
-                    Tone::Warn
-                };
-                (
-                    tone,
-                    format!(
-                        "{}. Last at {}: {}.",
-                        lead,
-                        time::hhmm(last.t_ms),
-                        last.what
-                    ),
-                )
+                let tone = if recent.iter().any(|c| c.bad) { Tone::Bad } else { Tone::Warn };
+                (tone, format!("{}. Last at {}: {}.", lead, time::hhmm(last.t_ms), last.what))
             }
         };
         let mut lines = Vec::new();
         if self.cards.len() > recent.len() {
-            lines.push(format!(
-                "{} in the last 7 days.",
-                plural(self.cards.len(), "incident")
-            ));
+            lines.push(format!("{} in the last 7 days.", plural(self.cards.len(), "incident")));
         }
         let items = self
             .cards
@@ -963,16 +830,7 @@ impl Incidents {
                 detail: c.detail.clone(),
             })
             .collect();
-        Panel {
-            key: "incidents",
-            title: "Incident Cards",
-            tone,
-            headline,
-            lines,
-            visual: None,
-            chart: self.chart(now_ms),
-            items,
-        }
+        Panel { key: "incidents", title: "Incident Cards", tone, headline, lines, visual: None, chart: self.chart(now_ms), items }
     }
 
     /// CPU % over the last hour, one slot per minute (peak), with incident markers.
@@ -999,9 +857,7 @@ impl Incidents {
             .iter()
             .filter_map(|c| {
                 let m = (c.t_ms / 60_000) as u32;
-                (first..=now_m)
-                    .contains(&m)
-                    .then(|| ((m - first) as usize, c.kind.short().to_string()))
+                (first..=now_m).contains(&m).then(|| ((m - first) as usize, c.kind.short().to_string()))
             })
             .collect();
         Some(Chart {
@@ -1028,11 +884,7 @@ fn plural(n: usize, w: &str) -> String {
 
 /// 5 min median fan speed from the ring (None until there is enough data).
 fn fan_median(ring: &Ring) -> Option<f32> {
-    let mut v: Vec<f32> = ring
-        .series(Field::Fan, FAN_WINDOW)
-        .into_iter()
-        .filter(|x| !x.is_nan())
-        .collect();
+    let mut v: Vec<f32> = ring.series(Field::Fan, FAN_WINDOW).into_iter().filter(|x| !x.is_nan()).collect();
     if v.len() < FAN_MIN_SAMPLES {
         return None;
     }
@@ -1042,14 +894,9 @@ fn fan_median(ring: &Ring) -> Option<f32> {
 
 /// What the PC was doing when an event fired: (follow-up sentence, detail).
 fn event_context(k: Kind, ring: &Ring, t_ms: u64) -> (String, String) {
-    let Some(t) = ring.at(t_ms, 5_000) else {
-        return (String::new(), String::new());
-    };
+    let Some(t) = ring.at(t_ms, 5_000) else { return (String::new(), String::new()) };
     let mut fx = Vec::new();
-    let gpu_kind = matches!(
-        k,
-        Kind::DriverReset | Kind::HwError | Kind::HwFatal | Kind::Unclean
-    );
+    let gpu_kind = matches!(k, Kind::DriverReset | Kind::HwError | Kind::HwFatal | Kind::Unclean);
     if gpu_kind {
         if let Some(g) = Tick::opt8(t.gpu) {
             fx.push(format!("GPU {}%", g));
@@ -1075,12 +922,7 @@ fn event_context(k: Kind, ring: &Ring, t_ms: u64) -> (String, String) {
 fn card_from_json(j: &Json) -> Option<Card> {
     let t_ms = store::num(j, "t")? as u64;
     let kind = Kind::from_u8(store::num(j, "k")? as u8)?;
-    let s = |k: &str, max: usize| {
-        cut(
-            j.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            max,
-        )
-    };
+    let s = |k: &str, max: usize| cut(j.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string(), max);
     let b = |k: &str| matches!(j.get(k), Some(Json::Bool(true)));
     let what = s("w", 120);
     if what.is_empty() {
@@ -1145,12 +987,7 @@ mod tests {
 
     impl Sim {
         fn new() -> Sim {
-            Sim {
-                ring: Ring::new(),
-                inc: Incidents::new(),
-                t_s: 1_764_000_000,
-                notices: vec![],
-            }
+            Sim { ring: Ring::new(), inc: Incidents::new(), t_s: 1_764_000_000, notices: vec![] }
         }
 
         fn tick(&mut self, s: &S) {
@@ -1164,23 +1001,12 @@ mod tests {
                 gpu_fan_rpm: s.fan,
                 elapsed: s.elapsed,
                 top_cpu: if procs {
-                    s.procs
-                        .iter()
-                        .map(|(n, c)| ProcStat {
-                            name: n.to_string(),
-                            cpu: *c,
-                            ..Default::default()
-                        })
-                        .collect()
+                    s.procs.iter().map(|(n, c)| ProcStat { name: n.to_string(), cpu: *c, ..Default::default() }).collect()
                 } else {
                     vec![]
                 },
                 top_io: match (procs, s.io) {
-                    (true, Some(n)) => vec![ProcStat {
-                        name: n.to_string(),
-                        io_bps: 5e7,
-                        ..Default::default()
-                    }],
+                    (true, Some(n)) => vec![ProcStat { name: n.to_string(), io_bps: 5e7, ..Default::default() }],
                     _ => vec![],
                 },
                 ..Default::default()
@@ -1210,11 +1036,7 @@ mod tests {
     }
 
     fn busy_cpu() -> S {
-        S {
-            cpu: 97.0,
-            procs: vec![("MsMpEng", 38.0), ("svchost", 9.0)],
-            ..S::default()
-        }
+        S { cpu: 97.0, procs: vec![("MsMpEng", 38.0), ("svchost", 9.0)], ..S::default() }
     }
 
     #[test]
@@ -1246,11 +1068,7 @@ mod tests {
         assert_eq!(c.kind, Kind::Cpu);
         assert_eq!(c.what, "CPU held at 97% for 2 min");
         assert_eq!(c.more, "MsMpEng 38%.");
-        assert!(
-            c.detail.contains("Top CPU: MsMpEng 38%, svchost 9%."),
-            "{}",
-            c.detail
-        );
+        assert!(c.detail.contains("Top CPU: MsMpEng 38%, svchost 9%."), "{}", c.detail);
         assert!(!c.bad && !c.away);
         assert!(s.inc.dirty());
         assert!(s.notices.is_empty(), "load at the desk is a silent card");
@@ -1270,12 +1088,7 @@ mod tests {
     fn disk_pegged_names_io_process() {
         let mut s = Sim::new();
         s.calm(5);
-        let d = S {
-            disk: Some(100.0),
-            io: Some("SearchIndexer"),
-            procs: vec![("SearchIndexer", 3.0)],
-            ..S::default()
-        };
+        let d = S { disk: Some(100.0), io: Some("SearchIndexer"), procs: vec![("SearchIndexer", 3.0)], ..S::default() };
         s.run(40, &d);
         s.calm(15);
         assert_eq!(s.inc.cards.len(), 1);
@@ -1288,11 +1101,7 @@ mod tests {
         let mut s = Sim::new();
         s.calm(5);
         s.run(30, &busy_cpu());
-        let both = S {
-            disk: Some(100.0),
-            io: Some("MsMpEng"),
-            ..busy_cpu()
-        };
+        let both = S { disk: Some(100.0), io: Some("MsMpEng"), ..busy_cpu() };
         s.run(40, &both);
         s.run(30, &busy_cpu());
         s.calm(15);
@@ -1300,10 +1109,7 @@ mod tests {
         let c = &s.inc.cards[0];
         assert_eq!(c.kind, Kind::Cpu);
         assert_eq!(c.mask, Kind::Cpu.bit() | Kind::Disk.bit());
-        assert_eq!(
-            c.title()[5..],
-            *". CPU held at 97% for 2 min. MsMpEng 38%, disk 100%."
-        );
+        assert_eq!(c.title()[5..], *". CPU held at 97% for 2 min. MsMpEng 38%, disk 100%.");
     }
 
     #[test]
@@ -1314,11 +1120,7 @@ mod tests {
         s.calm(120);
         s.run(40, &busy_cpu());
         s.calm(20);
-        assert_eq!(
-            s.inc.cards.len(),
-            1,
-            "second CPU spike within 10 min is not a new card"
-        );
+        assert_eq!(s.inc.cards.len(), 1, "second CPU spike within 10 min is not a new card");
         s.calm(600);
         s.run(40, &busy_cpu());
         s.calm(20);
@@ -1330,53 +1132,23 @@ mod tests {
         let mut s = Sim::new();
         s.calm(5);
         // Sleep gap: 2 min between samples.
-        s.tick(&S {
-            elapsed: 120.0,
-            ..S::default()
-        });
-        s.tick(&S {
-            elapsed: 3.0,
-            ..S::default()
-        }); // first tick after resume: ignored
+        s.tick(&S { elapsed: 120.0, ..S::default() });
+        s.tick(&S { elapsed: 3.0, ..S::default() }); // first tick after resume: ignored
         s.calm(20);
         assert!(s.inc.cards.is_empty());
         // Display just came on (5 s interval before): ignored.
-        s.run(
-            3,
-            &S {
-                display: false,
-                elapsed: 5.0,
-                ..S::default()
-            },
-        );
-        s.tick(&S {
-            elapsed: 5.0,
-            ..S::default()
-        });
+        s.run(3, &S { display: false, elapsed: 5.0, ..S::default() });
+        s.tick(&S { elapsed: 5.0, ..S::default() });
         s.calm(20);
         assert!(s.inc.cards.is_empty());
         // Display off: a late tick is not a visible freeze.
-        s.run(
-            3,
-            &S {
-                display: false,
-                elapsed: 5.0,
-                ..S::default()
-            },
-        );
+        s.run(3, &S { display: false, elapsed: 5.0, ..S::default() });
         s.calm(20);
         assert!(s.inc.cards.is_empty());
         // A real freeze: 4 s late while in use, disk busy.
-        s.tick(&S {
-            elapsed: 5.0,
-            disk: Some(100.0),
-            ..S::default()
-        });
+        s.tick(&S { elapsed: 5.0, disk: Some(100.0), ..S::default() });
         assert!(s.inc.wants_procs(), "keeps sampling to catch the culprit");
-        let io = S {
-            io: Some("SearchIndexer"),
-            ..S::default()
-        };
+        let io = S { io: Some("SearchIndexer"), ..S::default() };
         s.run(10, &io);
         assert_eq!(s.inc.cards.len(), 1);
         let c = &s.inc.cards[0];
@@ -1390,15 +1162,7 @@ mod tests {
     fn away_incident_toasts() {
         let mut s = Sim::new();
         s.calm(5);
-        s.run(
-            200,
-            &S {
-                idle_ms: 600_000,
-                display: false,
-                elapsed: 1.0,
-                ..busy_cpu()
-            },
-        );
+        s.run(200, &S { idle_ms: 600_000, display: false, elapsed: 1.0, ..busy_cpu() });
         s.calm(15);
         assert_eq!(s.inc.cards.len(), 1);
         assert!(s.inc.cards[0].away);
@@ -1422,30 +1186,19 @@ mod tests {
         let mut s = Sim::new();
         s.calm(5);
         let now = s.t_s * 1000;
-        for (i, app) in ["Game.exe", "a.exe", "b.exe", "c.exe", "d.exe"]
-            .iter()
-            .enumerate()
-        {
-            let r = s
-                .inc
-                .on_event(&crash(app, now - 1000 * i as u64), &s.ring, now);
+        for (i, app) in ["Game.exe", "a.exe", "b.exe", "c.exe", "d.exe"].iter().enumerate() {
+            let r = s.inc.on_event(&crash(app, now - 1000 * i as u64), &s.ring, now);
             assert!(r.is_empty(), "notices wait for the next tick");
         }
         s.calm(3);
         assert_eq!(s.notices.len(), 3);
         assert_eq!(s.notices[0].title, "Game crashed");
         assert_eq!(s.inc.cards.len(), 5);
-        let c = s
-            .inc
-            .cards
-            .iter()
-            .find(|c| c.what == "Game crashed")
-            .expect("card");
+        let c = s.inc.cards.iter().find(|c| c.what == "Game crashed").expect("card");
         assert!(c.bad);
         assert_eq!(c.more, "CPU 10%, RAM 40%.");
         // Same app again within 10 min: no new card; replayed same event: no new card.
-        s.inc
-            .on_event(&crash("Game.exe", now + 60_000), &s.ring, now + 60_000);
+        s.inc.on_event(&crash("Game.exe", now + 60_000), &s.ring, now + 60_000);
         s.inc.on_event(&crash("Game.exe", now), &s.ring, now);
         assert_eq!(s.inc.cards.len(), 5);
         s.calm(3);
@@ -1455,57 +1208,26 @@ mod tests {
     #[test]
     fn driver_reset_fused_with_ring() {
         let mut s = Sim::new();
-        s.run(
-            5,
-            &S {
-                temp: Some(84.0),
-                ..S::default()
-            },
-        );
+        s.run(5, &S { temp: Some(84.0), ..S::default() });
         let now = s.t_s * 1000;
-        let e = SysEvent {
-            provider: "Display".into(),
-            id: 4101,
-            t_ms: now,
-            ..Default::default()
-        };
+        let e = SysEvent { provider: "Display".into(), id: 4101, t_ms: now, ..Default::default() };
         s.inc.on_event(&e, &s.ring, now);
         let c = &s.inc.cards[0];
         assert_eq!(c.kind, Kind::DriverReset);
         assert_eq!(c.what, "GPU driver reset");
         assert_eq!(c.more, "84 °C, CPU 10%, RAM 40%.");
         // Unrelated events are not cards.
-        let e = SysEvent {
-            provider: "Microsoft-Windows-Kernel-Power".into(),
-            id: 107,
-            ..Default::default()
-        };
+        let e = SysEvent { provider: "Microsoft-Windows-Kernel-Power".into(), id: 107, ..Default::default() };
         assert!(classify(&e).is_none());
-        let e = SysEvent {
-            provider: "Microsoft-Windows-WHEA-Logger".into(),
-            id: 18,
-            ..Default::default()
-        };
+        let e = SysEvent { provider: "Microsoft-Windows-WHEA-Logger".into(), id: 18, ..Default::default() };
         assert_eq!(classify(&e).map(|x| x.0), Some(Kind::HwFatal));
     }
 
     #[test]
     fn ram_rise_is_instant() {
         let mut s = Sim::new();
-        s.run(
-            10,
-            &S {
-                ram: 50.0,
-                ..S::default()
-            },
-        );
-        s.run(
-            5,
-            &S {
-                ram: 75.0,
-                ..S::default()
-            },
-        );
+        s.run(10, &S { ram: 50.0, ..S::default() });
+        s.run(5, &S { ram: 75.0, ..S::default() });
         s.run(80, &S::default());
         assert_eq!(s.inc.cards.len(), 1);
         assert_eq!(s.inc.cards[0].what, "RAM jumped to 75%");
@@ -1514,28 +1236,9 @@ mod tests {
     #[test]
     fn fan_up_over_median() {
         let mut s = Sim::new();
-        s.run(
-            120,
-            &S {
-                fan: Some(1200),
-                ..S::default()
-            },
-        );
-        s.run(
-            70,
-            &S {
-                fan: Some(2400),
-                procs: vec![("MsMpEng", 38.0)],
-                ..S::default()
-            },
-        );
-        s.run(
-            20,
-            &S {
-                fan: Some(1200),
-                ..S::default()
-            },
-        );
+        s.run(120, &S { fan: Some(1200), ..S::default() });
+        s.run(70, &S { fan: Some(2400), procs: vec![("MsMpEng", 38.0)], ..S::default() });
+        s.run(20, &S { fan: Some(1200), ..S::default() });
         assert_eq!(s.inc.cards.len(), 1);
         assert_eq!(s.inc.cards[0].kind, Kind::Fan);
         assert_eq!(s.inc.cards[0].what, "GPU fan up to 2400 rpm for 1 min");
@@ -1545,13 +1248,7 @@ mod tests {
     #[test]
     fn gpu_hot() {
         let mut s = Sim::new();
-        s.run(
-            40,
-            &S {
-                temp: Some(90.0),
-                ..S::default()
-            },
-        );
+        s.run(40, &S { temp: Some(90.0), ..S::default() });
         s.calm(15);
         assert_eq!(s.inc.cards.len(), 1);
         assert_eq!(s.inc.cards[0].what, "GPU hot at 90 °C for 40 s");
@@ -1576,28 +1273,15 @@ mod tests {
         let mut b = Incidents::new();
         // Card time is in the past relative to the real clock only if the sim time is; use the
         // sim's card directly to check the parse.
-        let parsed: Vec<Card> = j
-            .get("cards")
-            .and_then(|a| a.as_arr())
-            .unwrap()
-            .iter()
-            .filter_map(card_from_json)
-            .collect();
+        let parsed: Vec<Card> = j.get("cards").and_then(|a| a.as_arr()).unwrap().iter().filter_map(card_from_json).collect();
         assert_eq!(parsed, s.inc.cards);
         b.load(&Json::Str("garbage".into()));
         assert!(b.cards.is_empty());
         let p = s.inc.panel(s.t_s * 1000);
         assert_eq!(p.key, "incidents");
         assert_eq!(p.tone, Tone::Warn);
-        assert!(
-            p.headline.starts_with("1 incident today. Last at ")
-                || p.headline.starts_with("1 incident in the last")
-        );
-        assert!(
-            p.headline.ends_with(": CPU held at 97% for 40 s."),
-            "{}",
-            p.headline
-        );
+        assert!(p.headline.starts_with("1 incident today. Last at ") || p.headline.starts_with("1 incident in the last"));
+        assert!(p.headline.ends_with(": CPU held at 97% for 40 s."), "{}", p.headline);
         assert_eq!(p.items.len(), 1);
         let ch = p.chart.expect("chart");
         assert_eq!(ch.markers.len(), 1);

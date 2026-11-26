@@ -96,23 +96,13 @@ impl Rect {
 
 impl From<RECT> for Rect {
     fn from(r: RECT) -> Self {
-        Rect {
-            l: r.left,
-            t: r.top,
-            r: r.right,
-            b: r.bottom,
-        }
+        Rect { l: r.left, t: r.top, r: r.right, b: r.bottom }
     }
 }
 
 impl From<Rect> for RECT {
     fn from(r: Rect) -> Self {
-        RECT {
-            left: r.l,
-            top: r.t,
-            right: r.r,
-            bottom: r.b,
-        }
+        RECT { left: r.l, top: r.t, right: r.r, bottom: r.b }
     }
 }
 
@@ -164,10 +154,7 @@ pub fn get_y(l: isize) -> i32 {
 pub fn diag(msg: &str) {
     use std::io::Write;
     let path = data_dir().join("diagnostics.log");
-    if std::fs::metadata(&path)
-        .map(|m| m.len() > 256 * 1024)
-        .unwrap_or(false)
-    {
+    if std::fs::metadata(&path).map(|m| m.len() > 256 * 1024).unwrap_or(false) {
         if let Ok(old) = std::fs::read(&path) {
             let _ = std::fs::write(&path, &old[old.len() / 2..]);
         }
@@ -177,11 +164,7 @@ pub fn diag(msg: &str) {
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}  {}\n",
         st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, msg
     );
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
         let _ = f.write_all(line.as_bytes());
     }
 }

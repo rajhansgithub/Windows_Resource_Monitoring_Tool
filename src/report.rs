@@ -13,9 +13,7 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 const CLASS: &str = "ResourceMonitor.Report";
-const MONTHS: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
+const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 pub fn register(hinst: HINSTANCE) {
     unsafe {
@@ -50,20 +48,10 @@ pub fn open(a: &mut App) {
         let scale = tb.map_or(1.0, |t| t.dpi as f32 / 96.0);
         let (cw, ch) = client_size(scale, a.s.data_cap_gb > 0.0);
         let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-        let mut rc = RECT {
-            left: 0,
-            top: 0,
-            right: cw,
-            bottom: ch,
-        };
+        let mut rc = RECT { left: 0, top: 0, right: cw, bottom: ch };
         AdjustWindowRectExForDpi(&mut rc, style, 0, 0, tb.map_or(96, |t| t.dpi));
         let (w, h) = (rc.right - rc.left, rc.bottom - rc.top);
-        let work = tb.map(|t| t.work).unwrap_or(Rect {
-            l: 0,
-            t: 0,
-            r: 1280,
-            b: 720,
-        });
+        let work = tb.map(|t| t.work).unwrap_or(Rect { l: 0, t: 0, r: 1280, b: 720 });
         let x = work.l + (work.w() - w) / 2;
         let y = work.t + ((work.h() - h) / 2).max(0);
         let cls = wide(CLASS);
@@ -110,15 +98,7 @@ fn paint(a: &App, hwnd: HWND) {
     let f = Fonts::new(scale);
     let pad = sc(20.0);
     let right = p.w - pad;
-    p.fill(
-        Rect {
-            l: 0,
-            t: 0,
-            r: p.w,
-            b: p.h,
-        },
-        pal.bg,
-    );
+    p.fill(Rect { l: 0, t: 0, r: p.w, b: p.h }, pal.bg);
 
     let now = usage::today();
     let (y0, m0, _) = usage::ymd(now);
@@ -127,26 +107,13 @@ fn paint(a: &App, hwnd: HWND) {
 
     let since = st.days.keys().next().map(|k| {
         let (yy, mm, dd) = usage::ymd(*k);
-        format!(
-            "Tracking since {} {} {}",
-            dd,
-            MONTHS[(mm as usize).clamp(1, 12) - 1],
-            yy
-        )
+        format!("Tracking since {} {} {}", dd, MONTHS[(mm as usize).clamp(1, 12) - 1], yy)
     });
-    let src = if a.s.adapter.is_empty() {
-        "All connected adapters".to_string()
-    } else {
-        a.s.adapter.clone()
-    };
+    let src = if a.s.adapter.is_empty() { "All connected adapters".to_string() } else { a.s.adapter.clone() };
     p.text(f.big, "Data usage", pad, y, pal.fg);
     p.text_right(
         f.small,
-        &format!(
-            "{}  \u{00B7}  {}",
-            src,
-            since.unwrap_or_else(|| "No data yet".into())
-        ),
+        &format!("{}  \u{00B7}  {}", src, since.unwrap_or_else(|| "No data yet".into())),
         right,
         y + sc(5.0),
         pal.dim,
@@ -169,27 +136,12 @@ fn paint(a: &App, hwnd: HWND) {
     for (i, (title, u)) in cards.iter().enumerate() {
         let x = pad + (i as i32 % 3) * (cw + gap);
         let cy = y + (i as i32 / 3) * (ch + gap);
-        p.round(
-            Rect {
-                l: x,
-                t: cy,
-                r: x + cw,
-                b: cy + ch,
-            },
-            sc(10.0),
-            pal.card,
-        );
+        p.round(Rect { l: x, t: cy, r: x + cw, b: cy + ch }, sc(10.0), pal.card);
         let ix = x + sc(12.0);
         p.text(f.small, title, ix, cy + sc(8.0), pal.dim);
         p.text(f.big, &fmt::bytes(u.total()), ix, cy + sc(22.0), pal.fg);
         let ux = ix;
-        let w1 = p.text(
-            f.small,
-            &format!("\u{25B2} {}", fmt::bytes(u.sent)),
-            ux,
-            cy + sc(46.0),
-            accent(Metric::Up, a.dark),
-        );
+        let w1 = p.text(f.small, &format!("\u{25B2} {}", fmt::bytes(u.sent)), ux, cy + sc(46.0), accent(Metric::Up, a.dark));
         p.text(
             f.small,
             &format!("\u{25BC} {}", fmt::bytes(u.recv)),
@@ -212,12 +164,7 @@ fn paint(a: &App, hwnd: HWND) {
         );
         p.text_right(f.small, &t, right, y + sc(2.0), pal.dim);
         y += sc(22.0);
-        let bar = Rect {
-            l: pad,
-            t: y,
-            r: right,
-            b: y + sc(8.0),
-        };
+        let bar = Rect { l: pad, t: y, r: right, b: y + sc(8.0) };
         p.round(bar, sc(8.0), pal.line);
         let fw = (bar.w() as f64 * (pct / 100.0).min(1.0)) as i32;
         let c = if pct >= a.s.crit_pct as f64 {
@@ -228,14 +175,7 @@ fn paint(a: &App, hwnd: HWND) {
             accent(Metric::Down, a.dark)
         };
         if fw > 0 {
-            p.round(
-                Rect {
-                    r: bar.l + fw,
-                    ..bar
-                },
-                sc(8.0),
-                c,
-            );
+            p.round(Rect { r: bar.l + fw, ..bar }, sc(8.0), c);
         }
         y += sc(22.0);
     }
@@ -243,20 +183,8 @@ fn paint(a: &App, hwnd: HWND) {
     // ---- last 30 days chart
     p.text(f.bold, "Last 30 days", pad, y, pal.fg);
     let wu = p.measure(f.small, "\u{25A0} Upload").0;
-    p.text_right(
-        f.small,
-        "\u{25A0} Upload",
-        right,
-        y + sc(2.0),
-        accent(Metric::Up, a.dark),
-    );
-    p.text_right(
-        f.small,
-        "\u{25A0} Download",
-        right - wu - sc(14.0),
-        y + sc(2.0),
-        accent(Metric::Down, a.dark),
-    );
+    p.text_right(f.small, "\u{25A0} Upload", right, y + sc(2.0), accent(Metric::Up, a.dark));
+    p.text_right(f.small, "\u{25A0} Download", right - wu - sc(14.0), y + sc(2.0), accent(Metric::Down, a.dark));
     y += sc(24.0);
     let mut days = Vec::with_capacity(30);
     let mut d = now;
@@ -267,37 +195,10 @@ fn paint(a: &App, hwnd: HWND) {
     days.reverse();
     let vals: Vec<Usage> = days.iter().map(|k| st.get(*k)).collect();
     let max = vals.iter().map(|u| u.total()).max().unwrap_or(0).max(1);
-    let chart = Rect {
-        l: pad + sc(48.0),
-        t: y,
-        r: right,
-        b: y + sc(130.0),
-    };
-    p.fill(
-        Rect {
-            l: chart.l,
-            t: chart.b,
-            r: chart.r,
-            b: chart.b + 1,
-        },
-        pal.line,
-    );
-    p.fill(
-        Rect {
-            l: chart.l,
-            t: chart.t,
-            r: chart.r,
-            b: chart.t + 1,
-        },
-        pal.line,
-    );
-    p.text_right(
-        f.small,
-        &fmt::bytes(max),
-        chart.l - sc(6.0),
-        chart.t - sc(6.0),
-        pal.dim,
-    );
+    let chart = Rect { l: pad + sc(48.0), t: y, r: right, b: y + sc(130.0) };
+    p.fill(Rect { l: chart.l, t: chart.b, r: chart.r, b: chart.b + 1 }, pal.line);
+    p.fill(Rect { l: chart.l, t: chart.t, r: chart.r, b: chart.t + 1 }, pal.line);
+    p.text_right(f.small, &fmt::bytes(max), chart.l - sc(6.0), chart.t - sc(6.0), pal.dim);
     p.text_right(f.small, "0", chart.l - sc(6.0), chart.b - sc(8.0), pal.dim);
     let slot = chart.w() as f32 / 30.0;
     let bw = (slot * 0.7).max(2.0) as i32;
@@ -313,34 +214,14 @@ fn paint(a: &App, hwnd: HWND) {
             uc = pal.card.mix(uc, 0.75);
         }
         if hr > 0 {
-            p.fill(
-                Rect {
-                    l: x,
-                    t: chart.b - hr,
-                    r: x + bw,
-                    b: chart.b,
-                },
-                dc,
-            );
+            p.fill(Rect { l: x, t: chart.b - hr, r: x + bw, b: chart.b }, dc);
         }
         if hs > 0 {
-            p.fill(
-                Rect {
-                    l: x,
-                    t: chart.b - hr - hs,
-                    r: x + bw,
-                    b: chart.b - hr,
-                },
-                uc,
-            );
+            p.fill(Rect { l: x, t: chart.b - hr - hs, r: x + bw, b: chart.b - hr }, uc);
         }
         if i % 7 == 1 || today {
             let (_, mm, dd) = usage::ymd(days[i]);
-            let lbl = if today {
-                "Today".to_string()
-            } else {
-                format!("{} {}", dd, MONTHS[(mm as usize).clamp(1, 12) - 1])
-            };
+            let lbl = if today { "Today".to_string() } else { format!("{} {}", dd, MONTHS[(mm as usize).clamp(1, 12) - 1]) };
             let lw = p.measure(f.small, &lbl).0;
             let cx = (x + bw / 2 - lw / 2).min(right - lw);
             p.text(f.small, &lbl, cx, chart.b + sc(4.0), pal.dim);
@@ -364,15 +245,7 @@ fn paint(a: &App, hwnd: HWND) {
             p.text(f.small, "No data yet", x, yy, pal.dim);
         }
         for (label, u) in rows {
-            p.fill(
-                Rect {
-                    l: x,
-                    t: yy - sc(2.0),
-                    r,
-                    b: yy - sc(1.0),
-                },
-                pal.line,
-            );
+            p.fill(Rect { l: x, t: yy - sc(2.0), r, b: yy - sc(1.0) }, pal.line);
             p.text(f.normal, label, x, yy, pal.fg);
             p.text_right(f.small, &fmt::bytes(u.sent), c1, yy + sc(1.0), pal.dim);
             p.text_right(f.small, &fmt::bytes(u.recv), c2, yy + sc(1.0), pal.dim);
@@ -388,10 +261,7 @@ fn paint(a: &App, hwnd: HWND) {
         }
         let u = st.month(yy, mm);
         if u.total() > 0 || (yy, mm) == (y0, m0) {
-            months.push((
-                format!("{} {}", MONTHS[(mm as usize).clamp(1, 12) - 1], yy),
-                u,
-            ));
+            months.push((format!("{} {}", MONTHS[(mm as usize).clamp(1, 12) - 1], yy), u));
         }
         if mm == 1 {
             mm = 12;
@@ -425,15 +295,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         WM_ERASEBKGND => 1,
         WM_DPICHANGED => {
             let r = &*(l as *const RECT);
-            SetWindowPos(
-                hwnd,
-                std::ptr::null_mut(),
-                r.left,
-                r.top,
-                r.right - r.left,
-                r.bottom - r.top,
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            );
+            SetWindowPos(hwnd, std::ptr::null_mut(), r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
             InvalidateRect(hwnd, std::ptr::null(), 0);
             0
         }

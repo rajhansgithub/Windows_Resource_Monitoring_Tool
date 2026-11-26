@@ -54,10 +54,7 @@ impl Taskbar {
         }
     }
     pub fn same_geometry(&self, o: &Taskbar) -> bool {
-        self.rect == o.rect
-            && self.tray == o.tray
-            && self.edge == o.edge
-            && self.dpi == o.dpi
+        self.rect == o.rect && self.tray == o.tray && self.edge == o.edge && self.dpi == o.dpi
             && self.retracted == o.retracted
     }
 }
@@ -69,15 +66,8 @@ pub fn monitor_info(h: HMONITOR) -> Option<(Rect, Rect)> {
 fn monitor_info_ex(h: HMONITOR) -> Option<(Rect, Rect, [u16; 32])> {
     let mut mi: MONITORINFOEXW = unsafe { std::mem::zeroed() };
     mi.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
-    (unsafe { GetMonitorInfoW(h, &mut mi as *mut MONITORINFOEXW as *mut MONITORINFO) } != 0).then(
-        || {
-            (
-                mi.monitorInfo.rcMonitor.into(),
-                mi.monitorInfo.rcWork.into(),
-                mi.szDevice,
-            )
-        },
-    )
+    (unsafe { GetMonitorInfoW(h, &mut mi as *mut MONITORINFOEXW as *mut MONITORINFO) } != 0)
+        .then(|| (mi.monitorInfo.rcMonitor.into(), mi.monitorInfo.rcWork.into(), mi.szDevice))
 }
 
 pub fn monitor_dpi(h: HMONITOR) -> u32 {
@@ -143,30 +133,14 @@ fn describe(hwnd: HWND, primary: bool) -> Option<Taskbar> {
     let thickness = if edge.horizontal() { vis.h() } else { vis.w() };
     let retracted = thickness < 8;
 
-    let tray = if primary {
-        find_tray(hwnd, rect, edge, dpi)
-    } else {
-        find_clock(hwnd, rect, edge, dpi)
-    };
-    Some(Taskbar {
-        hwnd,
-        rect,
-        edge,
-        tray,
-        monitor,
-        work,
-        dpi,
-        retracted,
-        primary,
-        device,
-    })
+    let tray = if primary { find_tray(hwnd, rect, edge, dpi) } else { find_clock(hwnd, rect, edge, dpi) };
+    Some(Taskbar { hwnd, rect, edge, tray, monitor, work, dpi, retracted, primary, device })
 }
 
 fn valid_child(t: Option<Rect>, rect: Rect, edge: Edge) -> Option<Rect> {
     let t = t?;
     let inside = t.l >= rect.l - 1 && t.r <= rect.r + 1 && t.t >= rect.t - 1 && t.b <= rect.b + 1;
-    (inside && !t.is_empty() && t.w() < rect.w() && (edge.horizontal() || t.h() < rect.h()))
-        .then_some(t)
+    (inside && !t.is_empty() && t.w() < rect.w() && (edge.horizontal() || t.h() < rect.h())).then_some(t)
 }
 
 /// Secondary taskbars have no tray; anchor on their clock if it is a real
@@ -179,15 +153,9 @@ fn find_clock(tb: HWND, rect: Rect, edge: Edge, dpi: u32) -> Rect {
     }
     let guess = (if edge.horizontal() { 110 } else { 70 } * dpi / 96) as i32;
     if edge.horizontal() {
-        Rect {
-            l: rect.r - guess,
-            ..rect
-        }
+        Rect { l: rect.r - guess, ..rect }
     } else {
-        Rect {
-            t: rect.b - guess,
-            ..rect
-        }
+        Rect { t: rect.b - guess, ..rect }
     }
 }
 
@@ -198,15 +166,9 @@ fn find_tray(tb: HWND, rect: Rect, edge: Edge, dpi: u32) -> Rect {
     // Fallback: guess a typical tray size at the far end of the taskbar.
     let guess = (260 * dpi / 96) as i32;
     if edge.horizontal() {
-        Rect {
-            l: rect.r - guess,
-            ..rect
-        }
+        Rect { l: rect.r - guess, ..rect }
     } else {
-        Rect {
-            t: rect.b - guess,
-            ..rect
-        }
+        Rect { t: rect.b - guess, ..rect }
     }
 }
 
@@ -266,10 +228,7 @@ pub fn process_name(h: HWND) -> String {
 pub fn is_cloaked(h: HWND) -> bool {
     use windows_sys::Win32::Graphics::Dwm::*;
     let mut v: u32 = 0;
-    unsafe {
-        DwmGetWindowAttribute(h, DWMWA_CLOAKED as u32, &mut v as *mut u32 as *mut _, 4) == 0
-            && v != 0
-    }
+    unsafe { DwmGetWindowAttribute(h, DWMWA_CLOAKED as u32, &mut v as *mut u32 as *mut _, 4) == 0 && v != 0 }
 }
 
 /// What the user actually sees: the DWM frame without the invisible resize
@@ -308,9 +267,7 @@ pub fn fullscreen_active(tb: &Taskbar, own: &[HWND]) -> (bool, String) {
         return (false, "our window".into());
     }
     let hmon = unsafe { MonitorFromWindow(root, MONITOR_DEFAULTTONEAREST) };
-    let Some((mon, _)) = monitor_info(hmon) else {
-        return (false, "no monitor".into());
-    };
+    let Some((mon, _)) = monitor_info(hmon) else { return (false, "no monitor".into()) };
     if mon != tb.monitor {
         return (false, "foreground is on another monitor".into());
     }
@@ -327,18 +284,14 @@ pub fn fullscreen_active(tb: &Taskbar, own: &[HWND]) -> (bool, String) {
     if SHELL_CLASSES.contains(&cls.as_str()) {
         return (false, desc("shell window"));
     }
-    if ex & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT) != 0
-        && ex & WS_EX_APPWINDOW == 0
-    {
+    if ex & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT) != 0 && ex & WS_EX_APPWINDOW == 0 {
         return (false, desc("tool/overlay window"));
     }
     // Exclusive full-screen games / presentation mode, on this monitor.
     let mut st: QUERY_USER_NOTIFICATION_STATE = 0;
     let exclusive = unsafe { SHQueryUserNotificationState(&mut st) } == 0
         && (st == QUNS_RUNNING_D3D_FULL_SCREEN || st == QUNS_PRESENTATION_MODE);
-    let Some(b) = visible_bounds(root) else {
-        return (false, desc("no bounds"));
-    };
+    let Some(b) = visible_bounds(root) else { return (false, desc("no bounds")) };
     let covers = b.l <= mon.l + 1 && b.t <= mon.t + 1 && b.r >= mon.r - 1 && b.b >= mon.b - 1;
     if !covers && !exclusive {
         return (false, desc("doesn't cover the monitor"));
@@ -351,14 +304,7 @@ pub fn fullscreen_active(tb: &Taskbar, own: &[HWND]) -> (bool, String) {
     if SHELL_PROCESSES.contains(&proc.as_str()) {
         return (false, desc("shell process"));
     }
-    (
-        true,
-        desc(if exclusive {
-            "exclusive full-screen"
-        } else {
-            "covers the monitor"
-        }),
-    )
+    (true, desc(if exclusive { "exclusive full-screen" } else { "covers the monitor" }))
 }
 
 /// Placeholder when Explorer isn't running: bottom of the primary monitor.
@@ -366,18 +312,12 @@ pub fn fallback() -> Option<Taskbar> {
     let hmon = unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) };
     let (mon, work, device) = monitor_info_ex(hmon)?;
     let dpi = monitor_dpi(hmon);
-    let rect = Rect {
-        t: mon.b - (48 * dpi / 96) as i32,
-        ..mon
-    };
+    let rect = Rect { t: mon.b - (48 * dpi / 96) as i32, ..mon };
     Some(Taskbar {
         hwnd: std::ptr::null_mut(),
         rect,
         edge: Edge::Bottom,
-        tray: Rect {
-            l: rect.r - (200 * dpi / 96) as i32,
-            ..rect
-        },
+        tray: Rect { l: rect.r - (200 * dpi / 96) as i32, ..rect },
         monitor: mon,
         work,
         dpi,

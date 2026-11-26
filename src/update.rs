@@ -54,31 +54,25 @@ fn old_path() -> Option<PathBuf> {
 /// Start a check on a background thread; the result is posted to `notify`.
 /// `manual`: the user asked, so also report "up to date" / failures.
 pub fn check(notify: isize, manual: bool) {
-    let _ = std::thread::Builder::new()
-        .name("update".into())
-        .spawn(move || {
-            let stage = |st: usize, permille: isize| unsafe {
-                PostMessageW(notify as _, WM_APP_UPDATE_STAGE, st, permille);
-            };
-            let (code, ver) = match run(&stage) {
-                Ok(Some(v)) => (INSTALLED, v),
-                Ok(None) => (UP_TO_DATE, String::new()),
-                Err(Outcome::NotWritable(v)) => (MANUAL, v),
-                // lParam string carries the reason for the user.
-                Err(Outcome::Failed(why)) => (FAILED, why),
-            };
-            let code = if code == MANUAL && !manual {
-                MANUAL_QUIET
-            } else {
-                code
-            };
-            if code == INSTALLED || code == MANUAL_QUIET || manual {
-                // Version text goes through a leaked Box the UI thread takes back.
-                let p = Box::into_raw(Box::new(ver)) as isize;
-                let w = code | if manual { MANUAL_FLAG } else { 0 };
-                unsafe { PostMessageW(notify as _, WM_APP_UPDATE, w, p) };
-            }
-        });
+    let _ = std::thread::Builder::new().name("update".into()).spawn(move || {
+        let stage = |st: usize, permille: isize| unsafe {
+            PostMessageW(notify as _, WM_APP_UPDATE_STAGE, st, permille);
+        };
+        let (code, ver) = match run(&stage) {
+            Ok(Some(v)) => (INSTALLED, v),
+            Ok(None) => (UP_TO_DATE, String::new()),
+            Err(Outcome::NotWritable(v)) => (MANUAL, v),
+            // lParam string carries the reason for the user.
+            Err(Outcome::Failed(why)) => (FAILED, why),
+        };
+        let code = if code == MANUAL && !manual { MANUAL_QUIET } else { code };
+        if code == INSTALLED || code == MANUAL_QUIET || manual {
+            // Version text goes through a leaked Box the UI thread takes back.
+            let p = Box::into_raw(Box::new(ver)) as isize;
+            let w = code | if manual { MANUAL_FLAG } else { 0 };
+            unsafe { PostMessageW(notify as _, WM_APP_UPDATE, w, p) };
+        }
+    });
 }
 
 /// Take back the version string posted with WM_APP_UPDATE.
@@ -106,20 +100,16 @@ fn run(stage: &dyn Fn(usize, isize)) -> Result<Option<String>, Outcome> {
         _ => Outcome::Failed(e),
     })?;
     let json = String::from_utf8_lossy(&json);
-    let tag = field(&json, "tag_name")
-        .ok_or_else(|| fail("Unexpected reply from GitHub (no version)."))?;
+    let tag = field(&json, "tag_name").ok_or_else(|| fail("Unexpected reply from GitHub (no version)."))?;
     if !newer(&tag, env!("CARGO_PKG_VERSION")) {
         return Ok(None);
     }
-    let (url, digest) = asset(&json, ASSET)
-        .ok_or_else(|| fail("The latest release has no ResourceMonitor.exe."))?;
+    let (url, digest) = asset(&json, ASSET).ok_or_else(|| fail("The latest release has no ResourceMonitor.exe."))?;
     if !url.starts_with("https://github.com/") {
         return Err(fail("Unexpected download address."));
     }
     let exe = std::env::current_exe().map_err(|_| fail("Can't find the running program."))?;
-    let dir = exe
-        .parent()
-        .ok_or_else(|| fail("Can't find the program folder."))?;
+    let dir = exe.parent().ok_or_else(|| fail("Can't find the program folder."))?;
     if !writable(dir) {
         return Err(Outcome::NotWritable(tag));
     }
@@ -137,9 +127,7 @@ fn run(stage: &dyn Fn(usize, isize)) -> Result<Option<String>, Outcome> {
     }
     if let Some(want) = digest {
         if !sha256_hex(&bin).eq_ignore_ascii_case(&want) {
-            return Err(fail(
-                "The download didn't match GitHub's checksum, so it wasn't installed.",
-            ));
+            return Err(fail("The download didn't match GitHub's checksum, so it wasn't installed."));
         }
     }
     stage(STAGE_INSTALL, 1000);
@@ -173,11 +161,7 @@ fn writable(dir: &Path) -> bool {
 /// "v2.10.0" > "2.9.3"
 fn newer(tag: &str, current: &str) -> bool {
     let parse = |s: &str| -> Vec<u32> {
-        s.trim_start_matches(['v', 'V'])
-            .split(['.', '-'])
-            .take(3)
-            .map(|p| p.parse().unwrap_or(0))
-            .collect()
+        s.trim_start_matches(['v', 'V']).split(['.', '-']).take(3).map(|p| p.parse().unwrap_or(0)).collect()
     };
     let (a, b) = (parse(tag), parse(current));
     a > b
@@ -187,20 +171,13 @@ fn newer(tag: &str, current: &str) -> bool {
 fn field(json: &str, key: &str) -> Option<String> {
     let k = format!("\"{}\"", key);
     let i = json.find(&k)? + k.len();
-    let rest = json[i..]
-        .trim_start()
-        .strip_prefix(':')?
-        .trim_start()
-        .strip_prefix('"')?;
+    let rest = json[i..].trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
     Some(rest[..rest.find('"')?].to_string())
 }
 
 /// (download URL, sha256 hex) of the asset called `name`.
 fn asset(json: &str, name: &str) -> Option<(String, Option<String>)> {
-    let pats = [
-        format!("\"name\":\"{}\"", name),
-        format!("\"name\": \"{}\"", name),
-    ];
+    let pats = [format!("\"name\":\"{}\"", name), format!("\"name\": \"{}\"", name)];
     let start = pats.iter().filter_map(|p| json.find(p.as_str())).min()?;
     let body = &json[start + 8..];
     // This asset's fields end where the next asset's "name" begins.
@@ -214,15 +191,7 @@ fn asset(json: &str, name: &str) -> Option<(String, Option<String>)> {
 fn sha256_hex(data: &[u8]) -> String {
     let mut out = [0u8; 32];
     let st = unsafe {
-        BCryptHash(
-            BCRYPT_SHA256_ALG_HANDLE,
-            std::ptr::null(),
-            0,
-            data.as_ptr(),
-            data.len() as u32,
-            out.as_mut_ptr(),
-            32,
-        )
+        BCryptHash(BCRYPT_SHA256_ALG_HANDLE, std::ptr::null(), 0, data.as_ptr(), data.len() as u32, out.as_mut_ptr(), 32)
     };
     if st != 0 {
         return String::new();
@@ -233,11 +202,9 @@ fn sha256_hex(data: &[u8]) -> String {
 /// HTTPS GET via WinHTTP (follows redirects, uses the system proxy).
 /// `progress(received, total)`; total is 0 when unknown.
 fn get(url: &str, accept: &str, progress: &dyn Fn(u64, u64)) -> Result<Vec<u8>, String> {
-    let net = |what: &str| {
-        format!("{}: no connection to GitHub (error {})", what, unsafe {
-            windows_sys::Win32::Foundation::GetLastError()
-        })
-    };
+    let net = |what: &str| format!("{}: no connection to GitHub (error {})", what, unsafe {
+        windows_sys::Win32::Foundation::GetLastError()
+    });
     let rest = url.strip_prefix("https://").ok_or("bad address")?;
     let (host, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
     let path = if path.is_empty() { "/" } else { path };
@@ -251,13 +218,7 @@ fn get(url: &str, accept: &str, progress: &dyn Fn(u64, u64)) -> Result<Vec<u8>, 
     }
     unsafe {
         let agent = wide(AGENT);
-        let s = H(WinHttpOpen(
-            agent.as_ptr(),
-            WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-        ));
+        let s = H(WinHttpOpen(agent.as_ptr(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, std::ptr::null(), std::ptr::null(), 0));
         if s.0.is_null() {
             return Err(net("open"));
         }
