@@ -1692,12 +1692,22 @@ impl Ui {
         }
     }
 
-    /// Left and right edges of the cards: left-aligned, 24 DIP margins, the old
-    /// column below ~1100 DIP and up to 2000 DIP wide above (`grid::content_w`).
-    fn col(&self) -> (i32, i32) {
+    /// Room for the content between the page margins, px.
+    fn avail_w(&self) -> i32 {
         let l = self.content_x() + self.sc(PAGE_PAD);
-        let avail = (self.cw - self.sc(PAGE_PAD) - l).max(self.sc(240));
-        (l, l + grid::content_w(self.class(), avail, self.dpi))
+        (self.cw - self.sc(PAGE_PAD) - l).max(self.sc(240))
+    }
+
+    /// Left and right edges of the cards: 24 DIP margins; the old column below
+    /// ~1100 DIP, up to 2400 DIP wide above (`grid::content_w`). A capped block
+    /// is centred in the room there is; the Server Room fills it.
+    fn col(&self) -> (i32, i32) {
+        let l0 = self.content_x() + self.sc(PAGE_PAD);
+        let class = self.class();
+        let avail = self.avail_w();
+        let w = grid::content_w(class, avail, self.dpi);
+        let l = if class == grid::Class::Fill { l0 } else { grid::centred(l0, avail, w) };
+        (l, l + w)
     }
 
     fn view(&self) -> (i32, i32) {
@@ -1811,7 +1821,7 @@ impl Ui {
 
         // Page.
         let class = self.class();
-        let cols_n = grid::card_cols(class, r - l, self.dpi);
+        let cols_n = if class == grid::Class::List { grid::list_cols(self.avail_w(), self.dpi) } else { grid::card_cols(class, r - l, self.dpi) };
         let defs = self.page_defs(self.page);
         // Insights: headline, visual and chart left; items (and Bag Guard) right.
         let has_panel = defs.iter().any(|d| matches!(d, Def::Panel(i) if self.panels.get(*i).is_some()));
@@ -1840,7 +1850,7 @@ impl Ui {
             }
             // The cards above the first heading of Overview (Insights switch) stay full width.
             let n_cols = if class == grid::Class::Overview && !seen_head { 1 } else { cols_n };
-            y = self.flow(&mut run, l, r, y, n_cols, &mut controls, &mut blocks);
+            y = self.flow(&mut run, l, r, y, n_cols, class == grid::Class::List, &mut controls, &mut blocks);
             match d {
                 Def::Heading(t) => {
                     seen_head = true;
@@ -1915,7 +1925,7 @@ impl Ui {
             }
         }
         let n_cols = if class == grid::Class::Overview && !seen_head { 1 } else { cols_n };
-        y = self.flow(&mut run, l, r, y, n_cols, &mut controls, &mut blocks);
+        y = self.flow(&mut run, l, r, y, n_cols, class == grid::Class::List, &mut controls, &mut blocks);
         self.content_h = y + self.sc(24);
         self.controls = controls;
         self.blocks = blocks;
@@ -1973,11 +1983,22 @@ impl Ui {
     /// equal columns from content y `y`, row by row, left to right, every row as
     /// tall as its tallest card. Controls are added in that same order, so Tab
     /// follows the reading order. Returns the y for what comes next.
+    /// On the Metrics page (`list`) the cards of the ordered list stay one column
+    /// and any other card goes in the grid.
     #[allow(clippy::too_many_arguments)]
-    fn flow(&self, run: &mut Vec<Def>, l: i32, r: i32, y: i32, n: usize, controls: &mut Vec<Control>, blocks: &mut Vec<Block>) -> i32 {
-        if run.is_empty() {
-            return y;
+    fn flow(&self, run: &mut Vec<Def>, l: i32, r: i32, mut y: i32, n: usize, list: bool, controls: &mut Vec<Control>, blocks: &mut Vec<Block>) -> i32 {
+        let is_list = |d: &Def| list && matches!(d, Def::Card { cells, .. } if cells.iter().any(|c| matches!(c, Cell::Ctl { id, .. } if (ID_MTOG..ID_MDN + 20).contains(id))));
+        while !run.is_empty() {
+            let first = is_list(&run[0]);
+            let len = run.iter().take_while(|d| is_list(d) == first).count();
+            let mut seg: Vec<Def> = run.drain(..len).collect();
+            y = self.flow_seg(&mut seg, l, r, y, if first { 1 } else { n }, controls, blocks);
         }
+        y
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn flow_seg(&self, run: &mut Vec<Def>, l: i32, r: i32, y: i32, n: usize, controls: &mut Vec<Control>, blocks: &mut Vec<Block>) -> i32 {
         let heights: Vec<i32> = run.iter().map(|d| if matches!(d, Def::Summary(_)) { self.sc(SUMMARY_H) } else { self.sc(ROW_H) }).collect();
         let (cells, bottom) = grid::place(l, r, n, grid::gap(n, self.dpi), y, &heights);
         for (d, c) in run.drain(..).zip(cells) {

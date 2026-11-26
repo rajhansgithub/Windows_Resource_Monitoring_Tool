@@ -10,15 +10,17 @@
 //! * Settings pages: cards in 2 columns from 1300;
 //! * Insights pages: 60 / 40 split from 1300 (headline, visual and chart on
 //!   the left, the items list on the right);
-//! * nothing is wider than `MAX_DIP` (2000), except the Server Room
-//!   (Achievements), which fills the window as it always has.
+//! * nothing is wider than `MAX_DIP` (2400), except the Server Room
+//!   (Achievements), which fills the window as it always has. A capped block is
+//!   centred in the room there is, so no side is left empty;
+//! * a card alone in its row (the last odd card) spans the whole row.
 //!
 //! Layout runs on resize, navigation and data change only, never per frame.
 
 /// Width of the single column below `WIDE_FROM` (DIP): the old fixed column.
 pub const COLUMN_DIP: i32 = 1000;
-/// No page is wider than this (DIP), the Server Room aside.
-pub const MAX_DIP: i32 = 2000;
+/// No page is wider than this (DIP), the Server Room aside. Capped content is centred.
+pub const MAX_DIP: i32 = 2400;
 /// The Server Room is capped far out so a huge screen never stretches a rack.
 pub const FILL_MAX_DIP: i32 = 4000;
 /// Overview summary cards: 2 columns from here ...
@@ -91,6 +93,21 @@ pub fn card_cols(class: Class, w: i32, dpi: u32) -> usize {
     }
 }
 
+/// Columns of the non-list cards on the Metrics page (its ordered list stays one column).
+pub fn list_cols(avail: i32, dpi: u32) -> usize {
+    if dip(avail, dpi) >= SETTINGS_2 {
+        2
+    } else {
+        1
+    }
+}
+
+/// Left edge of a block `w` wide centred in `avail` px that start at `l`
+/// (`l` itself when it fills them).
+pub fn centred(l: i32, avail: i32, w: i32) -> i32 {
+    l + (avail - w).max(0) / 2
+}
+
 /// Gap between grid cards in px (horizontal and vertical) for `cols` columns:
 /// the old 4 DIP between stacked cards, `GAP_DIP` between cards of a grid.
 pub fn gap(cols: usize, dpi: u32) -> i32 {
@@ -148,8 +165,9 @@ pub fn place(l: i32, r: i32, n: usize, gap: i32, y: i32, heights: &[i32]) -> (Ve
     let mut bottom = y;
     for row in heights.chunks(n) {
         let h = row.iter().copied().max().unwrap_or(0);
-        for (i, _) in row.iter().enumerate() {
-            cells.push((cols[i].0, top, cols[i].1, top + h));
+        let spans = if row.len() < n { columns(l, r, row.len(), gap) } else { cols.clone() };
+        for sp in spans {
+            cells.push((sp.0, top, sp.1, top + h));
         }
         bottom = top + h;
         top = bottom + gap;
@@ -207,11 +225,11 @@ mod tests {
     }
 
     #[test]
-    fn width_is_capped_at_2000_dip_when_wide() {
-        assert_eq!(content_w(Class::Overview, 3000, 96), 2000);
-        assert_eq!(content_w(Class::Settings, 3000, 96), 2000);
-        assert_eq!(content_w(Class::Insights, 3000, 96), 2000);
-        assert_eq!(content_w(Class::Settings, 5000, 192), 4000); // 2000 DIP at 200 %
+    fn width_is_capped_at_2400_dip_when_wide() {
+        assert_eq!(content_w(Class::Overview, 3000, 96), 2400);
+        assert_eq!(content_w(Class::Settings, 3000, 96), 2400);
+        assert_eq!(content_w(Class::Insights, 3000, 96), 2400);
+        assert_eq!(content_w(Class::Settings, 5500, 192), 4800); // 2400 DIP at 200 %
         assert_eq!(content_w(Class::Overview, 1500, 96), 1500);
         // the Metrics list stays the old column
         assert_eq!(content_w(Class::List, 3000, 96), 1000);
@@ -253,9 +271,8 @@ mod tests {
         assert_eq!(bottom, cells[4].3);
         // rows are `gap` apart
         assert_eq!(cells[2].1 - cells[0].3, 8);
-        // a lone last card keeps one column's width
-        assert_eq!(cells[4].0, 24);
-        assert_eq!(cells[4].2, cells[0].2);
+        // a lone last card spans the row
+        assert_eq!((cells[4].0, cells[4].2), (24, 1024));
     }
 
     #[test]
@@ -280,6 +297,55 @@ mod tests {
                 assert!(b.1 > a.1 || (b.1 == a.1 && b.0 > a.2), "{a:?} then {b:?} is not reading order");
             }
         }
+    }
+
+    #[test]
+    fn last_odd_card_spans_the_row() {
+        let w = |c: &Cell| c.2 - c.0;
+        // 2 columns: a card alone in its section, and the odd last card
+        let (c, _) = place(0, 1000, 2, 8, 0, &[64]);
+        assert_eq!(c, vec![(0, 0, 1000, 64)]);
+        let (c, _) = place(0, 1000, 2, 8, 0, &[64, 64, 64]);
+        assert_eq!((c[2].0, c[2].2), (0, 1000));
+        assert_eq!(w(&c[0]), 496);
+        // 3 columns: a last row of 1 spans the row, of 2 splits it in half
+        let (c, _) = place(0, 1000, 3, 8, 0, &[92; 4]);
+        assert_eq!(c[3], (0, 100, 1000, 192));
+        let (c, _) = place(0, 1000, 3, 8, 0, &[92; 5]);
+        assert_eq!((c[3].0, c[3].2, c[4].0, c[4].2), (0, 496, 504, 1000));
+        // full rows are untouched
+        let (c, _) = place(0, 1000, 3, 8, 0, &[92; 6]);
+        assert!(c.iter().all(|x| (x.2 - x.0 - 328).abs() <= 1));
+        // the shorter last row keeps the row height and the gap
+        assert_eq!(c[3].1 - c[0].3, 8);
+    }
+
+    #[test]
+    fn capped_content_is_centred() {
+        // 3415 px window at 100 %: pane 296 + margin 24, 24 on the right
+        let (l0, avail) = (320, 3415 - 24 - 320);
+        let w = content_w(Class::Overview, avail, 96);
+        assert_eq!(w, 2400);
+        let l = centred(l0, avail, w);
+        assert_eq!(l - l0, (avail - w) / 2);
+        // equal room on both sides (within a pixel)
+        let right_room = (l0 + avail) - (l + w);
+        assert!((l - l0 - right_room).abs() <= 1);
+        // content that fills the room is not moved, and never negative room
+        assert_eq!(centred(l0, 900, 900), l0);
+        assert_eq!(centred(l0, 800, 900), l0);
+        // the Metrics list (1000 DIP) is centred too
+        let w = content_w(Class::List, avail, 96);
+        assert_eq!(w, 1000);
+        assert_eq!(centred(l0, avail, w), l0 + (avail - 1000) / 2);
+    }
+
+    #[test]
+    fn metrics_extra_cards_grid_when_wide() {
+        assert_eq!(list_cols(1299, 96), 1);
+        assert_eq!(list_cols(1300, 96), 2);
+        assert_eq!(list_cols(1950, 144), 2); // 1300 DIP at 150 %
+        assert_eq!(list_cols(1949, 144), 1);
     }
 
     #[test]
