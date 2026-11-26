@@ -88,8 +88,8 @@ jobs:
           $env:RESMON_INSIGHTS_DEMO = "1"
           $p = Start-Process target/release/ResourceMonitor.exe -ArgumentList "--insights" -PassThru
           Start-Sleep -Seconds 8
-          # One main window: class ResourceMonitor.Main, caption "Resource Monitor".
-          $h = [W2]::FindWindowW("ResourceMonitor.Main", [NullString]::Value)
+          # One main window: class ResourceMonitor.Window, caption "Resource Monitor".
+          $h = [W2]::FindWindowW("ResourceMonitor.Window", [NullString]::Value)
           if ($h -eq [IntPtr]::Zero) { $h = [W2]::FindWindowW([NullString]::Value, "Resource Monitor") }
           if ($h -ne [IntPtr]::Zero) {
             $r = New-Object W2+R
