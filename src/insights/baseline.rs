@@ -1195,7 +1195,8 @@ impl Baseline {
             tone,
             headline,
             lines,
-            chart: self.chart(&rows),
+            visual: None,
+            chart: self.chart(&rows, now_ms),
             items: self
                 .markers
                 .iter()
@@ -1209,7 +1210,7 @@ impl Baseline {
     }
 
     /// Idle RAM per usable day (up to 30), with markers on the first day on or after each change.
-    fn chart(&self, rows: &[DayRow]) -> Option<Chart> {
+    fn chart(&self, rows: &[DayRow], now_ms: u64) -> Option<Chart> {
         let usable: Vec<&DayRow> = rows.iter().filter(|r| r.usable() && r.ram > 0).collect();
         let pts = &usable[usable.len().saturating_sub(30)..];
         if pts.len() < 2 {
@@ -1230,6 +1231,10 @@ impl Baseline {
             max: 0.0,
             unit: "GB",
             markers,
+            bars: true,
+            slots: 0,
+            x_labels: super::day_span(first, pts[pts.len() - 1].day, now_ms),
+            tones: Vec::new(),
         })
     }
 }

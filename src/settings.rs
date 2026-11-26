@@ -178,6 +178,10 @@ pub struct Settings {
     /// Day of month the billing cycle resets (1..28).
     pub cap_reset_day: u32,
     pub first_run: bool,
+    /// Main window placement (normal rectangle, maximized), remembered on close.
+    pub window: Option<crate::nav::Placement>,
+    /// Main window page last shown (`nav::Page::key`); empty = none yet.
+    pub window_page: String,
 }
 
 impl Default for Settings {
@@ -230,6 +234,8 @@ impl Default for Settings {
             alert_cap: true,
             cap_reset_day: 1,
             first_run: true,
+            window: None,
+            window_page: String::new(),
         }
     }
 }
@@ -402,6 +408,8 @@ impl Settings {
                 "alert_disk_free_pct" => self.alert_disk_free_pct = v.parse().unwrap_or(self.alert_disk_free_pct),
                 "alert_battery_pct" => self.alert_battery_pct = v.parse().unwrap_or(self.alert_battery_pct),
                 "alert_cap" => self.alert_cap = parse_bool(v).unwrap_or(self.alert_cap),
+                "window" => self.window = crate::nav::Placement::parse(v).or(self.window),
+                "window_page" => self.window_page = v.to_string(),
                 "max_width_pct" => {
                     self.max_width_pct = v.parse().map(|x: u32| x.min(90)).unwrap_or(self.max_width_pct)
                 }
@@ -582,6 +590,15 @@ impl Settings {
         for (k, v) in &self.offsets {
             o.push_str(&format!("dock_offset.{} = {}\n", k, v));
         }
+        if self.window.is_some() || !self.window_page.is_empty() {
+            o.push_str("\n# Main window: x,y,width,height,maximized (screen pixels) and the last page\n");
+            if let Some(w) = &self.window {
+                o.push_str(&format!("window = {}\n", w.format()));
+            }
+            if !self.window_page.is_empty() {
+                o.push_str(&format!("window_page = {}\n", self.window_page));
+            }
+        }
         let _ = crate::util::write_atomic(&Self::path(), o.as_bytes());
     }
 
@@ -606,6 +623,18 @@ mod tests {
         assert!(!s.wants_display("DISPLAY2", false));
         assert_eq!(s.offset("display3", false), 40);
         assert_eq!(s.offset("DISPLAY2", false), 0);
+    }
+
+    #[test]
+    fn window_keys_are_tolerant() {
+        let mut s = Settings::default();
+        assert!(s.window.is_none() && s.window_page.is_empty());
+        s.apply("window = 10,20,1200,800,1\nwindow_page = alerts\n");
+        assert_eq!(s.window.map(|w| (w.x, w.y, w.w, w.h, w.max)), Some((10, 20, 1200, 800, true)));
+        assert_eq!(s.window_page, "alerts");
+        // Garbage keeps the last good value.
+        s.apply("window = nonsense\n");
+        assert!(s.window.is_some());
     }
 }
 

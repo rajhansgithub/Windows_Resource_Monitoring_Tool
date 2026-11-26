@@ -14,7 +14,7 @@
 
 use super::events::SysEvent;
 use super::store::{num, obj};
-use super::{Chart, Ctx, Item, Panel, Power, Tone, WM_APP_POWER_MODE};
+use super::{Chart, Ctx, Item, Panel, Power, Tone, Visual, WM_APP_POWER_MODE};
 use crate::achievements::json::Json;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -48,7 +48,14 @@ const MODE_BEST_EFFICIENCY: i32 = 1; // EffectivePowerModeBetterBattery
 
 /// Plain name for an EFFECTIVE_POWER_MODE value, as Settings shows it on Windows 11.
 pub fn mode_name(m: i32) -> &'static str {
+    mode_name_for(m, true)
+}
+
+/// Like `mode_name`, for a PC with or without a battery: without one, Windows calls
+/// mode 0 "Energy saver".
+pub fn mode_name_for(m: i32, battery: bool) -> &'static str {
     match m {
+        0 if !battery => "Energy saver",
         0 => "Battery saver",
         1 => "Best power efficiency",
         2 => "Balanced",
@@ -65,6 +72,8 @@ pub fn mode_name(m: i32) -> &'static str {
 pub enum Reason {
     Thermal,
     BatterySaver,
+    /// Mode 0 on a PC without a battery.
+    EnergySaver,
     EfficiencyOnBattery,
     EfficiencyOnAc,
     /// Foreground app (image stem) runs with EcoQoS.
@@ -80,6 +89,7 @@ impl Reason {
         match self {
             Reason::Thermal => "Firmware thermal limit".into(),
             Reason::BatterySaver => "Battery saver".into(),
+            Reason::EnergySaver => "Energy saver is on".into(),
             Reason::EfficiencyOnBattery => "Best power efficiency mode on battery".into(),
             Reason::EfficiencyOnAc => "Power mode is set to best efficiency".into(),
             Reason::AppEco(app) => format!("{} is in Efficiency mode", app),
@@ -95,6 +105,7 @@ impl Reason {
         match self {
             Reason::Thermal => "heat".into(),
             Reason::BatterySaver => "battery saver".into(),
+            Reason::EnergySaver => "energy saver".into(),
             Reason::EfficiencyOnBattery | Reason::EfficiencyOnAc => "efficiency mode".into(),
             Reason::AppEco(app) => format!("{} efficiency mode", app),
             Reason::OnBattery(_) => "on battery".into(),
@@ -110,6 +121,8 @@ pub struct Inputs<'a> {
     pub passive: Option<f32>,
     /// A firmware-limit event (37) arrived within `FW_RECENT_MS`.
     pub fw_recent: bool,
+    /// This PC has a battery (a UPS that Windows reports as one counts).
+    pub battery: bool,
     pub on_battery: bool,
     pub mode: Option<i32>,
     /// Foreground app name when it runs in Efficiency mode.
@@ -128,7 +141,8 @@ pub fn reason(i: &Inputs) -> Reason {
     }
     match (i.on_battery, i.mode) {
         // Battery saver can stay on briefly after plugging in; still the cause.
-        (_, Some(MODE_BATTERY_SAVER)) => return Reason::BatterySaver,
+        (_, Some(MODE_BATTERY_SAVER)) if i.battery => return Reason::BatterySaver,
+        (_, Some(MODE_BATTERY_SAVER)) => return Reason::EnergySaver,
         (true, Some(MODE_BEST_EFFICIENCY)) => return Reason::EfficiencyOnBattery,
         (false, Some(MODE_BEST_EFFICIENCY)) => return Reason::EfficiencyOnAc,
         _ => {}
@@ -275,7 +289,11 @@ pub struct HeldBack {
     perf: Option<f32>,
     flags: Option<u32>,
     passive: Option<f32>,
+    /// A battery is present (from the snapshot; no extra polling).
+    battery: bool,
     on_battery: bool,
+    /// Total CPU use now, percent.
+    cpu: f32,
     mode: Option<i32>,
     fg: Option<Foreground>,
     fg_last_ms: u64,
@@ -300,7 +318,9 @@ impl HeldBack {
             perf: None,
             flags: None,
             passive: None,
+            battery: false,
             on_battery: false,
+            cpu: 0.0,
             mode: None,
             fg: None,
             fg_last_ms: 0,
@@ -324,7 +344,9 @@ impl HeldBack {
         self.perf = s.cpu_perf_pct;
         self.flags = s.cpu_perf_flags;
         self.passive = s.thermal_passive_limit;
+        self.battery = s.battery.is_some();
         self.on_battery = s.battery.is_some_and(|b| !b.on_ac);
+        self.cpu = s.cpu;
         if self.mode.is_none() {
             // The callback may have fired before Insights was switched on.
             let m = LAST_MODE.load(Ordering::Relaxed);
@@ -334,7 +356,7 @@ impl HeldBack {
         }
         if c.display_on && (now.saturating_sub(self.fg_last_ms) >= FG_EVERY_MS || now < self.fg_last_ms) {
             self.fg_last_ms = now;
-            // Our own window in front (e.g. the Insights window) says nothing; keep the last app.
+            // Our own window in front (e.g. the main window) says nothing; keep the last app.
             if let Some(fg) = foreground_app() {
                 self.fg = Some(fg);
             }
@@ -345,6 +367,7 @@ impl HeldBack {
         let inputs = Inputs {
             passive: self.passive,
             fw_recent: fw_recent(self.fw_last_ms, now),
+            battery: self.battery,
             on_battery: self.on_battery,
             mode: self.mode,
             fg_eco: eco_name(&self.fg),
@@ -372,6 +395,7 @@ impl HeldBack {
         Inputs {
             passive: self.passive,
             fw_recent: fw_recent(self.fw_last_ms, now_ms),
+            battery: self.battery,
             on_battery: self.on_battery,
             mode: self.mode,
             fg_eco: eco_name(&self.fg),
@@ -391,7 +415,7 @@ impl HeldBack {
     pub fn on_power(&mut self, p: Power) {
         match p {
             Power::Mode(m) => self.mode = Some(m),
-            Power::Ac(on) => self.on_battery = !on,
+            Power::Ac(on) => self.on_battery = !on && self.battery,
             _ => return,
         }
         *self.plan.borrow_mut() = (active_plan_name(), super::unix_ms());
@@ -453,6 +477,7 @@ impl HeldBack {
             tone: Tone::Learning,
             headline: "Checking CPU limits.".into(),
             lines: Vec::new(),
+            visual: None,
             chart: None,
             items: Vec::new(),
         };
@@ -460,27 +485,23 @@ impl HeldBack {
             return p;
         }
         self.refresh_plan(now_ms);
-        let ceiling = ceiling_of(self.limit, self.passive);
-        match ceiling {
-            None => {
-                p.tone = Tone::Unavailable;
-                p.headline = "This PC does not report CPU limits.".into();
-            }
-            Some(c) if self.capped_since.is_some() => {
-                let r = reason(&self.inputs(now_ms));
-                let pct = c.round() as i32;
-                p.tone = if r == Reason::Thermal { Tone::Bad } else { Tone::Warn };
-                p.headline = match &r {
-                    Reason::OnBattery(Some(m)) => format!("{} on battery. Capped at {}%.", mode_name(*m), pct),
-                    _ => format!("Capped at {}%. {}.", pct, r.text()),
-                };
-            }
-            Some(_) => {
-                p.tone = Tone::Good;
-                p.headline = "Running free. Full speed available.".into();
-            }
-        }
-        p.lines = self.lines(ceiling);
+        let plan = self.plan.borrow();
+        let st = State {
+            ceiling: ceiling_of(self.limit, self.passive),
+            capped: self.capped_since.is_some(),
+            reason: reason(&self.inputs(now_ms)),
+            battery: self.battery,
+            on_battery: self.on_battery,
+            mode: self.mode,
+            plan: plan.0.as_deref(),
+            front: self.fg.as_ref().map(|f| (f.name.as_str(), f.eco)),
+            perf: self.perf,
+            passive: self.passive,
+            flags: self.flags,
+            cpu: self.cpu,
+        };
+        let (tone, headline, lines, visual) = describe(&st);
+        (p.tone, p.headline, p.lines, p.visual) = (tone, headline, lines, Some(visual));
         if !self.chart.is_empty() {
             p.chart = Some(Chart {
                 label: "CPU ceiling, last hour".into(),
@@ -488,6 +509,11 @@ impl HeldBack {
                 max: 100.0,
                 unit: "%",
                 markers: Vec::new(),
+                bars: false,
+                // The full hour stays on the x axis while it fills up.
+                slots: CHART_POINTS,
+                x_labels: super::last_hour(),
+                tones: Vec::new(),
             });
         }
         let keep_from = now_ms.saturating_sub(EPISODE_KEEP_MS);
@@ -502,35 +528,6 @@ impl HeldBack {
         p
     }
 
-    fn lines(&self, ceiling: Option<f32>) -> Vec<String> {
-        let mut v = Vec::new();
-        v.push(match self.mode {
-            Some(m) => format!("Power mode: {}.", mode_name(m)),
-            None => "Power mode: unknown.".into(),
-        });
-        if let Some(name) = &self.plan.borrow().0 {
-            v.push(format!("Power plan: {}.", name));
-        }
-        v.push(if self.on_battery { "On battery.".into() } else { "Plugged in.".into() });
-        if let Some(fg) = &self.fg {
-            v.push(match fg.eco {
-                Some(true) => format!("Front app: {}. Efficiency mode on.", fg.name),
-                Some(false) => format!("Front app: {}. Efficiency mode off.", fg.name),
-                None => format!("Front app: {}.", fg.name),
-            });
-        }
-        if let Some(sp) = self.perf {
-            v.push(format!("Current speed: {}% of normal.", sp.round() as i32));
-        }
-        if let Some(c) = ceiling {
-            v.push(format!("Allowed: {}% of max.", c.round() as i32));
-        }
-        if self.flags.is_some_and(|f| f != 0) && ceiling.is_some_and(|c| c >= CAP_BELOW) {
-            v.push("Windows reports a speed limit is active.".into());
-        }
-        v
-    }
-
     /// Re-read the plan name when the cached one is over a minute old (panel builds only).
     fn refresh_plan(&self, now_ms: u64) {
         let stale = {
@@ -541,6 +538,91 @@ impl HeldBack {
             *self.plan.borrow_mut() = (active_plan_name(), now_ms);
         }
     }
+}
+
+/// Everything the panel text and gauge depend on (plain data, unit-tested).
+#[derive(Clone, Debug)]
+pub struct State<'a> {
+    /// Percent of max speed allowed; None = this PC does not report it.
+    pub ceiling: Option<f32>,
+    /// Debounced: below `CAP_BELOW` for `CAP_HOLD_MS`.
+    pub capped: bool,
+    pub reason: Reason,
+    /// A battery is present. Without one, nothing about batteries is said.
+    pub battery: bool,
+    pub on_battery: bool,
+    pub mode: Option<i32>,
+    pub plan: Option<&'a str>,
+    /// Foreground app and its Efficiency mode (None = Windows did not say).
+    pub front: Option<(&'a str, Option<bool>)>,
+    pub perf: Option<f32>,
+    pub passive: Option<f32>,
+    pub flags: Option<u32>,
+    /// Total CPU use, percent.
+    pub cpu: f32,
+}
+
+/// Tone, headline, facts and gauge for the panel.
+pub fn describe(s: &State) -> (Tone, String, Vec<String>, Visual) {
+    let eco_app = s.front.filter(|f| f.1 == Some(true)).map(|f| f.0);
+    let (tone, headline) = match s.ceiling {
+        None => (Tone::Unavailable, "This PC does not report CPU limits.".to_string()),
+        Some(c) if s.capped => {
+            let pct = c.round() as i32;
+            let tone = if s.reason == Reason::Thermal { Tone::Bad } else { Tone::Warn };
+            let h = match &s.reason {
+                Reason::OnBattery(Some(m)) => format!("{} on battery. Capped at {}%.", mode_name(*m), pct),
+                r => format!("Capped at {}%. {}.", pct, r.text()),
+            };
+            (tone, h)
+        }
+        Some(_) => match eco_app {
+            Some(app) => (Tone::Info, format!("{} is in Efficiency mode. It may feel slow.", app)),
+            None => (Tone::Good, "Full power. Nothing is holding this PC back.".to_string()),
+        },
+    };
+
+    let mut lines = Vec::new();
+    let mut first = match s.mode {
+        Some(m) => format!("Power mode: {}.", mode_name_for(m, s.battery)),
+        None => "Power mode: unknown.".into(),
+    };
+    if s.battery {
+        first += if s.on_battery { " On battery." } else { " Plugged in." };
+    }
+    if let Some((name, eco)) = s.front {
+        first += &match eco {
+            Some(true) => format!(" In front: {}, in Efficiency mode.", name),
+            _ => format!(" In front: {}.", name),
+        };
+    }
+    lines.push(first);
+    if let Some(name) = s.plan {
+        lines.push(format!("Power plan: {}.", name));
+    }
+    let mut speed = String::new();
+    if let Some(sp) = s.perf {
+        speed = format!("Current speed {}% of normal.", sp.round() as i32);
+    }
+    if let Some(t) = s.passive {
+        if !speed.is_empty() {
+            speed.push(' ');
+        }
+        speed += &format!("Thermal limit {}%.", t.round() as i32);
+    }
+    if !speed.is_empty() {
+        lines.push(speed);
+    }
+    if s.flags.is_some_and(|f| f != 0) && s.ceiling.is_some_and(|c| c >= CAP_BELOW) {
+        lines.push("Windows reports a speed limit is active.".into());
+    }
+
+    let reason = match s.ceiling {
+        Some(_) if s.capped => s.reason.text(),
+        _ => "none".into(),
+    };
+    let gauge = Visual::Gauge { ceiling: s.ceiling.map(|c| c.clamp(0.0, 100.0)), used: s.cpu.clamp(0.0, 100.0), reason };
+    (tone, headline, lines, gauge)
 }
 
 fn fw_recent(fw_last_ms: Option<u64>, now_ms: u64) -> bool {
@@ -730,12 +812,86 @@ mod tests {
     use super::*;
 
     fn base() -> Inputs<'static> {
-        Inputs { passive: None, fw_recent: false, on_battery: false, mode: Some(2), fg_eco: None }
+        Inputs { passive: None, fw_recent: false, battery: true, on_battery: false, mode: Some(2), fg_eco: None }
+    }
+
+    /// A desktop: no battery, nothing limiting, 6% CPU.
+    fn desktop() -> State<'static> {
+        State {
+            ceiling: Some(100.0),
+            capped: false,
+            reason: Reason::System,
+            battery: false,
+            on_battery: false,
+            mode: Some(2),
+            plan: Some("Balanced"),
+            front: Some(("Code", Some(false))),
+            perf: Some(64.0),
+            passive: None,
+            flags: Some(0),
+            cpu: 6.0,
+        }
+    }
+
+    fn no_battery_words(lines: &[String], headline: &str) {
+        for l in lines.iter().map(String::as_str).chain([headline]) {
+            let l = l.to_ascii_lowercase();
+            assert!(!l.contains("battery") && !l.contains("plugged"), "{}", l);
+        }
+    }
+
+    #[test]
+    fn desktop_without_battery_runs_free() {
+        let (tone, head, lines, vis) = describe(&desktop());
+        assert_eq!(tone, Tone::Good);
+        assert_eq!(head, "Full power. Nothing is holding this PC back.");
+        assert_eq!(vis, Visual::Gauge { ceiling: Some(100.0), used: 6.0, reason: "none".into() });
+        assert_eq!(lines[0], "Power mode: Balanced. In front: Code.");
+        no_battery_words(&lines, &head);
+        // Energy saver on a desktop is named as such, never "battery saver".
+        let i = Inputs { battery: false, mode: Some(0), ..base() };
+        assert_eq!(reason(&i), Reason::EnergySaver);
+        let st = State { ceiling: Some(70.0), capped: true, reason: reason(&i), mode: Some(0), ..desktop() };
+        let (tone, head, lines, vis) = describe(&st);
+        assert_eq!(tone, Tone::Warn);
+        assert_eq!(head, "Capped at 70%. Energy saver is on.");
+        assert_eq!(lines[0], "Power mode: Energy saver. In front: Code.");
+        no_battery_words(&lines, &head);
+        assert_eq!(vis, Visual::Gauge { ceiling: Some(70.0), used: 6.0, reason: "Energy saver is on".into() });
+    }
+
+    #[test]
+    fn limits_not_reported_still_show_cpu_use() {
+        let st = State { ceiling: None, perf: None, ..desktop() };
+        let (tone, head, lines, vis) = describe(&st);
+        assert_eq!(tone, Tone::Unavailable);
+        assert_eq!(head, "This PC does not report CPU limits.");
+        assert_eq!(vis, Visual::Gauge { ceiling: None, used: 6.0, reason: "none".into() });
+        no_battery_words(&lines, &head);
+    }
+
+    #[test]
+    fn laptop_wording() {
+        let st = State { battery: true, on_battery: true, ..desktop() };
+        let (tone, head, lines, _) = describe(&st);
+        assert_eq!(tone, Tone::Good);
+        assert_eq!(head, "Full power. Nothing is holding this PC back.");
+        assert_eq!(lines[0], "Power mode: Balanced. On battery. In front: Code.");
+        let st = State { battery: true, ceiling: Some(62.0), capped: true, reason: Reason::Thermal, passive: Some(62.0), cpu: 140.0, ..desktop() };
+        let (tone, head, lines, vis) = describe(&st);
+        assert_eq!(tone, Tone::Bad);
+        assert_eq!(head, "Capped at 62%. Firmware thermal limit.");
+        assert_eq!(lines[0], "Power mode: Balanced. Plugged in. In front: Code.");
+        assert!(lines.iter().any(|l| l == "Current speed 64% of normal. Thermal limit 62%."));
+        assert_eq!(vis, Visual::Gauge { ceiling: Some(62.0), used: 100.0, reason: "Firmware thermal limit".into() });
+        let st = State { front: Some(("Code", Some(true))), ..desktop() };
+        let (tone, head, ..) = describe(&st);
+        assert_eq!((tone, head.as_str()), (Tone::Info, "Code is in Efficiency mode. It may feel slow."));
     }
 
     #[test]
     fn reason_priority() {
-        let all = Inputs { passive: Some(80.0), fw_recent: true, on_battery: true, mode: Some(0), fg_eco: Some("x") };
+        let all = Inputs { passive: Some(80.0), fw_recent: true, battery: true, on_battery: true, mode: Some(0), fg_eco: Some("x") };
         assert_eq!(reason(&all), Reason::Thermal);
         assert_eq!(reason(&Inputs { passive: Some(100.0), fw_recent: true, ..base() }), Reason::Thermal);
         assert_eq!(reason(&Inputs { passive: Some(100.0), ..all.clone() }), Reason::Thermal); // fw_recent

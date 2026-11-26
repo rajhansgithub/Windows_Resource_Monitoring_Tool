@@ -7,7 +7,7 @@
 //! (for the 30-day chart). Pool tags would name the driver but need admin, so we never try.
 
 use super::store::{num, obj};
-use super::{time, Chart, Ctx, Panel, Tone};
+use super::{time, Chart, Ctx, Panel, Role, Tone, Visual};
 use crate::achievements::json::Json;
 use std::cell::Cell;
 
@@ -460,13 +460,14 @@ impl Ghost {
             .unwrap_or_default();
     }
 
-    pub fn panel(&self, _now_ms: u64) -> Panel {
+    pub fn panel(&self, now_ms: u64) -> Panel {
         let mut p = Panel {
             key: "ghost",
             title: "Ghost Memory",
             tone: Tone::Learning,
             headline: "Watching. Needs a day of uptime to judge the trend.".into(),
             lines: Vec::new(),
+            visual: None,
             chart: None,
             items: Vec::new(),
         };
@@ -480,18 +481,11 @@ impl Ghost {
         let recent = self.trend.recent();
         let slope = slope_per_day(recent);
         (p.tone, p.headline) = headline(verdict(gb(m.pool()), gb(m.total), slope, span_days(recent)));
-        let b = breakdown(&m);
-        p.lines.push(format!("Apps: {:.1} GB", gb(b.apps)));
-        p.lines.push(match m.compressed {
-            Some(_) => format!("Compressed: {:.1} GB", gb(b.compressed)),
-            None => "Compressed: not available".into(),
-        });
-        p.lines.push(format!("Kernel pool: {:.1} GB", gb(b.kernel)));
-        p.lines.push(format!("Cache in use: {:.1} GB", gb(b.cache)));
-        p.lines.push(format!("Free: {:.1} GB", gb(b.free)));
         if m.commit_limit > 0 {
-            p.lines.push(format!("Committed: {:.1} of {:.1} GB", gb(m.commit), gb(m.commit_limit)));
+            p.lines.push(format!("Committed: {:.1} of {:.1} GB.", gb(m.commit), gb(m.commit_limit)));
         }
+        p.lines.push("Kernel pool is memory no app owns. Windows can't say which driver holds it without admin.".into());
+        p.visual = Some(split(&breakdown(&m), m.compressed.is_some()));
         if !self.rows.is_empty() {
             let markers = (1..self.rows.len())
                 .filter(|&i| !same_boot(self.rows[i].boot, self.rows[i - 1].boot))
@@ -503,10 +497,27 @@ impl Ghost {
                 max: 0.0,
                 unit: "GB",
                 markers,
+                bars: true,
+                slots: 0,
+                x_labels: super::day_span(self.rows[0].day, self.rows[self.rows.len() - 1].day, now_ms),
+                tones: Vec::new(),
             });
         }
         p
     }
+}
+
+/// The memory split bar: apps, compressed (only when this PC reports it), kernel pool,
+/// cache in use and free, in GB. The parts add up to installed memory.
+pub fn split(b: &Breakdown, compressed: bool) -> Visual {
+    let mut parts = vec![("Apps", gb(b.apps), Role::Accent)];
+    if compressed {
+        parts.push(("Compressed", gb(b.compressed), Role::AccentAlt));
+    }
+    parts.push(("Kernel pool", gb(b.kernel), Role::Warn));
+    parts.push(("Cache", gb(b.cache), Role::Neutral));
+    parts.push(("Free", gb(b.free), Role::Track));
+    Visual::Split { parts, unit: "GB" }
 }
 
 // ---- Win32 -------------------------------------------------------------------------------
@@ -603,6 +614,24 @@ mod tests {
         ] {
             assert_eq!(sum(&breakdown(&m)), m.total);
         }
+    }
+
+    #[test]
+    fn split_bar_parts() {
+        let m = sample();
+        let Visual::Split { parts, unit } = split(&breakdown(&m), true) else { panic!() };
+        assert_eq!(unit, "GB");
+        let names: Vec<_> = parts.iter().map(|p| p.0).collect();
+        assert_eq!(names, ["Apps", "Compressed", "Kernel pool", "Cache", "Free"]);
+        let total: f32 = parts.iter().map(|p| p.1).sum();
+        assert!((total - 16.0).abs() < 1e-3, "{}", total);
+        assert_eq!(parts[2].2, Role::Warn);
+        // Without Memory Compression the part is left out, not shown as 0.
+        let m = MemSample { compressed: None, ..sample() };
+        let Visual::Split { parts, .. } = split(&breakdown(&m), false) else { panic!() };
+        assert!(parts.iter().all(|p| p.0 != "Compressed"));
+        let total: f32 = parts.iter().map(|p| p.1).sum();
+        assert!((total - 16.0).abs() < 1e-3);
     }
 
     #[test]

@@ -119,13 +119,15 @@ pub struct Canvas {
     pub h: i32,
     /// Outline colour drawn behind text (None = plain text).
     pub halo: Option<Rgba>,
+    /// Drawing is limited to this rectangle (None = the whole canvas).
+    clip: Option<Rect>,
     px: Option<Dib>,
     mask: Option<Dib>,
 }
 
 impl Canvas {
     pub fn new() -> Self {
-        Canvas { w: 0, h: 0, halo: None, px: None, mask: None }
+        Canvas { w: 0, h: 0, halo: None, clip: None, px: None, mask: None }
     }
 
     pub fn resize(&mut self, w: i32, h: i32) {
@@ -154,6 +156,58 @@ impl Canvas {
         self.h = h;
     }
 
+    /// Limit drawing (fills, outlines, text) to `r`; None = no limit.
+    pub fn set_clip(&mut self, r: Option<Rect>) {
+        self.clip = r;
+    }
+
+    /// The current clip rectangle (to restore it after a nested clip).
+    pub fn clip(&self) -> Option<Rect> {
+        self.clip
+    }
+
+    /// `l, t, r, b` limited to the canvas and the clip rectangle.
+    fn bounds(&self, l: i32, t: i32, r: i32, b: i32) -> (i32, i32, i32, i32) {
+        let (mut l, mut t, mut r, mut b) = (l.max(0), t.max(0), r.min(self.w), b.min(self.h));
+        if let Some(c) = self.clip {
+            l = l.max(c.l);
+            t = t.max(c.t);
+            r = r.min(c.r);
+            b = b.min(c.b);
+        }
+        (l, t, r, b)
+    }
+
+    /// Fade the pixels of `r` toward `to` (straight alpha): `keep` = 1 leaves
+    /// them, 0 replaces them with `to`. Used for page transitions; with a
+    /// transparent `to` (Mica) it fades to the backdrop.
+    pub fn fade_rect(&mut self, r: Rect, keep: f32, to: Rgba) {
+        let k = (keep.clamp(0.0, 1.0) * 256.0) as u32;
+        if k >= 256 {
+            return;
+        }
+        let (l, t, rr, b) = self.bounds(r.l, r.t, r.r, r.b);
+        if l >= rr || t >= b {
+            return;
+        }
+        let p = premul(to);
+        let ik = 256 - k;
+        let w = self.w;
+        let buf = self.buf();
+        for y in t..b {
+            for px in &mut buf[(y * w + l) as usize..(y * w + rr) as usize] {
+                let d = *px;
+                let mut o = 0u32;
+                for sh in [0u32, 8, 16, 24] {
+                    let dv = (d >> sh) & 0xff;
+                    let pv = (p >> sh) & 0xff;
+                    o |= (((dv * k + pv * ik) >> 8) & 0xff) << sh;
+                }
+                *px = o;
+            }
+        }
+    }
+
     fn buf(&mut self) -> &mut [u32] {
         match &self.px {
             Some(d) => unsafe { std::slice::from_raw_parts_mut(d.bits, (self.w * self.h) as usize) },
@@ -170,20 +224,6 @@ impl Canvas {
     pub fn clear(&mut self, c: Rgba) {
         let p = premul(c);
         self.buf().fill(p);
-    }
-
-    /// Overwrite (not blend) a rectangle with `c`, alpha included.
-    pub fn clear_rect(&mut self, r: Rect, c: Rgba) {
-        let p = premul(c);
-        let (w, h) = (self.w, self.h);
-        let (l, t, rr, b) = (r.l.max(0), r.t.max(0), r.r.min(w), r.b.min(h));
-        if l >= rr {
-            return;
-        }
-        let buf = self.buf();
-        for y in t..b {
-            buf[(y * w + l) as usize..(y * w + rr) as usize].fill(p);
-        }
     }
 
     #[inline]
@@ -205,8 +245,8 @@ impl Canvas {
     }
 
     pub fn fill_rect(&mut self, r: Rect, c: Rgba) {
-        let (w, h) = (self.w, self.h);
-        let (l, t, rr, b) = (r.l.max(0), r.t.max(0), r.r.min(w), r.b.min(h));
+        let w = self.w;
+        let (l, t, rr, b) = self.bounds(r.l, r.t, r.r, r.b);
         let buf = self.buf();
         for y in t..b {
             for x in l..rr {
@@ -218,10 +258,11 @@ impl Canvas {
     /// Anti-aliased rounded rectangle.
     pub fn fill_round(&mut self, r: Rect, rad: f32, c: Rgba) {
         let rad = rad.min(r.w() as f32 / 2.0).min(r.h() as f32 / 2.0).max(0.0);
-        let (w, h) = (self.w, self.h);
+        let w = self.w;
+        let (bl, bt, br, bb) = self.bounds(r.l, r.t, r.r, r.b);
         let buf = self.buf();
-        for y in r.t.max(0)..r.b.min(h) {
-            for x in r.l.max(0)..r.r.min(w) {
+        for y in bt..bb {
+            for x in bl..br {
                 let px = x as f32 + 0.5;
                 let py = y as f32 + 0.5;
                 let cx = px.clamp(r.l as f32 + rad, r.r as f32 - rad);
@@ -247,10 +288,11 @@ impl Canvas {
             let d = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
             (rd - d + 0.5).clamp(0.0, 1.0)
         };
-        let (w, h) = (self.w, self.h);
+        let w = self.w;
+        let (bl, bt, br, bb) = self.bounds(r.l, r.t, r.r, r.b);
         let buf = self.buf();
-        for y in r.t.max(0)..r.b.min(h) {
-            for x in r.l.max(0)..r.r.min(w) {
+        for y in bt..bb {
+            for x in bl..br {
                 let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
                 let outer = cov(px, py, r, rad);
                 let inn = if inner.is_empty() { 0.0 } else { cov(px, py, inner, irad) };
@@ -300,6 +342,8 @@ impl Canvas {
             ((m >> 16) & 0xff).max((m >> 8) & 0xff).max(m & 0xff)
         };
         let halo = self.halo;
+        // Blend only inside the clip (the mask above covers the whole text).
+        let (cl, ct, cr, cb) = self.bounds(l, t, r, b);
         let buf = match &self.px {
             Some(d) => unsafe { std::slice::from_raw_parts_mut(d.bits, (w * h) as usize) },
             None => return tw,
@@ -307,8 +351,8 @@ impl Canvas {
         // Crisp 1px drop shadow (down-right): keeps glyphs legible on
         // translucent / Mica taskbars without blurring their edges.
         if let Some(hc) = halo {
-            for yy in t..b {
-                for xx in l..r {
+            for yy in ct..cb {
+                for xx in cl..cr {
                     let cv = cov_at(xx - 1, yy - 1);
                     if cv != 0 {
                         Self::blend_px(&mut buf[(yy * w + xx) as usize], hc, cv);
@@ -317,8 +361,8 @@ impl Canvas {
             }
         }
         let lut = sharpen_lut();
-        for yy in t..b {
-            for xx in l..r {
+        for yy in ct..cb {
+            for xx in cl..cr {
                 let cov = cov_at(xx, yy);
                 if cov != 0 {
                     Self::blend_px(&mut buf[(yy * w + xx) as usize], c, lut[cov as usize] as u32);
@@ -415,6 +459,48 @@ impl Canvas {
                         let cd = ((px - qx).powi(2) + (py - qy).powi(2)).sqrt();
                         cov = cov.max((half - cd + 0.5).clamp(0.0, 1.0));
                     }
+                }
+                if cov > 0.0 {
+                    Self::blend_px(&mut buf[(y * w + x) as usize], c, (cov * 255.0) as u32);
+                }
+            }
+        }
+    }
+
+    /// Anti-aliased arc of a circle (stroke centred on radius `r`, `thick` wide, round
+    /// caps) from angle `a0` to `a1`, radians clockwise from 3 o'clock (y points down),
+    /// `a1 >= a0`, at most a full turn. Respects the clip rectangle.
+    #[allow(clippy::too_many_arguments)]
+    pub fn stroke_arc(&mut self, cx: f32, cy: f32, r: f32, thick: f32, a0: f32, a1: f32, c: Rgba) {
+        let tau = std::f32::consts::TAU;
+        let span = (a1 - a0).clamp(0.0, tau);
+        let half = thick / 2.0;
+        let caps = [(cx + r * a0.cos(), cy + r * a0.sin()), (cx + r * (a0 + span).cos(), cy + r * (a0 + span).sin())];
+        let ext = r + half + 1.0;
+        let w = self.w;
+        let (x0, y0, x1, y1) = self.bounds(
+            (cx - ext).floor() as i32,
+            (cy - ext).floor() as i32,
+            (cx + ext).ceil() as i32 + 1,
+            (cy + ext).ceil() as i32 + 1,
+        );
+        let buf = self.buf();
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                let (dx, dy) = (px - cx, py - cy);
+                let d = (dx * dx + dy * dy).sqrt();
+                let radial = (half - (d - r).abs() + 0.5).clamp(0.0, 1.0);
+                let mut cov = 0.0f32;
+                if radial > 0.0 {
+                    let t = (dy.atan2(dx) - a0).rem_euclid(tau);
+                    if t <= span || span >= tau - 1e-4 {
+                        cov = radial;
+                    }
+                }
+                for (qx, qy) in caps {
+                    let cd = ((px - qx).powi(2) + (py - qy).powi(2)).sqrt();
+                    cov = cov.max((half - cd + 0.5).clamp(0.0, 1.0));
                 }
                 if cov > 0.0 {
                     Self::blend_px(&mut buf[(y * w + x) as usize], c, (cov * 255.0) as u32);

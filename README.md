@@ -76,7 +76,7 @@ Upgrading from the old .NET version: settings and data usage history are importe
 
 ## Settings
 
-Right-click → **Settings…** opens a native settings window (General, Metrics with drag-free reordering, Colours with the Windows colour picker, Alerts, Data, About). The right-click menu stays short: the *Resource Monitor by Emulsion Labs* header opens the website, then Show widget, Settings, Achievements, Task Manager, Check for updates and Exit. Everything is also in `%LOCALAPPDATA%\ResourceMonitor\settings.ini` (Settings → About → *Settings file*); edits apply within a few seconds.
+Right-click → **Settings…** opens the Resource Monitor window: one window with a navigation pane (Overview, Achievements, the five Insights pages, then the settings pages General, Metrics with drag-free reordering, Colours with the Windows colour picker, Alerts, Data, and About at the bottom). Changes apply as you make them; the window remembers its size, position and last page. Keyboard: Up/Down in the pane, Enter to open, F6 between pane and page, Ctrl+Tab for the next page, Alt+Left (or the mouse back button) to go back. The right-click menu stays short: the *Resource Monitor by Emulsion Labs* header opens the website, then Show widget, Settings, Achievements, Task Manager, Check for updates and Exit. Everything is also in `%LOCALAPPDATA%\ResourceMonitor\settings.ini` (Settings → About → *Settings file*); edits apply within a few seconds.
 
 | Key | Meaning |
 |---|---|

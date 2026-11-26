@@ -13,7 +13,7 @@
 //! (every few minutes, on suspend and on exit).
 //!
 //! CONTRACT between modules (keep signatures stable; each module owns its own file):
-//!   - every feature has `fn panel(&self, now_ms: u64) -> Panel` for the Insights window,
+//!   - every feature has `fn panel(&self, now_ms: u64) -> Panel` for the Insights pages of the main window,
 //!   - `fn save(&self) -> Json` / `fn load(&mut self, &Json)` for `insights.json`,
 //!   - per-tick work goes through `on_sample(&Ctx)`; events through `on_event` / `on_power`.
 
@@ -25,7 +25,7 @@ pub mod incidents;
 pub mod ring;
 pub mod sleep;
 pub mod store;
-pub mod ui;
+pub mod view;
 
 use crate::achievements::json::Json;
 use crate::sensors::Snapshot;
@@ -74,9 +74,63 @@ pub struct Chart {
     pub unit: &'static str,
     /// Vertical markers: (index into `points`, short label), e.g. "Update".
     pub markers: Vec<(usize, String)>,
+    /// Draw one bar per point (per-night / per-day values). False = a time series line.
+    pub bars: bool,
+    /// Fixed x-axis length for a time series with a fixed window (e.g. 60 minutes):
+    /// `points` fill the newest (rightmost) slots, the rest stays empty. 0 = `points.len()`.
+    /// Non-finite points are gaps.
+    pub slots: usize,
+    /// Labels under the x axis: left, middle, right ("-60 min", "-30 min", "now").
+    /// Empty strings are not drawn.
+    pub x_labels: [String; 3],
+    /// Per-bar colours (bar charts only), one per point; empty = the accent colour.
+    pub tones: Vec<Tone>,
 }
 
-/// Everything the Insights window needs to draw one feature.
+/// Left / middle / right x-axis labels for a chart.
+pub fn x_labels(l: &str, m: &str, r: &str) -> [String; 3] {
+    [l.into(), m.into(), r.into()]
+}
+
+/// The x-axis labels of a chart covering the last hour.
+pub fn last_hour() -> [String; 3] {
+    x_labels("-60 min", "-30 min", "now")
+}
+
+/// The x-axis labels of a per-day chart from local day `first` to `last` ("today"
+/// when `last` is the day of `now_ms`).
+pub fn day_span(first: u32, last: u32, now_ms: u64) -> [String; 3] {
+    let end = if last == time::day(now_ms) { "today".into() } else { time::day_label(last) };
+    let start = if first == last { String::new() } else { time::day_label(first) };
+    [start, String::new(), end]
+}
+
+/// Palette role of one part of a split bar (the view maps it to the theme).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum Role {
+    Accent,
+    /// Accent leaning toward "good" (a second, related part).
+    AccentAlt,
+    Warn,
+    /// Neutral grey (cache, other).
+    Neutral,
+    /// The empty track (free space).
+    Track,
+}
+
+/// A picture shown under the facts, above the chart.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Visual {
+    /// One bar split into parts that add up to a whole, with a legend
+    /// ("Apps 7.2 GB"). Parts are (label, value, colour); zero parts stay in the legend.
+    Split { parts: Vec<(&'static str, f32, Role)>, unit: &'static str },
+    /// Ring gauge (open at the bottom): the ceiling (percent of max speed allowed; None = this PC
+    /// does not report one), current use in percent and the reason for the ceiling
+    /// ("none" when nothing limits it).
+    Gauge { ceiling: Option<f32>, used: f32, reason: String },
+}
+
+/// Everything an Insights page needs to draw one feature.
 #[derive(Clone, Debug)]
 pub struct Panel {
     /// Stable id: "incidents" | "sleep" | "heldback" | "baseline" | "ghost".
@@ -87,6 +141,8 @@ pub struct Panel {
     pub headline: String,
     /// Short supporting facts, one per line.
     pub lines: Vec<String>,
+    /// Drawn between the facts and the chart; None = nothing to show.
+    pub visual: Option<Visual>,
     pub chart: Option<Chart>,
     /// Newest first.
     pub items: Vec<Item>,
@@ -95,6 +151,9 @@ pub struct Panel {
 /// A tray notification to show (subject to the user's toast setting).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Notice {
+    /// Panel key of the feature that produced it ("incidents", "sleep", ...), so a click
+    /// on the notification can open that page.
+    pub key: &'static str,
     pub title: String,
     pub text: String,
 }
@@ -231,7 +290,7 @@ impl Insights {
         s
     }
 
-    /// Turn the whole feature set on/off (Settings → Insights). Off = no work at all,
+    /// Turn the whole feature set on/off (Overview → Insights). Off = no work at all,
     /// event subscriptions closed.
     pub fn set_enabled(&mut self, on: bool, hwnd: isize) {
         if on == self.enabled {
@@ -309,7 +368,7 @@ impl Insights {
         out
     }
 
-    /// Panels for the Insights window, in display order.
+    /// Panels for the Insights pages, in display order.
     pub fn panels(&self, now_ms: u64) -> Vec<Panel> {
         vec![
             self.incidents.panel(now_ms),
@@ -335,7 +394,7 @@ impl Insights {
         self.last_save_ms = unix_ms();
     }
 
-    /// Forget everything (Settings → Insights → Clear history).
+    /// Forget everything (Overview → Clear history).
     pub fn clear(&mut self) {
         self.incidents = incidents::Incidents::new();
         // Keep the user's Bag Guard setting (only re-applied on the next settings change).

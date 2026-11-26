@@ -641,7 +641,7 @@ impl Incidents {
             detail,
         };
         if card.away && primary != Kind::Stutter && dur_s >= AWAY_TOAST_MIN_S {
-            self.queue(Notice { title: "While you were away".into(), text: card.title() });
+            self.queue(Notice { key: "incidents", title: "While you were away".into(), text: card.title() });
         }
         self.add_card(card);
     }
@@ -728,7 +728,7 @@ impl Incidents {
             detail: cut(detail, 200),
         };
         let notice = (event_toasts(k) && now_ms.saturating_sub(t_ms) <= DAY_MS)
-            .then(|| Notice { title: card.what.clone(), text: card.title() });
+            .then(|| Notice { key: "incidents", title: card.what.clone(), text: card.title() });
         self.last_end[k as usize] = Some(t_s);
         self.add_card(card);
         // Only toast a card that was kept: an old one dropped at once by the 60-card cap is
@@ -830,22 +830,26 @@ impl Incidents {
                 detail: c.detail.clone(),
             })
             .collect();
-        Panel { key: "incidents", title: "Incident Cards", tone, headline, lines, chart: self.chart(now_ms), items }
+        Panel { key: "incidents", title: "Incident Cards", tone, headline, lines, visual: None, chart: self.chart(now_ms), items }
     }
 
-    /// CPU % over the last hour, one point per minute (peak), with incident markers.
+    /// CPU % over the last hour, one slot per minute (peak), with incident markers.
+    /// Minutes without a sample are gaps (NaN), so the hour keeps its full width.
     fn chart(&self, now_ms: u64) -> Option<Chart> {
         let now_m = (now_ms / 60_000) as u32;
+        let first = now_m.saturating_sub(59);
         let mut points = Vec::with_capacity(60);
-        let mut mins = Vec::with_capacity(60);
-        for m in now_m.saturating_sub(59)..=now_m {
+        let mut filled = 0;
+        for m in first..first + 60 {
             let (id, v) = self.minutes[(m % 60) as usize];
-            if id == m {
+            if id == m && m <= now_m {
                 points.push(v as f32);
-                mins.push(m);
+                filled += 1;
+            } else {
+                points.push(f32::NAN);
             }
         }
-        if points.len() < 2 {
+        if filled < 2 {
             return None;
         }
         let markers = self
@@ -853,10 +857,20 @@ impl Incidents {
             .iter()
             .filter_map(|c| {
                 let m = (c.t_ms / 60_000) as u32;
-                mins.iter().position(|&x| x == m).map(|i| (i, c.kind.short().to_string()))
+                (first..=now_m).contains(&m).then(|| ((m - first) as usize, c.kind.short().to_string()))
             })
             .collect();
-        Some(Chart { label: "CPU, last hour".into(), points, max: 100.0, unit: "%", markers })
+        Some(Chart {
+            label: "CPU, last hour".into(),
+            points,
+            max: 100.0,
+            unit: "%",
+            markers,
+            bars: false,
+            slots: 60,
+            x_labels: super::last_hour(),
+            tones: Vec::new(),
+        })
     }
 }
 

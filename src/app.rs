@@ -441,7 +441,6 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         report::register(hinst);
         crate::settings_ui::register(hinst);
         crate::achievements::ui::register(hinst);
-        crate::insights::ui::register(hinst);
         // Compile the medal shaders in the background a little after start-up (seconds on the first run after an
         // update, then from the disk cache), so opening Achievements never freezes the window.
         let _ = std::thread::Builder::new().name("ach-gpu-warm".into()).spawn(|| {
@@ -820,6 +819,8 @@ impl App {
     /// Feed Insights from the sample just taken (no extra timers).
     fn insights_sample(&mut self, procs_sampled: bool) {
         if !self.ins.enabled() {
+            // Still lets the window follow a battery appearing or going away.
+            crate::settings_ui::insights_tick(self);
             return;
         }
         let interval_ms = if self.display_on { self.m.s.interval_ms } else { self.m.s.interval_ms.max(5000) };
@@ -833,7 +834,7 @@ impl App {
         };
         let notes = self.ins.on_sample(&ctx);
         self.insight_notices(notes);
-        crate::insights::ui::refresh(self);
+        crate::settings_ui::insights_tick(self);
     }
 
     /// Show Insights notices as tray notifications (when the user wants them).
@@ -841,13 +842,13 @@ impl App {
         for n in notes {
             crate::util::diag(&format!("insight: {} \u{2014} {}", n.title, n.text));
             if self.m.s.insight_toasts {
-                self.tray.balloon(&n.title, &n.text);
+                self.tray.balloon_from(&n.title, &n.text, n.key);
             }
         }
     }
 
     pub fn open_insights(&mut self) {
-        crate::insights::ui::open(self);
+        crate::settings_ui::open(self, crate::nav::Page::Overview);
     }
 
     /// Feed the achievements observer from the sample just taken (no extra timers).
@@ -1074,8 +1075,8 @@ impl App {
         crate::achievements::ui::set_dark(self.m.dark);
         self.ins.set_enabled(self.m.s.insights, self.hwnd as isize);
         self.ins.sleep.bag_guard = self.m.s.bag_guard;
-        // After set_enabled, so an open Insights window shows the new on/off state.
-        crate::insights::ui::set_dark(self.m.dark, self);
+        // After set_enabled, so an open main window shows the new on/off state.
+        crate::settings_ui::app_changed(self.m.dark, self);
         if !self.m.s.achievements {
             crate::achievements::ui::close_all();
         }
@@ -1323,7 +1324,7 @@ impl App {
     fn command(&mut self, id: usize) {
         match id {
             ID_WEBSITE => shell_open(WEBSITE, None),
-            ID_SETTINGS => crate::settings_ui::open(self),
+            ID_SETTINGS => crate::settings_ui::open_settings(self),
             ID_ACHIEVE => {
                 let st = self.ach.state().clone();
                 crate::achievements::ui::open(self.hwnd, &st, self.m.dark);
@@ -1531,6 +1532,8 @@ impl App {
             return;
         }
         self.shut_down = true;
+        // The main window applies pending edits and saves its placement.
+        crate::settings_ui::close();
         self.m.usage.save();
         self.ach.flush();
         self.ins.flush();
@@ -1665,6 +1668,12 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
                     }
                 }
                 WM_LBUTTONDBLCLK => report::open(a),
+                // A click on an Insights notification opens the page that wrote it.
+                NIN_BALLOONUSERCLICK => {
+                    if let Some(p) = a.tray.balloon_source().and_then(crate::nav::Page::of_panel_key) {
+                        crate::settings_ui::open(a, p);
+                    }
+                }
                 _ => {}
             }
             0
@@ -1773,7 +1782,7 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             // Theme switch, taskbar moved/resized (work area), auto-hide toggled…
             a.m.dark = effective_dark(a.m.s.theme);
             crate::achievements::ui::set_dark(a.m.dark);
-            crate::insights::ui::set_dark(a.m.dark, a);
+            crate::settings_ui::app_changed(a.m.dark, a);
             crate::settings_ui::apply_menu_theme(a.m.s.theme, hwnd);
             a.update_timer();
             a.need_locate = true;

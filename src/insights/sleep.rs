@@ -292,7 +292,8 @@ pub fn verdict(n: &Night) -> (Tone, String) {
     let culprit = n.culprit.as_ref().map(|(c, _)| c.as_str());
     match n.drain_per_h() {
         None => {
-            let place = if n.on_ac { " on power" } else { "" };
+            // "On power" only means something on a PC that has a battery.
+            let place = if n.on_ac && n.battery { " on power" } else { "" };
             if awake > 50 {
                 let mut t = format!("Stayed awake {}% of {}{}.", awake, dur(total), place);
                 if let Some(c) = culprit {
@@ -333,7 +334,7 @@ pub fn notice_for(n: &Night) -> Option<Notice> {
     }
     let (tone, text) = verdict(n);
     let title = if tone == Tone::Bad { "Battery drained while asleep" } else { "Sleep verdict" };
-    Some(Notice { title: title.into(), text })
+    Some(Notice { key: "sleep", title: title.into(), text })
 }
 
 /// Field lookup by several candidate names, ignoring case; empty values count as missing.
@@ -553,6 +554,8 @@ pub struct Sleep {
     lid_closed: bool,
     ac: Option<bool>,
     last_bat: Option<Battery>,
+    /// A battery is present, from the latest snapshot (None before the first sample).
+    battery: Option<bool>,
     last_now: u64,
     /// The latest night still owes its single toast.
     pending: bool,
@@ -578,6 +581,7 @@ impl Sleep {
             lid_closed: false,
             ac: None,
             last_bat: None,
+            battery: None,
             last_now: 0,
             pending: false,
             late_wake: false,
@@ -596,6 +600,7 @@ impl Sleep {
         let now = c.now_ms;
         self.last_now = now;
         self.last_bat = c.snap.battery;
+        self.battery = Some(c.snap.battery.is_some());
         if !c.display_on {
             self.disp_on = false;
         }
@@ -665,7 +670,8 @@ impl Sleep {
                 _ => {}
             }
         }
-        if bag_guard_due(bag_guard, lid_closed, s.on_ac, s.guard_tried, s.max_mwh, &s.reads) {
+        // Never on a PC without a battery (a desktop has nothing to save).
+        if s.bat0.present && bag_guard_due(bag_guard, lid_closed, s.on_ac, s.guard_tried, s.max_mwh, &s.reads) {
             s.guard_tried = true;
             crate::util::diag("Bag Guard: fast drain with the lid closed. Hibernating.");
             match (self.hibernate)() {
@@ -847,52 +853,29 @@ impl Sleep {
         self.nights = v.split_off(skip);
     }
 
+    /// This PC has a battery: the latest snapshot says so, or (before the first sample)
+    /// the latest night had one. Follows a battery that appears or goes away.
+    pub fn has_battery(&self) -> bool {
+        self.battery.or_else(|| self.nights.last().map(|n| n.battery)).unwrap_or(false)
+    }
+
     pub fn panel(&self, _now_ms: u64) -> Panel {
-        let guard = if self.bag_guard { "Bag Guard is on." } else { "Bag Guard is off." };
+        let battery = self.has_battery();
         let Some(n) = self.nights.last() else {
             return Panel {
                 key: "sleep",
                 title: "Sleep Verdict",
                 tone: Tone::Learning,
-                headline: "No sleep recorded yet. Close the lid or let the screen turn off.".into(),
-                lines: vec![guard.into()],
+                headline: empty_headline(battery).into(),
+                lines: if battery { vec![guard_line(self.bag_guard).into()] } else { Vec::new() },
+                visual: None,
                 chart: None,
                 items: vec![],
             };
         };
         let (tone, headline) = verdict(n);
-        let mut lines = Vec::new();
-        match n.drain_per_h() {
-            Some(r) => lines.push(format!("Drain {:.1}%/h.", r)),
-            None if n.on_ac => lines.push("On power. No drain to show.".into()),
-            None if !n.battery => lines.push("No battery. Awake time only.".into()),
-            None => lines.push("Battery level not reported.".into()),
-        }
-        lines.push(format!("Awake {}% of the time.", n.awake_pct().round() as u32));
-        if let Some(w) = &n.wake {
-            lines.push(format!("Woke by: {}.", w.reason));
-        }
-        if let Some((name, s)) = &n.culprit {
-            // "40 s" / "4 min".
-            let cpu = if *s < 90.0 {
-                format!("{} s", s.round() as u32)
-            } else {
-                format!("{} min", (s / 60.0).round() as u32)
-            };
-            lines.push(format!("Busiest while awake: {}, {} of CPU.", name, cpu));
-        }
-        if let Some(t) = n.guard_ms {
-            lines.push(format!("Bag Guard hibernated at {}.", time::hhmm(t)));
-        }
-        lines.push(guard.into());
-        let points: Vec<f32> = self.nights.iter().filter_map(Night::drain_per_h).collect();
-        let chart = (!points.is_empty()).then(|| Chart {
-            label: "Drain per hour, last 14 nights".into(),
-            points,
-            max: 0.0,
-            unit: "%/h",
-            markers: vec![],
-        });
+        let lines = night_lines(n, battery, self.bag_guard);
+        let chart = nights_chart(&self.nights);
         let item = |n: &Night| {
             let (tone, title) = verdict(n);
             let mut detail = format!("{} to {}", time::hhmm(n.start_ms), time::hhmm(n.end_ms));
@@ -905,8 +888,92 @@ impl Sleep {
             Item { t_ms: n.start_ms, tone, title, detail }
         };
         let items = self.nights.iter().rev().map(item).collect();
-        Panel { key: "sleep", title: "Sleep Verdict", tone, headline, lines, chart, items }
+        Panel { key: "sleep", title: "Sleep Verdict", tone, headline, lines, visual: None, chart, items }
     }
+}
+
+/// Headline before the first night. A desktop has no lid.
+pub fn empty_headline(battery: bool) -> &'static str {
+    if battery {
+        "No sleep recorded yet. Close the lid or let the screen turn off."
+    } else {
+        "No sleep recorded yet. Put the PC to sleep to record one."
+    }
+}
+
+fn guard_line(on: bool) -> &'static str {
+    if on {
+        "Bag Guard is on."
+    } else {
+        "Bag Guard is off."
+    }
+}
+
+/// Facts for the latest night. `battery`: the PC has one now (Bag Guard is only
+/// mentioned then); battery figures only for a night that had a battery.
+pub fn night_lines(n: &Night, battery: bool, guard_on: bool) -> Vec<String> {
+    let mut lines = Vec::new();
+    if n.battery {
+        lines.push(match n.drain_per_h() {
+            Some(r) => format!("Drain {:.1}%/h.", r),
+            None if n.on_ac => "On power. No drain to show.".into(),
+            None => "Battery level not reported.".into(),
+        });
+    } else {
+        let asleep = n.total_ms().saturating_sub(u64::from(n.awake_s) * 1000);
+        lines.push(format!("Asleep {} of {}.", dur(asleep), dur(n.total_ms())));
+    }
+    lines.push(format!("Awake {}% of the time.", n.awake_pct().round() as u32));
+    if let Some(w) = &n.wake {
+        lines.push(format!("Woke by: {}.", w.reason));
+    }
+    if let Some((name, s)) = &n.culprit {
+        // "40 s" / "4 min".
+        let cpu = if *s < 90.0 {
+            format!("{} s", s.round() as u32)
+        } else {
+            format!("{} min", (s / 60.0).round() as u32)
+        };
+        lines.push(format!("Busiest while awake: {}, {} of CPU.", name, cpu));
+    }
+    if let Some(t) = n.guard_ms {
+        lines.push(format!("Bag Guard hibernated at {}.", time::hhmm(t)));
+    }
+    if battery {
+        lines.push(guard_line(guard_on).into());
+    }
+    lines
+}
+
+/// One bar per night, coloured by its verdict: battery drain per hour when any night
+/// has a drain figure, else (a desktop, or always on power) the share of time awake.
+pub fn nights_chart(nights: &[Night]) -> Option<Chart> {
+    let drain: Vec<&Night> = nights.iter().filter(|n| n.drain_per_h().is_some()).collect();
+    let (label, unit, used): (&str, &'static str, Vec<&Night>) = if !drain.is_empty() {
+        ("Drain per hour, last 14 nights", "%/h", drain)
+    } else {
+        ("Time awake per night", "%", nights.iter().collect())
+    };
+    if used.is_empty() {
+        return None;
+    }
+    let per_h = unit == "%/h";
+    let points = used.iter().map(|n| if per_h { n.drain_per_h().unwrap_or(0.0) } else { n.awake_pct() }).collect();
+    let tones = used.iter().map(|n| verdict(n).0).collect();
+    // "Last night" only when the newest bar is the latest night.
+    let newest = if used.last().map(|n| n.start_ms) == nights.last().map(|n| n.start_ms) { "Last night" } else { "Newest" };
+    let left = if used.len() > 1 { "Older" } else { "" };
+    Some(Chart {
+        label: label.into(),
+        points,
+        max: if per_h { 0.0 } else { 100.0 },
+        unit,
+        markers: vec![],
+        bars: true,
+        slots: 0,
+        x_labels: super::x_labels(left, "", newest),
+        tones,
+    })
 }
 
 fn night_json(n: &Night) -> Json {
@@ -1318,11 +1385,14 @@ mod tests {
 
     #[test]
     fn panel_empty_and_full() {
-        let s = sleep();
+        let mut s = sleep();
+        s.battery = Some(true);
         let p = s.panel(T0);
         assert_eq!(p.tone, Tone::Learning);
         assert_eq!(p.headline, "No sleep recorded yet. Close the lid or let the screen turn off.");
+        assert_eq!(p.lines, ["Bag Guard is off."]);
         let mut s = sleep();
+        s.battery = Some(true);
         for i in 0..16 {
             let mut n = night(8 * H, 90.0, 90.0 - i as f32, 5.0);
             n.start_ms += i * 24 * H;
@@ -1339,7 +1409,119 @@ mod tests {
         assert_eq!(c.points.len(), 14);
         assert!(c.points[0] < c.points[13], "oldest first");
         assert_eq!(c.unit, "%/h");
+        assert_eq!(c.tones.len(), 14);
+        assert_eq!(c.x_labels[2], "Last night");
         assert!(p.lines.iter().any(|l| l == "Bag Guard is off."));
+    }
+
+    fn assert_no_battery_words(p: &Panel) {
+        let c = p.chart.as_ref().map(|c| c.label.clone()).unwrap_or_default();
+        let it = p.items.iter().flat_map(|i| [i.title.clone(), i.detail.clone()]);
+        for l in p.lines.iter().cloned().chain([p.headline.clone(), c]).chain(it) {
+            let l = l.to_ascii_lowercase();
+            for w in ["battery", "lid", "drain", "lost", "bag guard", "on power"] {
+                assert!(!l.contains(w), "{:?} in {:?}", w, l);
+            }
+        }
+    }
+
+    #[test]
+    fn desktop_panel_never_talks_about_batteries() {
+        let mut s = sleep();
+        s.battery = Some(false);
+        s.bag_guard = true;
+        let p = s.panel(T0);
+        assert_eq!(p.headline, "No sleep recorded yet. Put the PC to sleep to record one.");
+        assert!(p.lines.is_empty());
+        assert_no_battery_words(&p);
+        // A night on a desktop (AC reported, no battery): time asleep, awake share, wake reason.
+        let mut n = night(7 * H + 42 * MIN, 0.0, 0.0, 4.0);
+        n.battery = false;
+        n.on_ac = true;
+        n.pct0 = None;
+        n.pct1 = None;
+        n.wake = Some(Wake { t_ms: n.end_ms, rank: 2, reason: "Power button".into() });
+        n.culprit = Some(("SearchIndexer".into(), 40.0));
+        s.nights.push(n);
+        let p = s.panel(T0);
+        assert_eq!(p.headline, "Slept 7h 42m. Awake 4% of the time.");
+        assert_eq!(p.lines[0], "Asleep 7h 24m of 7h 42m.");
+        assert!(p.lines.iter().any(|l| l == "Woke by: Power button."));
+        assert!(p.lines.iter().any(|l| l == "Busiest while awake: SearchIndexer, 40 s of CPU."));
+        assert_no_battery_words(&p);
+        let c = p.chart.unwrap();
+        assert_eq!((c.label.as_str(), c.unit, c.max), ("Time awake per night", "%", 100.0));
+        assert_eq!(c.points.len(), 1);
+        assert_eq!(c.x_labels, ["", "", "Last night"]);
+    }
+
+    fn desk(total: u64, awake: f32) -> Night {
+        let mut n = night(total, 0.0, 0.0, awake);
+        n.battery = false;
+        n.on_ac = true;
+        n.pct0 = None;
+        n.pct1 = None;
+        n
+    }
+
+    #[test]
+    fn empty_headlines() {
+        assert_eq!(empty_headline(true), "No sleep recorded yet. Close the lid or let the screen turn off.");
+        assert_eq!(empty_headline(false), "No sleep recorded yet. Put the PC to sleep to record one.");
+    }
+
+    #[test]
+    fn desktop_lines_and_chart() {
+        let mut n = desk(7 * H + 42 * MIN, 4.0);
+        n.wake = Some(Wake { t_ms: n.end_ms, rank: 2, reason: "Power button".into() });
+        assert_eq!(verdict(&n), (Tone::Info, "Slept 7h 42m. Awake 4% of the time.".into()));
+        let l = night_lines(&n, false, true);
+        assert_eq!(l, ["Asleep 7h 24m of 7h 42m.", "Awake 4% of the time.", "Woke by: Power button."]);
+        let c = nights_chart(&[n.clone()]).unwrap();
+        assert_eq!((c.label.as_str(), c.unit), ("Time awake per night", "%"));
+        assert_eq!(c.x_labels, ["", "", "Last night"]);
+        assert_eq!(c.tones, [Tone::Info]);
+        let mut awake = desk(5 * H, 80.0);
+        awake.start_ms += 24 * H;
+        awake.end_ms += 24 * H;
+        let c = nights_chart(&[n, awake]).unwrap();
+        assert_eq!(c.tones, [Tone::Info, Tone::Warn]);
+        assert_eq!(c.x_labels, ["Older", "", "Last night"]);
+        assert!(nights_chart(&[]).is_none());
+    }
+
+    #[test]
+    fn laptop_lines_and_chart() {
+        let good = night(8 * H, 90.0, 87.0, 2.0);
+        let l = night_lines(&good, true, false);
+        assert_eq!(l, ["Drain 0.4%/h.", "Awake 2% of the time.", "Bag Guard is off."]);
+        let mut ac = night(8 * H, 80.0, 100.0, 2.0);
+        ac.on_ac = true;
+        ac.start_ms += 24 * H;
+        ac.end_ms += 24 * H;
+        assert_eq!(night_lines(&ac, true, true)[0], "On power. No drain to show.");
+        assert!(night_lines(&ac, true, true).iter().any(|l| l == "Bag Guard is on."));
+        // The newest night has no drain: the newest bar is not "last night".
+        let c = nights_chart(&[good.clone(), ac]).unwrap();
+        assert_eq!(c.unit, "%/h");
+        assert_eq!(c.points.len(), 1);
+        assert_eq!(c.x_labels, ["", "", "Newest"]);
+        assert_eq!(c.tones, [Tone::Good]);
+        // Battery gone since: no Bag Guard line, the old night's figures stay.
+        assert_eq!(night_lines(&good, false, true), ["Drain 0.4%/h.", "Awake 2% of the time."]);
+    }
+
+    #[test]
+    fn battery_presence_follows_the_snapshot() {
+        let mut s = sleep();
+        assert!(!s.has_battery(), "nothing known yet");
+        s.nights.push(night(8 * H, 90.0, 88.0, 2.0));
+        assert!(s.has_battery(), "the last night had one");
+        s.battery = Some(false);
+        assert!(!s.has_battery(), "the battery went away");
+        assert!(!s.panel(T0).lines.iter().any(|l| l.starts_with("Bag Guard is")));
+        s.battery = Some(true);
+        assert!(s.panel(T0).lines.iter().any(|l| l == "Bag Guard is off."));
     }
 
     #[test]
