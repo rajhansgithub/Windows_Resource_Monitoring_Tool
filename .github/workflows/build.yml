@@ -202,6 +202,100 @@ jobs:
           name: insights-shots
           path: target/insights-shots/
           if-no-files-found: warn
+      - name: Run app, screenshot the main window maximized and at the default size (demo Insights data)
+        shell: pwsh
+        run: |
+          # Wide layouts need a wide screen. Raise the runner's display to its largest mode (put back at the end),
+          # and log the size so a small runner is easy to spot in the shots.
+          New-Item -ItemType Directory -Force target/wide-shots | Out-Null
+          Add-Type @"
+          using System; using System.Runtime.InteropServices;
+          public static class W5 {
+            [StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Rt, B; }
+            [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+            public struct DM {
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+              public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
+              public int dmFields;
+              public int dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
+              public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+              public short dmLogPixels;
+              public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
+              public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
+            }
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string c, string t);
+            [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r);
+            [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+            [DllImport("user32.dll")] public static extern int GetSystemMetrics(int i);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool EnumDisplaySettingsW(string dev, int mode, ref DM dm);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int ChangeDisplaySettingsW(ref DM dm, int flags);
+          }
+          "@
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          function NewDm() {
+            $d = New-Object W5+DM
+            $d.dmSize = [int16][System.Runtime.InteropServices.Marshal]::SizeOf($d)
+            return $d
+          }
+          $orig = NewDm
+          [void][W5]::EnumDisplaySettingsW([NullString]::Value, -1, [ref]$orig)
+          Write-Host "screen before: $($orig.dmPelsWidth)x$($orig.dmPelsHeight)"
+          try {
+            $best = $orig
+            for ($i = 0; $i -lt 400; $i++) {
+              $m = NewDm
+              if (-not [W5]::EnumDisplaySettingsW([NullString]::Value, $i, [ref]$m)) { break }
+              if ($m.dmBitsPerPel -eq 32 -and $m.dmPelsWidth * $m.dmPelsHeight -gt $best.dmPelsWidth * $best.dmPelsHeight) { $best = $m }
+            }
+            if ($best.dmPelsWidth -gt $orig.dmPelsWidth) {
+              $rc = [W5]::ChangeDisplaySettingsW([ref]$best, 0)
+              Write-Host "display change to $($best.dmPelsWidth)x$($best.dmPelsHeight): code $rc"
+              Start-Sleep -Seconds 3
+            }
+          } catch { Write-Host "display change skipped: $_" }
+          Write-Host "screen now: $([W5]::GetSystemMetrics(0))x$([W5]::GetSystemMetrics(1))"
+          function Grab($h, $file) {
+            $r = New-Object W5+R
+            [void][W5]::GetWindowRect($h, [ref]$r)
+            $w = $r.Rt - $r.L; $hh = $r.B - $r.T
+            $bmp = New-Object System.Drawing.Bitmap $w, $hh
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($r.L, $r.T, 0, 0, (New-Object System.Drawing.Size $w, $hh))
+            $bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)
+            Write-Host "$file ${w}x${hh}"
+          }
+          $env:RESMON_INSIGHTS_DEMO = "1"
+          $fails = @()
+          # RESMON_PAGE (demo mode only) opens each page directly.
+          $pages = @("overview", "incidents", "sleep", "heldback", "ghost", "general", "alerts", "metrics")
+          foreach ($mode in "default", "maximized") {
+            $n = 0
+            foreach ($pg in $pages) {
+              $n++
+              $env:RESMON_PAGE = $pg
+              $p = Start-Process target/release/ResourceMonitor.exe -ArgumentList "--insights" -PassThru
+              Start-Sleep -Seconds 6
+              $h = [W5]::FindWindowW("ResourceMonitor.Window", [NullString]::Value)
+              if ($h -eq [IntPtr]::Zero) { $fails += "$mode $pg : main window did not open" } else {
+                if ($mode -eq "maximized") { [void][W5]::ShowWindow($h, 3); Start-Sleep -Seconds 2 }
+                Grab $h "target/wide-shots/$mode-$n-$pg.png"
+              }
+              if ($p.HasExited) { $fails += "$mode $pg : app exited early (code $($p.ExitCode))" } else { Stop-Process -Id $p.Id; Start-Sleep -Seconds 2 }
+            }
+          }
+          Remove-Item Env:RESMON_PAGE
+          # Put the display back for the steps that follow.
+          try { [void][W5]::ChangeDisplaySettingsW([ref]$orig, 0) } catch { Write-Host "display restore skipped: $_" }
+          $log = "$env:LOCALAPPDATA/ResourceMonitor/diagnostics.log"
+          if (Test-Path $log) { Get-Content $log -Tail 20 }
+          if ($fails.Count -gt 0) { $fails | ForEach-Object { Write-Error $_ }; exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wide-shots
+          path: target/wide-shots/
+          if-no-files-found: warn
       - name: Run app, screenshot the Server Room (Achievements page) and the Overview goal card
         shell: pwsh
         run: |

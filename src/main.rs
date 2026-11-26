@@ -5,6 +5,7 @@ mod achievements;
 mod app;
 mod autostart;
 mod fmt;
+mod grid;
 mod icons;
 mod insights;
 mod monitor;
