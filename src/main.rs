@@ -19,6 +19,7 @@ mod report;
 mod sensors;
 mod settings;
 mod settings_ui;
+mod shell_icons;
 mod taskbar;
 mod tray;
 mod update;
@@ -77,6 +78,8 @@ fn main() {
         if app::create(hinst, after_update).is_none() {
             return;
         }
+        // First start of a new version: make Windows drop the old cached icons.
+        shell_icons::refresh_once();
         if report {
             if let Some(a) = app::app() {
                 report::open(a);

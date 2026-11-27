@@ -1,6 +1,6 @@
 [package]
 name = "resmon"
-version = "2.19.0"
+version = "2.19.1"
 edition = "2021"
 authors = ["Emulsion Labs"]
 description = "Ultra-light taskbar resource monitor for Windows 10/11"
@@ -51,6 +51,8 @@ features = [
 version = "0.58"
 features = [
   "Win32_UI_Accessibility", "Win32_System_Com", "Win32_Foundation",
+  # Shortcut icon refresh after updates (src/shell_icons.rs)
+  "Win32_UI_Shell", "Win32_Storage_FileSystem",
   # D3D11 badge shaders (src/achievements/gpu.rs)
   "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common",
 ]

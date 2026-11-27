@@ -3396,7 +3396,8 @@ pub fn register(hinst: HINSTANCE) {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(main_proc),
             hInstance: hinst,
-            hIcon: LoadIconW(hinst, 1 as _),
+            hIcon: crate::logo::icon(true, true),
+            hIconSm: crate::logo::icon(true, false),
             hCursor: LoadCursorW(std::ptr::null_mut(), IDC_ARROW),
             lpszClassName: cls.as_ptr(),
             ..std::mem::zeroed()
