@@ -168,3 +168,25 @@ pub fn diag(msg: &str) {
         let _ = f.write_all(line.as_bytes());
     }
 }
+
+/// Background (`false`): below-normal priority and EcoQoS (efficient cores, low
+/// clocks), so the monitor never steals CPU from what the user is doing.
+/// Interactive (`true`, while the main window is in front): normal priority and
+/// full speed, so scrolling and animations render at the display's rate.
+pub fn interactive(on: bool) {
+    use windows_sys::Win32::System::Threading::*;
+    let mut state = PROCESS_POWER_THROTTLING_STATE {
+        Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        ControlMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+        StateMask: if on { 0 } else { PROCESS_POWER_THROTTLING_EXECUTION_SPEED },
+    };
+    unsafe {
+        SetPriorityClass(GetCurrentProcess(), if on { NORMAL_PRIORITY_CLASS } else { BELOW_NORMAL_PRIORITY_CLASS });
+        SetProcessInformation(
+            GetCurrentProcess(),
+            ProcessPowerThrottling,
+            &mut state as *mut _ as *mut _,
+            std::mem::size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
+        );
+    }
+}

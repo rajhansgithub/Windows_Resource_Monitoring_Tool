@@ -118,6 +118,11 @@ const SUMMARY_H: i32 = 92;
 const CTL_H: i32 = 32;
 const CELL_GAP: i32 = 8;
 const WHEEL_STEP: i32 = 48;
+/// One wheel notch per wheel "line" (Windows default: 3 lines = 108 epx).
+const WHEEL_LINE: i32 = 36;
+/// Scroll smoothing (s): a notch eases out over ~0.2 s; touchpads follow closely.
+const SCROLL_TAU: f32 = 0.065;
+const SCROLL_TAU_PRECISE: f32 = 0.028;
 const BTN_W: i32 = 112;
 const STEPPER_W: i32 = 132;
 
@@ -867,10 +872,40 @@ fn cr_to_rgb(cr: COLORREF) -> u32 {
     rgb_to_cr(cr) // the swap is its own inverse
 }
 
+/// Repaint everything on the next paint.
 fn invalidate(hwnd: HWND) {
+    FULL.with(|f| f.set(true));
+    invalidate_scroll(hwnd);
+}
+
+/// Repaint where only the scroll offset may have changed: the next paint can
+/// shift the page pixels and draw just the strip that comes into view.
+fn invalidate_scroll(hwnd: HWND) {
     if !hwnd.is_null() {
         unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
     }
+}
+
+thread_local! {
+    /// Something other than the scroll offset changed since the last paint.
+    static FULL: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// Everything besides the scroll offset that decides the pixels of a frame;
+/// a frame that matches the last one's can be scrolled in place.
+#[derive(Clone, Copy, PartialEq)]
+struct Drawn {
+    scroll: i32,
+    size: (i32, i32),
+    page: Page,
+    content_h: i32,
+    dark: bool,
+    hover: Option<(i32, Part)>,
+    pressed: Option<(i32, Part)>,
+    focus: (Option<i32>, bool),
+    open_dd: Option<i32>,
+    sb: (bool, bool),
+    chart_hover: Option<i32>,
 }
 
 /// Make sure the order lists every metric exactly once.
@@ -930,6 +965,14 @@ struct Ui {
     /// Current (animated) and target scroll offsets, px.
     scroll: f32,
     target: i32,
+    /// Smoothing time constant of the scroll animation, s (short for touchpads).
+    scroll_tau: f32,
+    /// Last wheel notch (time, direction) and the speed-up built by quick notches.
+    wheel: Option<(Instant, i32, f32)>,
+    /// Time of the last animation frame (frame-rate-independent motion).
+    last_frame: Option<Instant>,
+    /// What the canvas holds: lets a pure scroll shift pixels instead of redrawing.
+    drawn: Option<Drawn>,
     hover: Option<(i32, Part)>,
     pressed: Option<(i32, Part)>,
     focus: Option<i32>,
@@ -1029,6 +1072,10 @@ impl Ui {
             blocks: Vec::new(),
             content_h: 0,
             scroll: 0.0,
+            scroll_tau: SCROLL_TAU,
+            wheel: None,
+            last_frame: None,
+            drawn: None,
             target: 0,
             hover: None,
             pressed: None,
@@ -2181,25 +2228,39 @@ impl Ui {
     fn kick(&mut self) {
         if !self.anim.timer {
             self.anim.timer = true;
-            unsafe { SetTimer(self.hwnd, T_ANIM, 15, None) };
+            self.last_frame = Some(Instant::now());
+            crate::vsync::start(self.hwnd);
         }
     }
 
     fn stop_timer(&mut self) {
         self.anim.timer = false;
-        unsafe { KillTimer(self.hwnd, T_ANIM) };
+        self.last_frame = None;
+        crate::vsync::stop();
     }
 
-    /// One animation frame. Stops the timer when nothing moves any more.
+    /// One animation frame (one per display refresh). Motion follows the time
+    /// since the last frame, so it looks the same at 60, 144 or a dropped frame.
+    /// Stops the frame clock when nothing moves any more.
     fn anim_tick(&mut self) {
+        let now = Instant::now();
+        let dt = self.last_frame.map_or(1.0 / 60.0, |t| (now - t).as_secs_f32()).clamp(0.0, 0.1);
+        self.last_frame = Some(now);
         let mut busy = false;
         let d = self.target as f32 - self.scroll;
-        if d.abs() < 0.6 {
+        if d.abs() < 0.5 {
             self.scroll = self.target as f32;
         } else {
-            self.scroll += d * 0.3;
-            busy = true;
+            // Exponential ease toward the target: quick start, soft landing.
+            let k = 1.0 - (-dt / self.scroll_tau.max(0.005)).exp();
+            self.scroll += d * k;
+            if (self.target as f32 - self.scroll).abs() < 0.5 {
+                self.scroll = self.target as f32;
+            } else {
+                busy = true;
+            }
         }
+        let scrolling = busy;
         let done = |t: Option<Instant>, dur: f32| t.is_none_or(|t| t.elapsed().as_secs_f32() >= dur);
         if done(self.anim.page, PAGE_ANIM_S) {
             self.anim.page = None;
@@ -2224,7 +2285,7 @@ impl Ui {
         }
         if self.room_on {
             if let Some(st) = &self.ach {
-                if self.room.tick(0.015, self.animate, st) {
+                if self.room.tick(dt, self.animate, st) {
                     busy = true;
                 }
             }
@@ -2232,8 +2293,15 @@ impl Ui {
         if !busy {
             self.stop_timer();
         }
+        let hover = (self.hover, self.chart_hover);
         self.refresh_hover();
-        invalidate(self.hwnd);
+        if busy != scrolling || hover != (self.hover, self.chart_hover) {
+            // Something besides the scroll offset moved (or the mouse now
+            // points at another control): draw the whole frame.
+            invalidate(self.hwnd);
+        } else {
+            invalidate_scroll(self.hwnd);
+        }
     }
 
     fn progress(t: Instant, dur: f32) -> f32 {
@@ -2245,11 +2313,13 @@ impl Ui {
     fn scroll_to(&mut self, target: i32, animate: bool) {
         self.target = target.clamp(0, self.max_scroll());
         if animate && self.animate && (self.target as f32 - self.scroll).abs() > 1.0 {
+            // The frame clock draws the motion; no paint needed now.
             self.kick();
-        } else {
-            self.scroll = self.target as f32;
+            return;
         }
-        invalidate(self.hwnd);
+        self.scroll = self.target as f32;
+        self.scroll_tau = SCROLL_TAU;
+        invalidate_scroll(self.hwnd);
     }
 
     /// Scroll so a control (plus a margin) is fully visible: the page for
@@ -2437,6 +2507,7 @@ impl Ui {
 
     fn paint(&mut self, dc: HDC) {
         let _p = crate::perf::span("paint");
+        let full = FULL.with(|f| f.replace(false));
         if crate::perf::on() {
             // Time between frames while something animates (scroll, transitions).
             thread_local!(static LAST: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) });
@@ -2448,15 +2519,64 @@ impl Ui {
             }
         }
         let mut cv = std::mem::replace(&mut self.cv, Canvas::new());
+        let fresh = cv.w != self.cw || cv.h != self.ch;
         cv.resize(self.cw, self.ch);
-        {
-            let _d = crate::perf::span(self.page.perf_key());
-            self.draw(&mut cv);
+        let now = self.drawn_key();
+        let (vt, vb) = self.view();
+        // Only the scroll offset moved since the last frame: move the page's
+        // pixels and draw the strip that came in (plus the scroll bar).
+        let shift = match self.drawn {
+            Some(was) if !full && !fresh && self.can_shift() && Drawn { scroll: now.scroll, ..was } == now => Some(now.scroll - was.scroll),
+            _ => None,
+        };
+        match shift {
+            Some(0) => {}
+            Some(d) if d.abs() < (vb - vt) / 2 => {
+                let _d = crate::perf::span("draw_scroll");
+                let band = Rect { l: self.content_x(), t: vt, r: self.cw, b: vb };
+                cv.shift_rows(band, -d);
+                let strip = if d > 0 { Rect { t: vb - d, ..band } } else { Rect { b: vt - d, ..band } };
+                // The overlay scroll bar rides on top of the page: redraw its column too.
+                let bar = Rect { l: self.cw - self.sc(20), ..band };
+                for r in [strip, bar] {
+                    cv.set_limit(Some(r));
+                    self.draw(&mut cv);
+                }
+                cv.set_limit(None);
+            }
+            _ => {
+                let _d = crate::perf::span(self.page.perf_key());
+                self.draw(&mut cv);
+            }
         }
+        self.drawn = Some(now);
         cv.set_clip(None);
         let _b = crate::perf::span("blit");
         cv.blit(dc, 0, 0);
         self.cv = cv;
+    }
+
+    fn drawn_key(&self) -> Drawn {
+        Drawn {
+            scroll: self.scroll_px(),
+            size: (self.cw, self.ch),
+            page: self.page,
+            content_h: self.content_h,
+            dark: self.dark,
+            hover: self.hover,
+            pressed: self.pressed,
+            focus: (self.focus, self.focus_visible),
+            open_dd: self.open_dd,
+            sb: (self.sb_hover, matches!(self.drag, Drag::Thumb(_))),
+            chart_hover: self.chart_hover,
+        }
+    }
+
+    /// The frame is only page content under a still header and pane, so a
+    /// scroll may shift its pixels: no transition, overlay pane, tooltip, or
+    /// live scene (the Server Room draws its coin straight into the pixels).
+    fn can_shift(&self) -> bool {
+        self.anim.page.is_none() && self.anim.pane.is_none() && !self.overlay && self.tip.is_none() && !self.room_on
     }
 
     fn state(&self, id: i32, part: Part) -> (bool, bool) {
@@ -3648,8 +3768,39 @@ fn on_wheel(hwnd: HWND, delta: i32, sx: i32, sy: i32) {
             }
         }
     }
-    let t = u.target - delta * u.sc(WHEEL_STEP) / 120;
+    let now = Instant::now();
+    // Precision touchpads send small deltas many times a second: follow them
+    // closely. A mouse wheel sends whole notches (120): ease each one out, and
+    // quick notches in a row build speed (like a browser).
+    let notch = delta % 120 == 0;
+    let dir = delta.signum();
+    let mut boost = 1.0f32;
+    if notch {
+        if let Some((t, d, b)) = u.wheel {
+            let gap = (now - t).as_secs_f32();
+            if d == dir && gap < 0.09 {
+                boost = (b + 0.2).min(2.5);
+            }
+        }
+        u.wheel = Some((now, dir, boost));
+    }
+    u.scroll_tau = if notch { SCROLL_TAU } else { SCROLL_TAU_PRECISE };
+    let step = wheel_px(u.sc(WHEEL_LINE), u.view().1 - u.view().0);
+    let px = (delta as f32 * step as f32 / 120.0 * boost).round() as i32;
+    // Keep adding to where the scroll is heading, so fast notches add up.
+    let t = u.target - px;
     u.scroll_to(t, true);
+}
+
+/// Pixels per wheel notch: the user's "lines to scroll" (Mouse settings) times
+/// a line, or a page when it is set to one screen at a time.
+fn wheel_px(line: i32, page: i32) -> i32 {
+    let mut lines: u32 = 3;
+    unsafe { SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, &mut lines as *mut u32 as *mut core::ffi::c_void, 0) };
+    if lines == u32::MAX {
+        return (page * 7 / 8).max(line);
+    }
+    line * lines.clamp(1, 20) as i32
 }
 
 fn track_mouse(hwnd: HWND, hover: bool) -> bool {
@@ -4183,6 +4334,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             note_rect(hwnd);
             0
         }
+        WM_ACTIVATE => {
+            // In front: full speed for smooth frames. Behind: back to EcoQoS.
+            crate::util::interactive((w & 0xFFFF) as u32 != WA_INACTIVE);
+            DefWindowProcW(hwnd, msg, w, l)
+        }
         WM_GETMINMAXINFO => {
             let dpi = GetDpiForWindow(hwnd).max(96);
             let sc = |v: i32| (v * dpi as i32 + 48) / 96;
@@ -4279,6 +4435,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             }
             DefWindowProcW(hwnd, msg, w, l)
         }
+        crate::vsync::WM_APP_FRAME => {
+            crate::vsync::ack();
+            if let Some(u) = ui() {
+                if u.anim.timer {
+                    u.anim_tick();
+                    // Draw now, not when the queue is empty: one frame per refresh.
+                    UpdateWindow(hwnd);
+                }
+            }
+            0
+        }
         WM_TIMER => {
             match w {
                 T_ANIM => {
@@ -4338,6 +4505,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         WM_DESTROY => {
             KillTimer(hwnd, T_LIVE);
             KillTimer(hwnd, T_ANIM);
+            crate::vsync::stop();
+            crate::util::interactive(false);
             KillTimer(hwnd, T_REPEAT);
             if let Some(a) = app() {
                 a.settings_win = std::ptr::null_mut();

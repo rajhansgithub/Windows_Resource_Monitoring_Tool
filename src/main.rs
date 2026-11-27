@@ -25,6 +25,7 @@ mod update;
 mod update_ui;
 mod usage;
 mod util;
+mod vsync;
 
 use util::wide;
 use windows_sys::Win32::Foundation::*;
@@ -68,20 +69,8 @@ fn main() {
             return;
         }
 
-        // Low priority: never steal CPU from what the user is actually doing.
-        SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS);
-        // EcoQoS: run on efficient cores / low clocks. We never need speed.
-        let mut state = PROCESS_POWER_THROTTLING_STATE {
-            Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
-            ControlMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
-            StateMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
-        };
-        SetProcessInformation(
-            GetCurrentProcess(),
-            ProcessPowerThrottling,
-            &mut state as *mut _ as *mut _,
-            std::mem::size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
-        );
+        // Low priority + EcoQoS while in the background (see util::interactive).
+        util::interactive(false);
 
         let hinst = GetModuleHandleW(std::ptr::null());
         update::cleanup();
