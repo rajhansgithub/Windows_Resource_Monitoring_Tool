@@ -450,7 +450,7 @@ impl Monitor {
             Card::Clock => s(150),
             Card::MemMap => s(36 + 18) + 4 * s(24),
             Card::Commit => kv_rows(self.commit_facts().len(), w) + s(12 + 80),
-            Card::Sticks => s(64 + 28) + if self.xmp_note().is_some() { s(40) } else { 0 },
+            Card::Sticks => s(64 + 28 + 20) + if self.xmp_note().is_some() { s(40) } else { 0 },
             Card::VramApps => APP_ROWS as i32 * s(30) + s(40),
             Card::Engines => self.det.engines.len().max(1) as i32 * s(26),
             Card::GpuHealth => kv_rows(self.gpu_facts().len(), w),
@@ -1148,8 +1148,8 @@ impl Monitor {
                     return (Tone::Warn, "Video memory is full and spilling.".into(), format!("{} moved to system RAM, which is much slower.", fmt::bytes(shared)));
                 }
                 match self.vram_rows().first() {
-                    Some((_, name, ded, _)) => (Tone::Good, format!("{name} holds the most video memory: {}.", fmt::bytes(*ded)), format!("{} of {} in use.", fmt::bytes(s.vram_used.unwrap_or(0)), fmt::bytes(d.vram_total))),
-                    None => (Tone::Good, format!("GPU at {:.0}%.", s.gpu.unwrap_or(0.0)), "Nothing is spilling into shared memory.".into()),
+                    Some((_, name, ded, _)) if *ded > 0 => (Tone::Good, format!("{name} holds the most video memory: {}.", fmt::bytes(*ded)), format!("{} of {} in use.", fmt::bytes(s.vram_used.unwrap_or(0)), fmt::bytes(d.vram_total))),
+                    _ => (Tone::Good, format!("GPU at {:.0}%.", s.gpu.unwrap_or(0.0)), "Nothing is spilling into shared memory.".into()),
                 }
             }
             Some(Dev::Disk(n)) => {
@@ -1179,7 +1179,7 @@ impl Monitor {
                     let top = self.app_rows(2).into_iter().next().map_or(String::new(), |r| format!("{} is the busiest app at {}.", r.1, r.2));
                     return (Tone::Warn, format!("Busy: {:.0}% of the time.", act), top);
                 }
-                (Tone::Info, format!("Active {:.0}% of the time.", act), "Health needs admin rights on this drive. Unlock it below.".into())
+                (Tone::Info, format!("Active {:.0}% of the time.", act), if self.st().admin { "This drive does not share health data.".to_string() } else { "Health needs admin rights on this drive. Unlock it below.".to_string() })
             }
             Some(Dev::Display(_)) => match self.screen() {
                 Some(sc) => {
@@ -1187,6 +1187,11 @@ impl Monitor {
                     let hdr = if sc.hdr_on { ", HDR on" } else { "" };
                     let head = format!("Sending {bits}{} at {:.0} Hz{hdr}.", if sc.encoding.is_empty() { "video" } else { sc.encoding }, sc.hz);
                     let mh = self.live().measured_hz;
+                    // A virtual or remote display reports no real mode (1 Hz): only the measurement counts.
+                    if sc.hz < 20.0 {
+                        let sub = if mh > 0.0 { format!("Measured {:.0} Hz. Windows reports no fixed refresh for this screen.", mh) } else { "Windows reports no fixed refresh for this screen.".to_string() };
+                        return (Tone::Info, format!("{} \u{00D7} {} on a virtual or remote screen.", sc.w, sc.h), sub);
+                    }
                     if mh > 0.0 && (mh - sc.hz).abs() > sc.hz * 0.15 {
                         return (Tone::Info, "Refresh rate is following the content.".into(), format!("Measured {:.0} Hz against {:.0} Hz set. Variable refresh is working.", mh, sc.hz));
                     }
@@ -1206,8 +1211,12 @@ impl Monitor {
                 let ms = p.and_then(|p| p.net.iter().rev().flatten().next().copied());
                 match p.map(|p| p.verdict) {
                     Some(net::Verdict::Good) => (Tone::Good, "Connection is clean.".into(), ms.map_or(String::new(), |m| format!("Internet {:.0} ms, no loss in the last 20 seconds.", m))),
-                    Some(net::Verdict::IspLoss) => (Tone::Bad, "Router is fine. Your provider is losing packets.".into(), format!("Router loss {:.0}%, internet loss {:.0}%. This is not your Wi-Fi.", gl * 100.0, nl * 100.0)),
-                    Some(net::Verdict::LocalLoss) => (Tone::Bad, "Your local link is dropping packets.".into(), format!("Router loss {:.0}%. Move closer to the router or try a cable.", gl * 100.0)),
+                    Some(net::Verdict::IspLoss) => (Tone::Bad, "Router is fine. Your provider is losing packets.".into(), format!("Router loss {:.0}%, internet loss {:.0}%. This is not your Wi-Fi.", gl, nl)),
+                    Some(net::Verdict::LocalLoss) => (Tone::Bad, "Your local link is dropping packets.".into(), format!("Router loss {:.0}%. Move closer to the router or try a cable.", gl)),
+                    // Data still flows: the network just drops pings (offices, VPNs, cloud PCs).
+                    Some(net::Verdict::Offline) if self.snap.net_down + self.snap.net_up > 0.0 && !self.live().conns.is_empty() => {
+                        (Tone::Info, "Online. This network blocks ping.".into(), "Data is flowing, so the connection works. Latency and drops can't be measured here.".into())
+                    }
                     Some(net::Verdict::Offline) => (Tone::Bad, "No internet.".into(), "Neither the router nor the internet answers.".into()),
                     Some(net::Verdict::NoGateway) => (Tone::Warn, "No router found.".into(), "This PC has no default gateway.".into()),
                     _ => (Tone::Info, "Checking the connection\u{2026}".into(), "Pinging the router and the internet once a second.".into()),
@@ -1774,7 +1783,7 @@ impl Draw<'_> {
         if hybrid {
             self.legend(cv, &mut lx, ly, eff, "Efficiency", "");
         }
-        let tail = if lv.core_mhz.is_empty() { "% busy" } else { "GHz \u{00B7} zz parked" };
+        let tail = if lv.core_mhz.is_empty() { "% busy" } else { "GHz now \u{00B7} dim = parked" };
         cv.text(self.f.tiny, tail, lx, ly + self.s(1), self.col.dim);
     }
 
@@ -1827,9 +1836,7 @@ impl Draw<'_> {
     fn sticks(&self, cv: &mut Canvas, r: Rect) {
         let m = self.m;
         let hw = &m.det.hw;
-        let (used, total) = hw.slots();
-        let sub = if total > 0 { format!("{used} of {total} slots used") } else { String::new() };
-        let mut y = self.card_head(cv, r, "Memory sticks", &sub);
+        let mut y = self.card_head(cv, r, "Memory sticks", "");
         if let Some((cur, rated)) = m.xmp_note() {
             let b = Rect { l: r.l + self.s(16), t: y, r: r.r - self.s(16), b: y + self.s(32) };
             cv.fill_round(b, self.sf(6.0), self.col.warn.with_a(if self.dark() { 40 } else { 30 }));
@@ -1838,7 +1845,7 @@ impl Draw<'_> {
             text_mid(cv, self.f.small, &t, b.l + self.s(10), (b.t + b.b) / 2, self.col.fg);
             y += self.s(40);
         }
-        self.dimms(cv, r.l + self.s(16), r.r - self.s(16), y - self.s(20));
+        self.dimms(cv, r.l + self.s(16), r.r - self.s(16), y);
     }
 
     fn vram_card(&self, cv: &mut Canvas, r: Rect) {
@@ -1870,7 +1877,7 @@ impl Draw<'_> {
         let y = self.card_head(cv, r, "Health", h.map_or("", |h| h.source));
         let l = r.l + self.s(16);
         let Some(h) = h else {
-            let msg = if m.st().disks.is_empty() { "Reading the drive\u{2026}" } else { "This drive does not report health without admin rights." };
+            let msg = if m.st().disks.is_empty() { "Reading the drive\u{2026}" } else { if m.st().admin { "This drive does not share health data (virtual, RAID or USB bridge)." } else { "This drive does not report health without admin rights." } };
             text_mid(cv, self.f.small, msg, l, y + self.s(14), self.col.dim);
             return;
         };
@@ -2007,8 +2014,8 @@ impl Draw<'_> {
         let last = |v: &Vec<Option<f32>>| v.iter().rev().flatten().next().copied();
         let rows: Vec<(&str, String)> = match p {
             Some(p) => vec![
-                ("Router", format!("{} \u{00B7} {} \u{00B7} loss {:.0}%", p.gateway, last(&p.gw).map_or("\u{2013}".into(), |v| format!("{:.0} ms", v)), gl.unwrap_or(0.0) * 100.0)),
-                ("Internet", format!("{} \u{00B7} {} \u{00B7} loss {:.0}%", p.target, last(&p.net).map_or("\u{2013}".into(), |v| format!("{:.0} ms", v)), nl.unwrap_or(0.0) * 100.0)),
+                ("Router", format!("{} \u{00B7} {} \u{00B7} loss {:.0}%", p.gateway, last(&p.gw).map_or("\u{2013}".into(), |v| format!("{:.0} ms", v)), gl.unwrap_or(0.0))),
+                ("Internet", format!("{} \u{00B7} {} \u{00B7} loss {:.0}%", p.target, last(&p.net).map_or("\u{2013}".into(), |v| format!("{:.0} ms", v)), nl.unwrap_or(0.0))),
                 ("Jitter", format!("{:.1} ms", net::jitter(&p.net[p.net.len().saturating_sub(30)..]))),
             ],
             None => vec![("Status", "Starting\u{2026}".into())],
