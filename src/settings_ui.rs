@@ -2261,41 +2261,47 @@ impl Ui {
             }
         }
         let scrolling = busy;
+        // Anything besides the scroll offset moving this frame.
+        let mut other = false;
         let done = |t: Option<Instant>, dur: f32| t.is_none_or(|t| t.elapsed().as_secs_f32() >= dur);
         if done(self.anim.page, PAGE_ANIM_S) {
             self.anim.page = None;
         } else {
-            busy = true;
+            other = true;
         }
         if done(self.anim.ind.map(|x| x.1), IND_ANIM_S) {
             self.anim.ind = None;
         } else {
-            busy = true;
+            other = true;
         }
         if done(self.anim.pane.map(|x| x.2), PANE_ANIM_S) {
             self.anim.pane = None;
         } else {
-            busy = true;
+            other = true;
         }
         if self.brand_on && self.animate {
-            busy = true;
+            other = true;
         }
         if self.mon_on && self.mon.animating() {
-            busy = true;
+            other = true;
         }
         if self.room_on {
             if let Some(st) = &self.ach {
                 if self.room.tick(dt, self.animate, st) {
-                    busy = true;
+                    other = true;
                 }
             }
         }
-        if !busy {
+        if !(scrolling || other) {
             self.stop_timer();
         }
         let hover = (self.hover, self.chart_hover);
-        self.refresh_hover();
-        if busy != scrolling || hover != (self.hover, self.chart_hover) {
+        // While only the page scrolls, hover follows when it stops (as in a
+        // browser): every frame stays a cheap shift instead of a full redraw.
+        if !scrolling || other {
+            self.refresh_hover();
+        }
+        if other || hover != (self.hover, self.chart_hover) {
             // Something besides the scroll offset moved (or the mouse now
             // points at another control): draw the whole frame.
             invalidate(self.hwnd);
