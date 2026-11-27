@@ -105,6 +105,8 @@ pub struct Detail {
     pub hw: Arc<Hw>,
     pub adapters: Vec<NetStat>,
     pub procs: Vec<ProcRow>,
+    /// The open device page's deep facts (`SampleOpts::dev`).
+    pub deep: super::deep::DeepLive,
 }
 
 #[derive(Default)]

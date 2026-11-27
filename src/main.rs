@@ -49,11 +49,13 @@ fn main() {
         let achievements = std::env::args().any(|a| a.eq_ignore_ascii_case("--achievements"));
         let insights = std::env::args().any(|a| a.eq_ignore_ascii_case("--insights"));
         let monitor = std::env::args().any(|a| a.eq_ignore_ascii_case("--monitor"));
+        // Restarted as administrator from a device page: the old instance is closing.
+        let elevated = std::env::args().any(|a| a.eq_ignore_ascii_case("--elevated"));
         let name = wide("Local\\ResourceMonitor.SingleInstance");
         let mut mutex = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
         // Just updated: the previous version is still shutting down; wait for it.
         let mut tries = 0;
-        while after_update && GetLastError() == ERROR_ALREADY_EXISTS && tries < 50 {
+        while (after_update || elevated) && GetLastError() == ERROR_ALREADY_EXISTS && tries < 50 {
             CloseHandle(mutex);
             std::thread::sleep(std::time::Duration::from_millis(200));
             mutex = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
