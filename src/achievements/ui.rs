@@ -809,6 +809,14 @@ fn wear_code(w: &Wear) -> u16 {
     q(w.dust) | q(w.scratch) << 4 | q(w.web) << 8
 }
 
+/// Dust or cobweb amount for a live coin, in steps of 1/1024. The dust and web layers are drawn once and kept under
+/// a key made of these values; the raw amounts follow the clock and change every millisecond, which re-drew both
+/// layers (two full-size passes, a read-back and a new texture) on every frame and made the large view crawl.
+/// One step is about a quarter of an hour of aging at its fastest: never visible.
+fn live_wear(x: f32) -> f32 {
+    (x.clamp(0.0, 1.0) * 1024.0).round() / 1024.0
+}
+
 /// This medal's own seed for its cobweb and dust (0..1), sent in wear[1]. Same as the preview's `webSeed`:
 /// FNV-1a of the id, then a murmur3 finish so ids one letter apart still get very different webs.
 fn web_seed(id: &str) -> f32 {
@@ -1071,7 +1079,7 @@ impl Medals {
             time_s: t,
             seed: seed_of(id, tier),
             tilt,
-            wear: if tier >= 7 { [0.0; 3] } else { [wear[0], web_seed(id), wear[2]] },
+            wear: if tier >= 7 { [0.0; 3] } else { [live_wear(wear[0]), web_seed(id), live_wear(wear[2])] },
             icon_mask: self.masks.get(icon).map(|m| &m[..]),
             detail_mask: None,
             layer: 0,
@@ -4203,6 +4211,19 @@ mod seed_tests {
 
     /// Same badge id = same cobweb and dust every time, and the same seed as the preview page's `webSeed`
     /// (values from the page's own function).
+    /// The live coin's wear holds still from frame to frame (its dust layers stay cached) and keeps its ends.
+    #[test]
+    fn live_wear_holds_between_frames() {
+        use super::live_wear;
+        for (a, b) in [(0.3141f32, 0.31412f32), (0.7, 0.70003), (0.05, 0.05004)] {
+            assert_eq!(live_wear(a).to_bits(), live_wear(b).to_bits(), "{a} {b}");
+        }
+        assert_eq!(live_wear(0.0), 0.0);
+        assert_eq!(live_wear(1.0), 1.0);
+        assert_eq!(live_wear(-0.2), 0.0);
+        assert!((live_wear(0.5) - 0.5).abs() < 1.0 / 2048.0);
+    }
+
     #[test]
     fn web_seed_matches_the_preview() {
         for (id, h) in [("watch", 79835757u32), ("tier0", 2413277403), ("flow", 517522467)] {

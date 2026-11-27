@@ -5,7 +5,9 @@
 //! judders. This thread instead waits for the vertical blank of the monitor the
 //! window is on (`D3DKMTWaitForVerticalBlankEvent`, the call browsers use;
 //! `DwmFlush` or a plain sleep if that fails) and posts one `WM_APP_FRAME`
-//! per refresh to the window, never more than one in its queue.
+//! per refresh to the window, never more than one in its queue, and never a new one
+//! before the window has drawn the last (see `ack`): posted messages are taken before
+//! input, so frames run back to back would starve the mouse and keyboard.
 //! While nothing animates the thread sleeps on a condition variable: no CPU.
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering::*};
@@ -22,8 +24,10 @@ pub const WM_APP_FRAME: u32 = WM_APP + 40;
 
 struct Shared {
     run: AtomicBool,
-    /// A frame message is in the window's queue (not yet handled).
+    /// A frame message is in the window's queue or being handled (not yet acked).
     queued: AtomicBool,
+    /// A vblank passed while the last frame was still being drawn.
+    missed: AtomicBool,
     hwnd: AtomicIsize,
     gate: Mutex<()>,
     wake: Condvar,
@@ -32,7 +36,7 @@ struct Shared {
 fn shared() -> &'static Arc<Shared> {
     static S: OnceLock<Arc<Shared>> = OnceLock::new();
     S.get_or_init(|| {
-        let s = Arc::new(Shared { run: AtomicBool::new(false), queued: AtomicBool::new(false), hwnd: AtomicIsize::new(0), gate: Mutex::new(()), wake: Condvar::new() });
+        let s = Arc::new(Shared { run: AtomicBool::new(false), queued: AtomicBool::new(false), missed: AtomicBool::new(false), hwnd: AtomicIsize::new(0), gate: Mutex::new(()), wake: Condvar::new() });
         let t = s.clone();
         let _ = std::thread::Builder::new().name("vsync".into()).spawn(move || run(&t));
         s
@@ -55,9 +59,22 @@ pub fn stop() {
     shared().run.store(false, Release);
 }
 
-/// The window handled a frame message: the next one may be posted.
+/// The window finished a frame (call it after drawing, not before): the next one may be
+/// posted at the next vblank. Posted messages come before input in the queue, so acking
+/// early lets slow frames run back to back and starve the mouse and keyboard.
+///
+/// When that frame ran past a vblank and nothing else waits in this thread's queue (no
+/// input, paint, timer or posted message), the next frame is posted at once instead, so
+/// a frame slightly over budget does not halve the frame rate. Call on the UI thread.
 pub fn ack() {
-    shared().queued.store(false, Release);
+    let s = shared();
+    if s.missed.swap(false, AcqRel) && s.run.load(Acquire) {
+        let busy = unsafe { GetQueueStatus(QS_INPUT | QS_PAINT | QS_TIMER | QS_POSTMESSAGE | QS_HOTKEY) } >> 16;
+        if busy == 0 && unsafe { PostMessageW(s.hwnd.load(Relaxed) as HWND, WM_APP_FRAME, 0, 0) } != 0 {
+            return; // still queued
+        }
+    }
+    s.queued.store(false, Release);
 }
 
 /// The vertical blank of one monitor's video output.
@@ -130,8 +147,17 @@ fn run(s: &Shared) {
             std::thread::sleep(Duration::from_millis(4));
         }
         last = Instant::now();
-        if s.run.load(Acquire) && !s.queued.swap(true, AcqRel) && unsafe { PostMessageW(hwnd, WM_APP_FRAME, 0, 0) } == 0 {
-            s.queued.store(false, Release);
+        if !s.run.load(Acquire) {
+            continue;
+        }
+        if s.queued.swap(true, AcqRel) {
+            // the window is still on the last frame: ack() may post the next one
+            s.missed.store(true, Release);
+        } else {
+            s.missed.store(false, Release);
+            if unsafe { PostMessageW(hwnd, WM_APP_FRAME, 0, 0) } == 0 {
+                s.queued.store(false, Release);
+            }
         }
     }
 }
