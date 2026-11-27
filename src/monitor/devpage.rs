@@ -1835,7 +1835,6 @@ impl Draw<'_> {
 
     fn sticks(&self, cv: &mut Canvas, r: Rect) {
         let m = self.m;
-        let hw = &m.det.hw;
         let mut y = self.card_head(cv, r, "Memory sticks", "");
         if let Some((cur, rated)) = m.xmp_note() {
             let b = Rect { l: r.l + self.s(16), t: y, r: r.r - self.s(16), b: y + self.s(32) };
