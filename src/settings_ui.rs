@@ -4442,7 +4442,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             DefWindowProcW(hwnd, msg, w, l)
         }
         crate::vsync::WM_APP_FRAME => {
-            crate::vsync::ack();
             if let Some(u) = ui() {
                 if u.anim.timer {
                     u.anim_tick();
@@ -4450,6 +4449,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                     UpdateWindow(hwnd);
                 }
             }
+            // Only now may the next frame be posted. A posted message is taken before
+            // mouse and keyboard input, so a frame that costs more than one refresh (the
+            // large live coin on a slow or busy GPU) must not find the next one already
+            // waiting: input would starve, clicks pile up and replay seconds later, and
+            // the coin could not be dragged. Acked here, the clock posts again at the
+            // next vblank, and input queued meanwhile is handled first.
+            crate::vsync::ack();
             0
         }
         WM_TIMER => {
