@@ -318,13 +318,16 @@ pub fn reposition(a: &mut App) {
     let (w, h) = size(a);
     let Some((anchor, tb, _)) = a.anchor() else { return };
     let g = sc(a, 10.0);
+    // Taskbar side: a fixed 5 px at every DPI (the 100% look), so the popup
+    // sits close to the strip it opened from.
+    let tg = 5;
     let center = POINT { x: (anchor.l + anchor.r) / 2, y: (anchor.t + anchor.b) / 2 };
     let work = crate::taskbar::monitor_info(unsafe { MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST) })
         .map_or(tb.work, |m| m.1);
-    let above = (anchor.r - w, anchor.t - h - g);
-    let below = (anchor.r - w, anchor.b + g);
-    let left = (anchor.l - w - g, anchor.b - h);
-    let right = (anchor.r + g, anchor.b - h);
+    let above = (anchor.r - w, anchor.t - h - tg);
+    let below = (anchor.r - w, anchor.b + tg);
+    let left = (anchor.l - w - tg, anchor.b - h);
+    let right = (anchor.r + tg, anchor.b - h);
     // Preferred side first (away from the taskbar), then any side that fits.
     let order = match (a.s.mode, tb.edge) {
         (crate::settings::Mode::Float, _) | (_, Edge::Bottom) => [above, below, left, right],
@@ -332,8 +335,14 @@ pub fn reposition(a: &mut App) {
         (_, Edge::Left) => [right, above, below, left],
         (_, Edge::Right) => [left, above, below, right],
     };
+    // Screen edges keep the full margin; the edge the taskbar sits on gets the half one.
+    let docked = a.s.mode != crate::settings::Mode::Float;
+    let m = |e: Edge| if docked && tb.edge == e { tg } else { g };
     let clamp = |(x, y): (i32, i32)| {
-        (fit(x, work.l + g, work.r - w - g), fit(y, work.t + g, work.b - h - g))
+        (
+            fit(x, work.l + m(Edge::Left), work.r - w - m(Edge::Right)),
+            fit(y, work.t + m(Edge::Top), work.b - h - m(Edge::Bottom)),
+        )
     };
     let clear = |(x, y): (i32, i32)| !(x < anchor.r && x + w > anchor.l && y < anchor.b && y + h > anchor.t);
     let (x, y) = order.iter().map(|p| clamp(*p)).find(|p| clear(*p)).unwrap_or_else(|| clamp(order[0]));
