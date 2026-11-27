@@ -12,7 +12,7 @@
 
 use super::*;
 use crate::insights::Tone;
-use crate::sensors::deep::{battery, display, net, DeepLive, DeepStatic, Dev};
+use crate::sensors::deep::{battery, display, net, AppNet, DeepLive, DeepStatic, Dev};
 
 /// Samples of per-second app history kept for chart hover (one hour).
 const TOPS: usize = HIST;
@@ -60,6 +60,8 @@ pub(super) enum Card {
     AdapterFacts,
     Wifi,
     Conns,
+    /// Bytes per app (ETW; admin only, else an unlock button).
+    AppTraffic,
     Traffic,
     Capacity,
     BatLive,
@@ -366,7 +368,7 @@ impl Monitor {
                 v
             }
             Dev::Display(_) => vec![Card::Signal, Card::Link, Card::Hdr, Card::Panel],
-            Dev::Net => vec![Card::Path, Card::Outages, Card::AdapterFacts, Card::Wifi, Card::Conns, Card::Traffic],
+            Dev::Net => vec![Card::Path, Card::Outages, Card::AdapterFacts, Card::Wifi, Card::AppTraffic, Card::Conns, Card::Traffic],
             Dev::Battery => vec![Card::Capacity, Card::BatLive],
         }
     }
@@ -409,6 +411,7 @@ impl Monitor {
             Card::AdapterFacts => kv_rows(self.net_facts().len(), w),
             Card::Wifi => kv_rows(self.wifi_facts().len().max(1), w) + s(24),
             Card::Conns => APP_ROWS as i32 * s(30),
+            Card::AppTraffic => APP_ROWS as i32 * s(30),
             Card::Traffic => s(130),
             Card::Capacity => s(40 + 28) + kv_rows(self.bat_facts().len(), w),
             Card::BatLive => kv_rows(self.bat_live().len(), w),
@@ -535,6 +538,17 @@ impl Monitor {
                 let b = Rect { l: r.l + s(16), t: r.b - s(16) - s(32), r: r.l + s(16) + s(200), b: r.b - s(16) };
                 self.hits.push((b, Hit::Elevate));
             }
+            Card::AppTraffic => {
+                if self.live().app_net_state == AppNet::NeedsAdmin {
+                    let b = Rect { l: r.l + s(16), t: r.b - s(16) - s(32), r: r.l + s(16) + s(200), b: r.b - s(16) };
+                    self.hits.push((b, Hit::Elevate));
+                } else {
+                    for (i, row) in self.traffic_rows().iter().enumerate() {
+                        let t = r.t + s(46) + i as i32 * s(30);
+                        self.hits.push((Rect { l: r.l + s(8), t, r: r.r - s(8), b: t + s(30) }, Hit::Proc(row.0)));
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -598,6 +612,17 @@ impl Monitor {
         v.sort_by_key(|x| std::cmp::Reverse(x.1));
         v.truncate(APP_ROWS);
         v.into_iter().filter(|x| x.1 + x.2 > 0).map(|(pid, d, s)| (pid, self.proc_title(pid), d, s)).collect()
+    }
+
+    /// Apps by network bytes: (pid, title, "down / up" text, fraction of the busiest).
+    fn traffic_rows(&self) -> Vec<(u32, String, String, f32)> {
+        let v = &self.live().app_net;
+        let top = v.first().map_or(0.0, |a| a.down_bps + a.up_bps).max(1.0);
+        v.iter()
+            .filter(|a| a.down_bps + a.up_bps > 0.0)
+            .take(APP_ROWS)
+            .map(|a| (a.pid, self.proc_title(a.pid), format!("\u{25BC} {}  \u{25B2} {}", fmt::rate(a.down_bps), fmt::rate(a.up_bps)), ((a.down_bps + a.up_bps) / top) as f32))
+            .collect()
     }
 
     /// Apps with network connections: (pid, title, established, remote hosts).
@@ -1565,6 +1590,7 @@ impl Draw<'_> {
                 self.facts(cv, r, y, &m.wifi_facts());
             }
             Card::Conns => self.conns_card(cv, r),
+            Card::AppTraffic => self.traffic_card(cv, r),
             Card::Traffic => {
                 let y = self.card_head(cv, r, "Traffic", "all adapters");
                 let cr = Rect { l: r.l + self.s(16), t: y, r: r.r - self.s(16), b: r.b - self.s(16) };
@@ -1596,7 +1622,8 @@ impl Draw<'_> {
             return;
         }
         let nw = ((rr - l) as f32 * 0.42) as i32;
-        let vw = self.s(76);
+        let widest = rows.iter().map(|x| cv.measure(self.f.cap, &x.2).0).max().unwrap_or(0);
+        let vw = (widest + self.s(4)).clamp(self.s(76), (rr - l) / 2);
         for (i, (pid, name, val, frac, c)) in rows.into_iter().enumerate() {
             let t = y + i as i32 * self.s(30);
             let cy = t + self.s(15);
@@ -1981,6 +2008,38 @@ impl Draw<'_> {
         }
     }
 
+    fn traffic_card(&self, cv: &mut Canvas, r: Rect) {
+        let m = self.m;
+        let st = m.live().app_net_state;
+        let y = self.card_head(cv, r, "Traffic by app", if st == AppNet::On { "click for its menu" } else { "" });
+        let l = r.l + self.s(16);
+        let note = |cv: &mut Canvas, t: &str| {
+            let t = cv.ellipsize(self.f.small, t, r.r - l - self.s(16));
+            cv.text(self.f.small, &t, l, y, self.col.dim);
+        };
+        match st {
+            AppNet::On => {
+                let c = self.acc(Metric::Down);
+                let rows = m.traffic_rows();
+                if rows.is_empty() {
+                    note(cv, "No app is using the network right now.");
+                } else {
+                    self.bar_rows(cv, r, y, rows.into_iter().map(|x| (x.0, x.1, x.2, x.3, c)).collect());
+                }
+            }
+            AppNet::NeedsAdmin => {
+                note(cv, "Windows shares bytes per app only with an administrator.");
+                if let Some(b) = self.hit_rect(Hit::Elevate) {
+                    let hot = self.is_hot(Hit::Elevate);
+                    cv.fill_round(b, self.sf(5.0), if hot { self.col.accent.mix(self.col.fg, 0.15) } else { self.col.accent });
+                    self.text_c(cv, self.f.cap, "Restart as administrator", (b.l + b.r) / 2, (b.t + b.b) / 2, Rgba::rgb(255, 255, 255));
+                }
+            }
+            AppNet::Failed => note(cv, "Windows would not start the traffic counter."),
+            AppNet::Starting | AppNet::Off => note(cv, "Starting the traffic counter\u{2026}"),
+        }
+    }
+
     fn capacity_card(&self, cv: &mut Canvas, r: Rect) {
         let m = self.m;
         let y = self.card_head(cv, r, "Capacity", "");
@@ -2010,7 +2069,7 @@ impl Draw<'_> {
         if let Some(b) = self.hit_rect(Hit::Elevate) {
             let hot = self.is_hot(Hit::Elevate);
             cv.fill_round(b, self.sf(5.0), if hot { self.col.accent.mix(self.col.fg, 0.15) } else { self.col.accent });
-            self.text_c(cv, self.f.cap, "Unlock admin details", (b.l + b.r) / 2, (b.t + b.b) / 2, Rgba::rgb(255, 255, 255));
+            self.text_c(cv, self.f.cap, "Restart as administrator", (b.l + b.r) / 2, (b.t + b.b) / 2, Rgba::rgb(255, 255, 255));
         }
     }
 }

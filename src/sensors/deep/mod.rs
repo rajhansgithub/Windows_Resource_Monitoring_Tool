@@ -29,6 +29,18 @@ mod tests {
 
 use std::sync::Arc;
 
+/// State of the per-app network byte counter (an ETW session, admin only).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AppNet {
+    #[default]
+    Off,
+    Starting,
+    On,
+    /// Windows refused the trace session: the app is not elevated.
+    NeedsAdmin,
+    Failed,
+}
+
 /// A device with its own detail page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Dev {
@@ -57,10 +69,8 @@ impl Dev {
             _ => {
                 if let Some(n) = k.strip_prefix("disk") {
                     Dev::Disk(n.parse().ok()?)
-                } else if let Some(n) = k.strip_prefix("display") {
-                    Dev::Display(n.parse().ok()?)
                 } else {
-                    return None;
+                    Dev::Display(k.strip_prefix("display")?.parse().ok()?)
                 }
             }
         })
@@ -123,6 +133,9 @@ pub struct DeepLive {
     pub ping: Option<net::PingState>,
     pub conns: Vec<net::Conn>,
     pub wifi: Option<net::WifiInfo>,
+    /// Bytes per app (ETW, admin only), busiest first.
+    pub app_net: Vec<etw::AppBytes>,
+    pub app_net_state: AppNet,
     // ---- battery
     pub batteries: Vec<battery::Battery>,
 }

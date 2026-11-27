@@ -6,7 +6,8 @@
 //! pinging (two tiny ICMP echoes a second, on its own thread) so the outage log covers the
 //! whole session, not only the minutes the page was on screen.
 
-use super::{battery, cpu, gpu, net, reader::Reader, refresh::Meter, DeepLive, Dev};
+use super::{battery, cpu, etw, gpu, net, reader::Reader, refresh::Meter, AppNet, DeepLive, Dev};
+use std::sync::{Arc, Mutex};
 use crate::sensors::pdh::{Counter, Query};
 
 /// Re-read static facts this often while a page stays open.
@@ -45,6 +46,20 @@ fn group(d: Dev) -> Group {
     }
 }
 
+/// The ETW session for per-app bytes. Starting and stopping it can block for a second or
+/// two, so both happen on a short-lived thread, never on the sensor beat.
+#[derive(Default)]
+enum Etw {
+    #[default]
+    Off,
+    Starting(Arc<Mutex<Option<Result<etw::NetEtw, etw::StartError>>>>),
+    On(etw::NetEtw),
+    /// Refused for lack of admin rights: not retried until the app restarts elevated.
+    Denied,
+    /// Failed otherwise: tried again the next time the page opens.
+    Failed,
+}
+
 #[derive(Default)]
 pub struct LiveSensors {
     dev: Option<Dev>,
@@ -64,6 +79,7 @@ pub struct LiveSensors {
     net_age: f64,
     bats: Option<battery::Batteries>,
     bat: Vec<battery::Battery>,
+    etw: Etw,
 }
 
 fn utf16(s: &[u16]) -> String {
@@ -116,6 +132,15 @@ impl LiveSensors {
         }
         if old == Some(Dev::Net) {
             self.wlan = None;
+            // A start still running drops its session on its own thread when it lands.
+            self.etw = match std::mem::take(&mut self.etw) {
+                Etw::On(e) => {
+                    let _ = std::thread::Builder::new().name("etw-stop".into()).spawn(move || drop(e));
+                    Etw::Off
+                }
+                Etw::Denied => Etw::Denied,
+                _ => Etw::Off,
+            };
         }
     }
 
@@ -162,6 +187,7 @@ impl LiveSensors {
                     out.conns = old.conns;
                     out.wifi = old.wifi;
                 }
+                self.app_net(elapsed, out);
             }
             Dev::Battery => {
                 if self.bats.is_none() {
@@ -174,6 +200,49 @@ impl LiveSensors {
                 out.batteries = self.bat.clone();
             }
             Dev::Mem | Dev::Disk(_) => {}
+        }
+    }
+
+    /// Per-app bytes: start the ETW session on first use, then read it every second.
+    fn app_net(&mut self, elapsed: f64, out: &mut DeepLive) {
+        match &mut self.etw {
+            Etw::Off => {
+                let slot: Arc<Mutex<Option<_>>> = Arc::default();
+                let s = slot.clone();
+                let ok = std::thread::Builder::new()
+                    .name("etw-start".into())
+                    .spawn(move || {
+                        let r = etw::NetEtw::start();
+                        *s.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+                    })
+                    .is_ok();
+                self.etw = if ok { Etw::Starting(slot) } else { Etw::Off };
+                out.app_net_state = AppNet::Starting;
+            }
+            Etw::Starting(slot) => {
+                let r = slot.lock().unwrap_or_else(|e| e.into_inner()).take();
+                match r {
+                    None => out.app_net_state = AppNet::Starting,
+                    Some(Ok(e)) => {
+                        self.etw = Etw::On(e);
+                        out.app_net_state = AppNet::On;
+                    }
+                    Some(Err(etw::StartError::NeedsAdmin)) => {
+                        self.etw = Etw::Denied;
+                        out.app_net_state = AppNet::NeedsAdmin;
+                    }
+                    Some(Err(etw::StartError::Failed(_))) => {
+                        self.etw = Etw::Failed;
+                        out.app_net_state = AppNet::Failed;
+                    }
+                }
+            }
+            Etw::On(e) => {
+                out.app_net = e.take(elapsed);
+                out.app_net_state = AppNet::On;
+            }
+            Etw::Denied => out.app_net_state = AppNet::NeedsAdmin,
+            Etw::Failed => out.app_net_state = AppNet::Failed,
         }
     }
 
