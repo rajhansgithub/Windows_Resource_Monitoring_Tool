@@ -19,6 +19,10 @@ use crate::settings::Metric;
 use crate::usage;
 use crate::util::Rect;
 use std::collections::{HashMap, HashSet, VecDeque};
+use windows_sys::Win32::Graphics::Gdi::HFONT;
+
+mod devpage;
+pub use crate::sensors::deep::Dev;
 
 /// Process rows shown.
 const TOPN: usize = 14;
@@ -50,6 +54,22 @@ pub enum Hit {
     Proc(u32),
     TaskMgr,
     ResMon,
+    /// Open a device page (a tile, a card or a tab).
+    Open(Dev),
+    /// Device page: back to the overview.
+    Overview,
+    /// Device page chart: the app that was busiest at the hovered second.
+    Spike,
+    /// Network page: copy the outage log.
+    CopyOutages,
+    /// Admin-only details: restart the app elevated.
+    Elevate,
+    /// Disk page: start (or redo) the "what fills this drive" scan.
+    Scan,
+    /// Disk page: open this folder of the scan.
+    Folder(u32),
+    /// Disk page: up one folder.
+    FolderUp,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -220,6 +240,11 @@ pub struct Monitor {
     vits: Vec<(Vit, Rect)>,
     boxes: Vec<(Sec, Rect)>,
     pub hits: Vec<(Rect, Hit)>,
+    /// The device page on screen (None = the overview).
+    pub view: Option<Dev>,
+    dp: devpage::DevPage,
+    /// Font the device tabs are drawn with (set by the host before `layout`).
+    pub tab_font: HFONT,
 }
 
 impl Monitor {
@@ -267,6 +292,10 @@ impl Monitor {
             vits: Vec::new(),
             boxes: Vec::new(),
             hits: Vec::new(),
+            // CI screenshots and the frame-time benchmark open a device page directly.
+            view: std::env::var("RESMON_DEV").ok().and_then(|k| Dev::from_key(&k)),
+            dp: devpage::DevPage::default(),
+            tab_font: std::ptr::null_mut(),
         }
     }
 
@@ -283,6 +312,8 @@ impl Monitor {
         self.paused = false;
         self.anim = None;
         self.has_data = false;
+        self.close_dev();
+        self.dp.clear();
     }
 
     fn sc(&self, v: i32) -> i32 {
@@ -361,8 +392,10 @@ impl Monitor {
             self.lookup_names();
         }
         self.sort_top();
+        self.feed_dev();
         self.has_data = true;
-        shape != self.shape()
+        // A device page's cards follow its facts (outages, screens, adapters): lay it out each tick.
+        shape != self.shape() || self.view.is_some()
     }
 
     /// Look up the friendly names of a few apps not named yet.
@@ -651,6 +684,10 @@ impl Monitor {
         self.vits.clear();
         self.boxes.clear();
         self.hits.clear();
+        if self.view.is_some() {
+            self.anim = None;
+            return self.layout_dev(l, r, y0);
+        }
         let gap = self.sc(12);
         let w = r - l;
         let mut y = y0;
@@ -692,7 +729,11 @@ impl Monitor {
             for (i, v) in chunk.iter().enumerate() {
                 let x = l + i as i32 * (tw + gap);
                 let rr = if i as i32 == n - 1 { r } else { x + tw };
-                self.vits.push((*v, Rect { l: x, t, r: rr, b: t + th }));
+                let rc = Rect { l: x, t, r: rr, b: t + th };
+                self.vits.push((*v, rc));
+                if let Some(d) = self.vit_dev(*v) {
+                    self.hits.push((rc, Hit::Open(d)));
+                }
             }
         }
         y += vk.len().div_ceil(per) as i32 * (th + gap);
@@ -832,7 +873,62 @@ impl Monitor {
         out
     }
 
+    /// The device page a vital tile opens.
+    fn vit_dev(&self, v: Vit) -> Option<Dev> {
+        Some(match v {
+            Vit::Cpu => Dev::Cpu,
+            Vit::Mem => Dev::Mem,
+            Vit::Gpu | Vit::Vram => Dev::Gpu,
+            Vit::Disk => Dev::Disk(self.det.disks.iter().find_map(|d| d.num)?),
+            Vit::Net => Dev::Net,
+        })
+    }
+
     fn section_hits(&mut self, sec: Sec, r: Rect) {
+        let head = self.sc(14 + 20 + 12);
+        match sec {
+            Sec::Cpu => self.hits.push((r, Hit::Open(Dev::Cpu))),
+            Sec::Mem => self.hits.push((r, Hit::Open(Dev::Mem))),
+            Sec::Gpu => self.hits.push((r, Hit::Open(Dev::Gpu))),
+            Sec::Net => self.hits.push((r, Hit::Open(Dev::Net))),
+            Sec::Disk => {
+                let rows: Vec<u32> = self.det.disks.iter().map(|d| d.num.unwrap_or(u32::MAX)).collect();
+                let mut y = r.t + head;
+                for n in rows {
+                    let rh = self.sc(84);
+                    if n != u32::MAX {
+                        self.hits.push((Rect { l: r.l + self.sc(8), t: y, r: r.r - self.sc(8), b: y + rh }, Hit::Open(Dev::Disk(n))));
+                    }
+                    y += rh;
+                }
+            }
+            Sec::Sys => {
+                let screens = self.det.hw.displays.len();
+                let iw = r.w() - self.sc(32);
+                let n = self.sys_tiles().len() as i32;
+                let tc = self.sys_cols(iw).max(1);
+                let tiles = (n + tc - 1) / tc * self.sc(48 + 8);
+                let top = r.t + head + tiles + self.sc(8);
+                // Displays list: right half when wide, below memory when narrow (as `system` draws it).
+                let (l, rr) = (r.l + self.sc(16), r.r - self.sc(16));
+                let (dl, dt) = if iw >= self.sc(640) { ((l + rr) / 2 + self.sc(14), top) } else { (l, top + self.sc(20 + 56 + 8 + 18 + 16)) };
+                let mut y = dt + self.sc(20);
+                for i in 0..screens {
+                    self.hits.push((Rect { l: dl, t: y, r: r.r - self.sc(16), b: y + self.sc(44) }, Hit::Open(Dev::Display(i as u32))));
+                    y += self.sc(44);
+                }
+                if self.snap.battery.is_some() {
+                    // The battery tile is the last of the facts tiles.
+                    let k = n - 1;
+                    let tw = (iw - self.sc(8) * (tc - 1)) / tc;
+                    let (row, colx) = (k / tc, k % tc);
+                    let x = r.l + self.sc(16) + colx * (tw + self.sc(8));
+                    let t = r.t + head + row * self.sc(48 + 8);
+                    self.hits.push((Rect { l: x, t, r: x + tw, b: t + self.sc(48) }, Hit::Open(Dev::Battery)));
+                }
+            }
+            Sec::Procs => {}
+        }
         if sec != Sec::Procs {
             return;
         }
@@ -882,6 +978,10 @@ impl Monitor {
     /// `hot` indexes `hits`.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(&self, cv: &mut Canvas, f: &Fonts, col: &Colors, dy: i32, vt: i32, vb: i32, hot: Option<usize>) {
+        if self.view.is_some() {
+            self.draw_dev(cv, f, col, dy, vt, vb, hot);
+            return;
+        }
         let d = Draw { m: self, f, col: *col, dx: 0, dy, hot, track: col.line, sub: col.fg.with_a(if col.dark { 10 } else { 14 }) };
         let s = |v: i32| self.sc(v);
         let vis = |r: Rect| r.b + dy >= vt && r.t + dy <= vb;
@@ -895,6 +995,9 @@ impl Monitor {
             let r = self.cur(Key::Vit(*v), *r);
             if vis(r) {
                 d.vital(cv, *v, d.sh(r));
+                if self.vit_dev(*v).is_some_and(|dv| d.hot_open(dv, r)) {
+                    d.open_ring(cv, d.sh(r));
+                }
             }
         }
         for (sec, to) in &self.boxes {
@@ -914,6 +1017,16 @@ impl Monitor {
                 Sec::Net => d.nets(cv, r),
                 Sec::Sys => d.system(cv, r),
                 Sec::Procs => d.procs(cv, r),
+            }
+            let whole = match sec {
+                Sec::Cpu => Some(Dev::Cpu),
+                Sec::Mem => Some(Dev::Mem),
+                Sec::Gpu => Some(Dev::Gpu),
+                Sec::Net => Some(Dev::Net),
+                _ => None,
+            };
+            if whole.is_some_and(|dv| d.hot_open(dv, *to)) {
+                d.open_ring(cv, r);
             }
         }
     }
@@ -989,6 +1102,16 @@ impl Draw<'_> {
     }
     fn hit_rect(&self, h: Hit) -> Option<Rect> {
         self.m.hits.iter().find(|x| x.1 == h).map(|x| self.sh(x.0))
+    }
+
+    /// The pointer is on the `Open(d)` hit that covers exactly `r` (content coordinates).
+    fn hot_open(&self, d: Dev, r: Rect) -> bool {
+        self.hot.and_then(|i| self.m.hits.get(i)).is_some_and(|x| x.1 == Hit::Open(d) && x.0 == r)
+    }
+
+    /// Hover outline of a card that opens a device page.
+    fn open_ring(&self, cv: &mut Canvas, r: Rect) {
+        cv.stroke_round(r, self.sf(8.0), self.col.fg.with_a(if self.dark() { 90 } else { 70 }));
     }
 
     fn card(&self, cv: &mut Canvas, r: Rect) {

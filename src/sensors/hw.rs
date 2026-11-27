@@ -31,6 +31,9 @@ pub struct Dimm {
     pub part: String,
     /// Configured speed, MT/s (0 = unknown).
     pub speed: u32,
+    /// Rated (maximum) speed of the stick, MT/s (0 = unknown). Above `speed` usually
+    /// means the fast memory profile (XMP / EXPO) is off.
+    pub rated: u32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -298,7 +301,9 @@ pub(crate) fn parse_smbios(data: &[u8], h: &mut Hw) {
                 }
                 let slot = [s(0x10)].into_iter().find(|x| !x.is_empty()).unwrap_or_else(|| s(0x11));
                 let clean = |x: String| if junk(&x) { String::new() } else { x };
-                h.dimms.push(Dimm { slot, size, maker: clean(s(0x17)), part: clean(s(0x1A)), speed: u32::from(speed) });
+                // Offset 0x15 is the stick's rated speed (MHz in old tables, MT/s since 3.x).
+                let rated = if flen > 0x16 { w(0x15) } else { 0 };
+                h.dimms.push(Dimm { slot, size, maker: clean(s(0x17)), part: clean(s(0x1A)), speed: u32::from(speed), rated: u32::from(rated) });
             }
             127 => break,
             _ => {}
@@ -645,7 +650,7 @@ mod tests {
         assert_eq!(h.board, "ASUSTeK ROG STRIX B550-F");
         assert_eq!(h.mem_type, "DDR4");
         assert_eq!(h.dimms.len(), 2);
-        assert_eq!(h.dimms[0], Dimm { slot: "DIMM_A1".into(), size: 16 << 30, maker: "G.Skill".into(), part: "F4-3200C16".into(), speed: 3200 });
+        assert_eq!(h.dimms[0], Dimm { slot: "DIMM_A1".into(), size: 16 << 30, maker: "G.Skill".into(), part: "F4-3200C16".into(), rated: 3200, speed: 3200 });
         assert_eq!(h.slots(), (1, 2));
     }
 }

@@ -1991,6 +1991,7 @@ impl Ui {
                 }
                 Def::Monitor => {
                     self.mon.motion = self.animate;
+                    self.mon.tab_font = self.fonts.view().small;
                     y = self.mon.layout(self.dpi, l, r, y);
                     if self.mon.animating() {
                         mon_anim = true;
@@ -3360,6 +3361,14 @@ fn go(p: Page) {
 
 fn go_back() {
     let Some(u) = ui() else { return };
+    // A device page goes back to the Monitor overview first.
+    if u.page == Page::Monitor && u.mon.close_dev() {
+        u.layout();
+        u.scroll_to(0, false);
+        u.refresh_hover();
+        invalidate(u.hwnd);
+        return;
+    }
     if u.back() && u.page.shows_insights() {
         if let Some(a) = app() {
             sync_insights(a, false);
@@ -3485,6 +3494,40 @@ fn activate(hwnd: HWND, id: i32) {
             Some(MonHit::Proc(pid)) => crate::popup::proc_menu(pid),
             Some(MonHit::TaskMgr) => shell_open("taskmgr.exe", None),
             Some(MonHit::ResMon) => shell_open("resmon.exe", None),
+            Some(MonHit::Open(d)) => {
+                let was = u.mon.view;
+                u.mon.open_dev(d);
+                u.layout();
+                if was.is_none() {
+                    u.scroll_to(0, false);
+                }
+                u.refresh_hover();
+                invalidate(hwnd);
+                // Ask for the device's deep facts now instead of on the next tick.
+                if let Some(a) = app() {
+                    a.request_sample();
+                }
+            }
+            Some(MonHit::Overview) => {
+                u.mon.close_dev();
+                u.layout();
+                u.scroll_to(0, false);
+                u.refresh_hover();
+                invalidate(hwnd);
+            }
+            Some(MonHit::Spike) => {
+                if let Some(pid) = u.mon.spike_pid() {
+                    crate::popup::proc_menu(pid);
+                }
+            }
+            Some(MonHit::CopyOutages) => crate::util::copy_text(hwnd, &u.mon.outage_text()),
+            Some(MonHit::Elevate) => crate::app::restart_elevated(),
+            Some(h @ (MonHit::Scan | MonHit::Folder(_) | MonHit::FolderUp)) => {
+                u.mon.scan_click(h);
+                u.layout();
+                u.refresh_hover();
+                invalidate(hwnd);
+            }
             None => {}
         },
         Kind::Coin => {
@@ -3679,6 +3722,10 @@ fn on_key(hwnd: HWND, key: u16) {
         VK_BROWSER_BACK => go_back(),
         // Esc only dismisses: the overlay pane, a tooltip. It never closes the window.
         VK_ESCAPE => {
+            if u.page == Page::Monitor && u.mon.view.is_some() {
+                go_back();
+                return;
+            }
             if u.room.big && u.page == Page::Achievements {
                 u.room.close_big();
                 u.layout();
@@ -3863,6 +3910,14 @@ fn on_mouse_move(hwnd: HWND, x: i32, y: i32) {
     let hover = u.hit(x, y);
     let sb = !u.over_pane(x) && u.scrollbar().is_some_and(|(t, _)| t.contains(x, y));
     let chart = u.chart_at(x, y);
+    // Device page chart: the hovered second's busiest app.
+    if u.page == Page::Monitor && u.mon.view.is_some() {
+        let (vt, vb) = u.view();
+        let p = (!u.over_pane(x) && y >= vt && y < vb).then(|| (x, y - (vt - u.scroll_px())));
+        if u.mon.pointer(p) {
+            invalidate(hwnd);
+        }
+    }
     if hover != u.hover || sb != u.sb_hover || chart != u.chart_hover {
         if hover != u.hover {
             u.tip = None;
@@ -4255,6 +4310,16 @@ pub fn insights_tick(a: &crate::app::App) {
 }
 
 /// The Monitor page is open and on screen: the app samples its extra detail.
+/// The device page open on the Monitor page (None = overview or page hidden).
+pub fn monitor_dev() -> Option<crate::sensors::deep::Dev> {
+    let u = ui()?;
+    if monitor_visible() {
+        u.mon.view
+    } else {
+        None
+    }
+}
+
 pub fn monitor_visible() -> bool {
     let Some(u) = ui() else { return false };
     // SAFETY: plain window queries on our own window.
@@ -4406,6 +4471,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         WM_MOUSELEAVE => {
             if let Some(u) = ui() {
                 u.tracking = false;
+                if u.mon.pointer(None) {
+                    invalidate(hwnd);
+                }
                 if u.drag == Drag::None && (u.hover.is_some() || u.sb_hover || u.chart_hover.is_some() || u.tip.is_some()) {
                     u.hover = None;
                     u.sb_hover = false;

@@ -760,6 +760,7 @@ impl App {
             procs: sh(Metric::TopProc) || self.detail_warm() || self.ins.wants_procs(),
             // The Monitor page is on screen (no extra timer: it rides this tick).
             detail: crate::settings_ui::monitor_visible(),
+            dev: crate::settings_ui::monitor_dev(),
         }
     }
 
@@ -788,7 +789,7 @@ impl App {
     }
 
     /// The sample timer: the sensor thread reads, `sampled` takes the result.
-    fn request_sample(&mut self) {
+    pub fn request_sample(&mut self) {
         let opts = self.opts();
         self.sensors.request(opts, false);
     }
@@ -1918,6 +1919,24 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
     }
 }
 
+/// Start again as administrator (UAC prompt) on the Monitor page, for the details only an
+/// elevated process can read (SATA SMART, per-app network bytes). This instance closes once
+/// the new one has started; if the prompt is declined nothing changes.
+pub fn restart_elevated() {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    let Ok(exe) = std::env::current_exe() else { return };
+    let (verb, file, args) = (wide("runas"), wide(&exe.display().to_string()), wide("--elevated --monitor"));
+    // SAFETY: NUL-terminated strings that outlive the call.
+    let r = unsafe { ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), args.as_ptr(), std::ptr::null(), SW_SHOWNORMAL) };
+    if r as isize > 32 {
+        if let Some(a) = app() {
+            crate::settings_ui::close();
+            // SAFETY: our own main window; WM_DESTROY saves and quits.
+            unsafe { DestroyWindow(a.hwnd) };
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::overlay::pack;
@@ -1930,3 +1949,4 @@ mod tests {
         assert_eq!(c, vec![vec![Cpu, Gpu], vec![Up, Down]]);
     }
 }
+

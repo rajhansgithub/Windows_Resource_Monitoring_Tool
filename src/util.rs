@@ -55,6 +55,36 @@ pub fn read_dword(root: HKEY, sub: &str, name: &str) -> Option<u32> {
     (r == ERROR_SUCCESS).then_some(val)
 }
 
+/// Put `text` on the clipboard as Unicode text.
+pub fn copy_text(owner: HWND, text: &str) {
+    use windows_sys::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
+    use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    const CF_UNICODETEXT: u32 = 13;
+    let w = wide(text);
+    let bytes = w.len() * 2;
+    // SAFETY: standard clipboard sequence; the block is handed to the clipboard on success.
+    unsafe {
+        if OpenClipboard(owner) == 0 {
+            return;
+        }
+        EmptyClipboard();
+        let h = GlobalAlloc(GMEM_MOVEABLE, bytes);
+        if !h.is_null() {
+            let p = GlobalLock(h).cast::<u16>();
+            if !p.is_null() {
+                std::ptr::copy_nonoverlapping(w.as_ptr(), p, w.len());
+                GlobalUnlock(h);
+                if SetClipboardData(CF_UNICODETEXT, h as _).is_null() {
+                    GlobalFree(h);
+                }
+            } else {
+                GlobalFree(h);
+            }
+        }
+        CloseClipboard();
+    }
+}
+
 pub fn shell_open(target: &str, args: Option<&str>) {
     let t = wide(target);
     let a = args.map(wide);

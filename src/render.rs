@@ -978,6 +978,11 @@ impl Drop for Painter {
 /// rasterises it once and every later frame only blends. Fonts are told apart
 /// by their LOGFONT, so a font handle that is freed and reused never shows a
 /// stale bitmap.
+/// Size of `s` in `font` without a canvas (cached; for layout).
+pub fn measure_text(font: HFONT, s: &str) -> (i32, i32) {
+    text_cache::measure(font, s)
+}
+
 mod text_cache {
     use super::{measure_dc, Dib};
     use std::cell::RefCell;

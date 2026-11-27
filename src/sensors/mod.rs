@@ -15,6 +15,7 @@
 //!     thermal_passive_limit  lowest "% Passive Limit" across ACPI thermal zones
 
 mod cpu;
+pub mod deep;
 pub mod detail;
 pub mod hw;
 mod disk;
@@ -123,6 +124,8 @@ pub struct SampleOpts {
     pub procs: bool,
     /// The Monitor page is on screen: collect `Detail` too (implies gpu, disk and procs).
     pub detail: bool,
+    /// The device page open on the Monitor page (with `detail`): its deep live values.
+    pub dev: Option<deep::Dev>,
 }
 
 /// Monotonic clock based on QueryPerformanceCounter.
@@ -163,6 +166,7 @@ pub struct Sensors {
     procs: procs::Procs,
     detail: detail::DetailSensors,
     net_detail: net::NetDetail,
+    deep: deep::live::LiveSensors,
     gpu_pids: Vec<(u32, f32)>,
     // Declared last: counters above are dropped before the query that owns them.
     pdh: Option<pdh::Query>,
@@ -183,6 +187,7 @@ impl Sensors {
             procs: procs::Procs::new(),
             detail: detail::DetailSensors::default(),
             net_detail: net::NetDetail::default(),
+            deep: deep::live::LiveSensors::default(),
             gpu_pids: Vec::new(),
             pdh: pdh::Query::open(),
         }
@@ -208,6 +213,7 @@ impl Sensors {
             self.gpu.sync(q, opts.gpu);
             self.disk.sync(q, opts.disk);
             self.detail.sync(q, opts.detail);
+            self.deep.sync(q, if opts.detail { opts.dev } else { None });
             q.collect();
         }
 
@@ -257,6 +263,9 @@ impl Sensors {
             }
             let slow = self.detail.slow_due();
             self.net_detail.sample(elapsed, slow, &mut self.detail.d.adapters);
+            let d = &mut self.detail.d;
+            let nums: Vec<u32> = d.disks.iter().filter_map(|x| x.num).collect();
+            self.deep.sample(elapsed, &nums, &mut d.deep);
         } else {
             self.net_detail.reset();
         }

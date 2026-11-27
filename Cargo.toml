@@ -1,6 +1,6 @@
 [package]
 name = "resmon"
-version = "2.20.0"
+version = "2.21.0"
 edition = "2021"
 authors = ["Emulsion Labs"]
 description = "Ultra-light taskbar resource monitor for Windows 10/11"
@@ -43,6 +43,18 @@ features = [
   "Win32_NetworkManagement_Ndis",
   "Win32_Networking_WinSock",
   "Wdk_Graphics_Direct3D",
+  # Device detail pages (src/sensors/deep): storage health, PCIe links, batteries,
+  # Wi-Fi, ETW network bytes (admin helper), named pipe to the helper.
+  "Win32_System_Ioctl",
+  "Win32_Storage_Nvme",
+  "Win32_Devices_DeviceAndDriverInstallation",
+  "Win32_Devices_Properties",
+  "Win32_NetworkManagement_WiFi",
+  "Win32_System_Diagnostics_Etw",
+  "Win32_System_Pipes",
+  # Copy the outage log.
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
 ]
 
 # COM bindings for UI Automation (locating taskbar app buttons). Shares
