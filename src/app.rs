@@ -7,7 +7,7 @@
 use crate::fmt::{self, SpeedUnit};
 use crate::overlay::{Drag, Overlay};
 use crate::render::Rgba;
-use crate::sensors::{AdapterInfo, SampleOpts, Sensors, Snapshot};
+use crate::sensors::{AdapterInfo, SampleOpts, Snapshot};
 use crate::settings::{Metric, Mode, Settings, Theme};
 use crate::taskbar::{self, Taskbar};
 use crate::tray::{Tray, WM_TRAY};
@@ -341,7 +341,9 @@ pub struct App {
     pub settings_win: HWND,
     pub m: Model,
     settings_mtime: Option<SystemTime>,
-    sensors: Sensors,
+    sensors: crate::sensors::worker::Worker,
+    /// Monitor page detail from the last sample (empty unless the page is on screen).
+    detail: crate::sensors::detail::Detail,
     last_save: Instant,
     adapters: Vec<AdapterInfo>,
     pub overlays: Vec<Overlay>,
@@ -490,7 +492,8 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
                 gpu_seen: false,
             },
             settings_mtime: None,
-            sensors: Sensors::new(),
+            sensors: crate::sensors::worker::Worker::new(hwnd),
+            detail: Default::default(),
             last_save: Instant::now(),
             adapters: Vec::new(),
             overlays: Vec::new(),
@@ -585,7 +588,8 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         a.hook = hook;
         a.ins.set_enabled(a.m.s.insights, hwnd as isize);
         a.ins.sleep.bag_guard = a.m.s.bag_guard;
-        a.sample();
+        // First reading on the sensor thread; the overlays fill in when it lands.
+        a.request_sample();
         a.update_timer();
         a.refresh(true);
         if after_update {
@@ -770,23 +774,37 @@ impl App {
         if cold {
             // Take a baseline now so rates/percentages exist on the next tick.
             let opts = self.opts();
-            let _ = self.sensors.sample(&opts);
+            self.sensors.request(opts, true);
         }
     }
 
     /// Monitor page detail from the last sample (empty unless the page is on screen).
     pub fn detail(&self) -> &crate::sensors::detail::Detail {
-        self.sensors.detail()
+        &self.detail
     }
 
     pub fn popup_open(&self) -> bool {
         !self.popup.is_null() && unsafe { IsWindowVisible(self.popup) } != 0
     }
 
-    fn sample(&mut self) {
-        let _p = crate::perf::span("sample");
+    /// The sample timer: the sensor thread reads, `sampled` takes the result.
+    fn request_sample(&mut self) {
         let opts = self.opts();
-        let snap = self.sensors.sample(&opts).clone();
+        self.sensors.request(opts, false);
+    }
+
+    /// A sample came back from the sensor thread.
+    fn sampled(&mut self) -> bool {
+        let Some(r) = self.sensors.take() else { return false };
+        if r.baseline {
+            return false;
+        }
+        let _p = crate::perf::span("sample_ui");
+        if let Some(d) = r.detail {
+            self.detail = d;
+        }
+        let opts = r.opts;
+        let snap = r.snap;
         let m = &mut self.m;
         m.usage.add(snap.net_sent_delta, snap.net_recv_delta);
         let mut v = [0f32; Metric::ALL.len()];
@@ -828,6 +846,7 @@ impl App {
         } else {
             self.ach.pause();
         }
+        true
     }
 
     /// Feed Insights from the sample just taken (no extra timers).
@@ -1081,7 +1100,7 @@ impl App {
 
     /// Network adapters currently present (refreshed on each call).
     pub fn adapter_list(&mut self) -> Vec<AdapterInfo> {
-        self.adapters = self.sensors.adapters();
+        self.adapters = crate::sensors::worker::adapters();
         self.adapters.clone()
     }
 
@@ -1659,7 +1678,12 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         WM_TIMER => {
             // The only periodic work: read the metrics and redraw them.
             if w == T_SAMPLE {
-                a.sample();
+                a.request_sample();
+            }
+            0
+        }
+        crate::sensors::worker::WM_APP_SAMPLED => {
+            if a.sampled() {
                 a.refresh(true);
             }
             0

@@ -4,7 +4,7 @@
 //!
 //!   let mut s = Sensors::new();
 //!   let snap: &Snapshot = s.sample(&SampleOpts { .. });   // call ~once per interval
-//!   let list: Vec<AdapterInfo> = s.adapters();              // for the tray menu
+//!   let list: Vec<AdapterInfo> = worker::adapters();        // for the tray menu
 //!   let pid: Option<u32> = sensors::find_process("Memory Compression"); // one-shot, never per tick
 //!
 //!   CPU ceiling fields on `Snapshot` (PDH, attached once to the shared query; `None` when the
@@ -27,6 +27,7 @@ mod perf;
 mod power;
 mod procs;
 mod volume;
+pub mod worker;
 
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
@@ -267,10 +268,6 @@ impl Sensors {
     /// Monitor page detail from the last sample taken with `SampleOpts::detail`.
     pub fn detail(&self) -> &detail::Detail {
         &self.detail.d
-    }
-
-    pub fn adapters(&self) -> Vec<AdapterInfo> {
-        net::adapters()
     }
 }
 
