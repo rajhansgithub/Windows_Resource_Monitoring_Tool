@@ -15,6 +15,7 @@
 //!     thermal_passive_limit  lowest "% Passive Limit" across ACPI thermal zones
 
 mod cpu;
+pub mod deep;
 pub mod detail;
 pub mod hw;
 mod disk;
