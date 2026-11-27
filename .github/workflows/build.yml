@@ -507,6 +507,80 @@ jobs:
           name: monitor-shots
           path: target/monitor-shots/
           if-no-files-found: warn
+      - name: Run app, screenshot every device page (click a Monitor tile)
+        shell: pwsh
+        run: |
+          $dir = "$env:LOCALAPPDATA/ResourceMonitor"
+          New-Item -ItemType Directory -Force $dir, target/device-shots | Out-Null
+          Add-Content "$dir/settings.ini" "`ntheme = dark`n"
+          Add-Type @"
+          using System; using System.Runtime.InteropServices;
+          public static class W6 {
+            [StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Rt, B; }
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string c, string t);
+            [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r);
+            [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+            [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int w, int hh, uint f);
+            [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+            [DllImport("user32.dll")] public static extern void mouse_event(uint f, int x, int y, int d, UIntPtr e);
+          }
+          "@
+          Add-Type -AssemblyName System.Drawing
+          function Grab($h, $file) {
+            $r = New-Object W6+R
+            [void][W6]::GetWindowRect($h, [ref]$r)
+            $w = $r.Rt - $r.L; $hh = $r.B - $r.T
+            $bmp = New-Object System.Drawing.Bitmap $w, $hh
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($r.L, $r.T, 0, 0, (New-Object System.Drawing.Size $w, $hh))
+            $bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)
+          }
+          $fails = @()
+          foreach ($dev in "cpu", "mem", "gpu", "disk0", "display0", "net") {
+            $env:RESMON_DEV = $dev
+            $p = Start-Process target/release/ResourceMonitor.exe -ArgumentList "--monitor" -PassThru
+            Start-Sleep -Seconds 5
+            $h = [W6]::FindWindowW("ResourceMonitor.Window", [NullString]::Value)
+            if ($h -eq [IntPtr]::Zero) { $fails += "$dev : window did not open"; continue }
+            [void][W6]::ShowWindow($h, 3); Start-Sleep -Seconds 12
+            Grab $h "target/device-shots/$dev-wide.png"
+            $r = New-Object W6+R
+            [void][W6]::GetWindowRect($h, [ref]$r)
+            # Hover the chart (the busiest app at that second).
+            [void][W6]::SetCursorPos([int](($r.L + $r.Rt) / 2), [int]($r.T + 330)); Start-Sleep -Milliseconds 600
+            Grab $h "target/device-shots/$dev-hover.png"
+            [void][W6]::ShowWindow($h, 9); Start-Sleep -Milliseconds 400
+            [void][W6]::SetWindowPos($h, [IntPtr]::Zero, 30, 30, 820, 1000, 0x14); Start-Sleep -Seconds 3
+            Grab $h "target/device-shots/$dev-small.png"
+            [void][W6]::SetCursorPos(400, 500)
+            [W6]::mouse_event(0x0800, 0, 0, -1500, [UIntPtr]::Zero); Start-Sleep -Seconds 2
+            Grab $h "target/device-shots/$dev-small-s1.png"
+            if ($p.HasExited) { $fails += "$dev : app exited early (code $($p.ExitCode))" } else { Stop-Process -Id $p.Id }
+            Start-Sleep -Seconds 1
+          }
+          Remove-Item Env:RESMON_DEV -ErrorAction SilentlyContinue
+          $log = "$dir/diagnostics.log"
+          if (Test-Path $log) { Get-Content $log -Tail 30 }
+          # Small JPEG copies inline in the log for review without artifact downloads.
+          $enc = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq "image/jpeg" }
+          $ep = New-Object System.Drawing.Imaging.EncoderParameters 1
+          $ep.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality), 70L
+          Get-ChildItem target/device-shots/*.png | ForEach-Object {
+            $img = [System.Drawing.Image]::FromFile($_.FullName)
+            $sc = [Math]::Min(1.0, 1280.0 / $img.Width)
+            $bmp = New-Object System.Drawing.Bitmap $img, ([int]($img.Width * $sc)), ([int]($img.Height * $sc))
+            $ms = New-Object System.IO.MemoryStream
+            $bmp.Save($ms, $enc, $ep)
+            Write-Output ("B64 " + $_.Name + " " + [Convert]::ToBase64String($ms.ToArray()))
+            $img.Dispose()
+          }
+          if ($fails.Count -gt 0) { $fails | ForEach-Object { Write-Error $_ }; exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: device-shots
+          path: target/device-shots/
+          if-no-files-found: warn
       - name: Frame-time benchmark (scroll + resize on every page)
         shell: pwsh
         run: |
@@ -543,8 +617,9 @@ jobs:
           $env:RESMON_INSIGHTS_DEMO = "1"
           $log = "$dir/diagnostics.log"
           $fails = @()
-          foreach ($pg in "monitor", "overview", "incidents", "achievements", "general", "colours") {
-            $env:RESMON_PAGE = $pg
+          foreach ($pg in "monitor", "monitor:cpu", "monitor:gpu", "monitor:disk0", "monitor:net", "overview", "incidents", "achievements", "general", "colours") {
+            $env:RESMON_PAGE = $pg.Split(":")[0]
+            if ($pg.Contains(":")) { $env:RESMON_DEV = $pg.Split(":")[1] } else { Remove-Item Env:RESMON_DEV -ErrorAction SilentlyContinue }
             $p = Start-Process target/release/ResourceMonitor.exe -ArgumentList "--insights" -PassThru
             Start-Sleep -Seconds 6
             $h = [WP]::FindWindowW("ResourceMonitor.Window", [NullString]::Value)
@@ -569,7 +644,7 @@ jobs:
             if ($p.HasExited) { $fails += "$pg : app exited early (code $($p.ExitCode))" } else { Stop-Process -Id $p.Id }
             Start-Sleep -Seconds 1
           }
-          Remove-Item Env:RESMON_PERF, Env:RESMON_INSIGHTS_DEMO, Env:RESMON_PAGE -ErrorAction SilentlyContinue
+          Remove-Item Env:RESMON_PERF, Env:RESMON_INSIGHTS_DEMO, Env:RESMON_PAGE, Env:RESMON_DEV -ErrorAction SilentlyContinue
           if (Test-Path $log) { Select-String -Path $log -Pattern "bench |perf " | ForEach-Object { $_.Line } }
           if ($fails.Count -gt 0) { $fails | ForEach-Object { Write-Error $_ }; exit 1 }
       - name: Installer

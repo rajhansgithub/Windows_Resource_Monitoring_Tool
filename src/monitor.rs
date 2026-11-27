@@ -286,7 +286,8 @@ impl Monitor {
             vits: Vec::new(),
             boxes: Vec::new(),
             hits: Vec::new(),
-            view: None,
+            // CI screenshots and the frame-time benchmark open a device page directly.
+            view: std::env::var("RESMON_DEV").ok().and_then(|k| Dev::from_key(&k)),
             dp: devpage::DevPage::default(),
             tab_font: std::ptr::null_mut(),
         }

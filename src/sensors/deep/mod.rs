@@ -13,6 +13,19 @@ pub mod net;
 pub mod reader;
 pub mod refresh;
 
+#[cfg(test)]
+mod tests {
+    use super::Dev;
+
+    #[test]
+    fn keys() {
+        assert_eq!(Dev::from_key("disk1"), Some(Dev::Disk(1)));
+        assert_eq!(Dev::from_key("Display0"), Some(Dev::Display(0)));
+        assert_eq!(Dev::from_key("cpu"), Some(Dev::Cpu));
+        assert_eq!(Dev::from_key("diskx"), None);
+    }
+}
+
 use std::sync::Arc;
 
 /// A device with its own detail page.
@@ -27,6 +40,30 @@ pub enum Dev {
     Display(u32),
     Net,
     Battery,
+}
+
+impl Dev {
+    /// From a short key ("cpu", "mem", "gpu", "disk0", "display1", "net", "battery"): CI runs
+    /// open a page with `RESMON_DEV`.
+    pub fn from_key(k: &str) -> Option<Dev> {
+        let k = k.trim().to_ascii_lowercase();
+        Some(match k.as_str() {
+            "cpu" => Dev::Cpu,
+            "mem" | "memory" => Dev::Mem,
+            "gpu" => Dev::Gpu,
+            "net" | "network" => Dev::Net,
+            "battery" => Dev::Battery,
+            _ => {
+                if let Some(n) = k.strip_prefix("disk") {
+                    Dev::Disk(n.parse().ok()?)
+                } else if let Some(n) = k.strip_prefix("display") {
+                    Dev::Display(n.parse().ok()?)
+                } else {
+                    return None;
+                }
+            }
+        })
+    }
 }
 
 /// Health and extra facts of one physical drive.
