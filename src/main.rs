@@ -12,6 +12,7 @@ mod logo;
 mod monitor;
 mod nav;
 mod overlay;
+mod perf;
 mod popup;
 mod render;
 mod report;

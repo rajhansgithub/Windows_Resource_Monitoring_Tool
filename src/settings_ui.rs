@@ -2436,10 +2436,25 @@ impl Ui {
     // -------------------------------------------------------------- painting
 
     fn paint(&mut self, dc: HDC) {
+        let _p = crate::perf::span("paint");
+        if crate::perf::on() {
+            // Time between frames while something animates (scroll, transitions).
+            thread_local!(static LAST: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) });
+            let now = Instant::now();
+            if let Some(t) = LAST.with(|c| c.replace(Some(now))) {
+                if self.anim.timer {
+                    crate::perf::record("frame_gap", (now - t).as_secs_f32() * 1000.0);
+                }
+            }
+        }
         let mut cv = std::mem::replace(&mut self.cv, Canvas::new());
         cv.resize(self.cw, self.ch);
-        self.draw(&mut cv);
+        {
+            let _d = crate::perf::span(self.page.perf_key());
+            self.draw(&mut cv);
+        }
         cv.set_clip(None);
+        let _b = crate::perf::span("blit");
         cv.blit(dc, 0, 0);
         self.cv = cv;
     }
@@ -4043,6 +4058,7 @@ pub fn insights_tick(a: &crate::app::App) {
     }
     if u.page == Page::Monitor {
         if monitor_visible() {
+            let _p = crate::perf::span("mon_feed_layout");
             u.mon.feed(a);
             // Process rows reorder every tick: lay out again (cheap, no text measuring).
             u.layout();

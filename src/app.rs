@@ -784,6 +784,7 @@ impl App {
     }
 
     fn sample(&mut self) {
+        let _p = crate::perf::span("sample");
         let opts = self.opts();
         let snap = self.sensors.sample(&opts).clone();
         let m = &mut self.m;
