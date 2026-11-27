@@ -507,6 +507,71 @@ jobs:
           name: monitor-shots
           path: target/monitor-shots/
           if-no-files-found: warn
+      - name: Frame-time benchmark (scroll + resize on every page)
+        shell: pwsh
+        run: |
+          $dir = "$env:LOCALAPPDATA/ResourceMonitor"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Add-Type @"
+          using System; using System.Runtime.InteropServices;
+          public static class WP {
+            [StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Rt, B; }
+            [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] public struct DM {
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string Name;
+              public short Spec, Drv, Size, Extra; public int Fields, PosX, PosY, Orient, Fixed;
+              public short Color, Duplex, YRes, TT, Collate;
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string Form;
+              public short LogPx; public int Bpp, W, H, Flags, Freq, Icm, Intent, Media, Dither, R1, R2, PanW, PanH;
+            }
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string c, string t);
+            [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r);
+            [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+            [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+            [DllImport("user32.dll")] public static extern void mouse_event(uint f, int x, int y, int d, UIntPtr e);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool EnumDisplaySettingsW(string d, int m, ref DM dm);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int ChangeDisplaySettingsW(ref DM dm, int f);
+            public static int Res(int w, int h) {
+              var dm = new DM(); dm.Size = (short)Marshal.SizeOf(typeof(DM));
+              if (!EnumDisplaySettingsW(null, -1, ref dm)) return -99;
+              dm.W = w; dm.H = h; dm.Fields = 0x80000 | 0x100000;
+              return ChangeDisplaySettingsW(ref dm, 0);
+            }
+          }
+          "@
+          Write-Output ("res 1920x1080: " + [WP]::Res(1920, 1080)); Start-Sleep -Seconds 2
+          $env:RESMON_PERF = "1"
+          $env:RESMON_INSIGHTS_DEMO = "1"
+          $log = "$dir/diagnostics.log"
+          $fails = @()
+          foreach ($pg in "monitor", "overview", "incidents", "achievements", "general", "colours") {
+            $env:RESMON_PAGE = $pg
+            $p = Start-Process target/release/ResourceMonitor.exe -ArgumentList "--insights" -PassThru
+            Start-Sleep -Seconds 6
+            $h = [WP]::FindWindowW("ResourceMonitor.Window", [NullString]::Value)
+            if ($h -eq [IntPtr]::Zero) { $fails += "$pg : main window did not open"; Stop-Process -Id $p.Id -ErrorAction SilentlyContinue; continue }
+            [void][WP]::ShowWindow($h, 3); Start-Sleep -Seconds 5
+            $r = New-Object WP+R
+            [void][WP]::GetWindowRect($h, [ref]$r)
+            [void][WP]::SetCursorPos([int](($r.L + $r.Rt) / 2 + 100), [int](($r.T + $r.B) / 2))
+            Add-Content $log "bench $pg scroll start"
+            foreach ($rep in 1..2) {
+              foreach ($k in 1..24) { [WP]::mouse_event(0x0800, 0, 0, -120, [UIntPtr]::Zero); Start-Sleep -Milliseconds 45 }
+              Start-Sleep -Milliseconds 700
+              foreach ($k in 1..24) { [WP]::mouse_event(0x0800, 0, 0, 120, [UIntPtr]::Zero); Start-Sleep -Milliseconds 45 }
+              Start-Sleep -Milliseconds 700
+            }
+            foreach ($rep in 1..3) {
+              [void][WP]::ShowWindow($h, 9); Start-Sleep -Milliseconds 900
+              [void][WP]::ShowWindow($h, 3); Start-Sleep -Milliseconds 900
+            }
+            Start-Sleep -Seconds 5
+            Add-Content $log "bench $pg end"
+            if ($p.HasExited) { $fails += "$pg : app exited early (code $($p.ExitCode))" } else { Stop-Process -Id $p.Id }
+            Start-Sleep -Seconds 1
+          }
+          Remove-Item Env:RESMON_PERF, Env:RESMON_INSIGHTS_DEMO, Env:RESMON_PAGE -ErrorAction SilentlyContinue
+          if (Test-Path $log) { Select-String -Path $log -Pattern "bench |perf " | ForEach-Object { $_.Line } }
+          if ($fails.Count -gt 0) { $fails | ForEach-Object { Write-Error $_ }; exit 1 }
       - name: Installer
         shell: pwsh
         run: |

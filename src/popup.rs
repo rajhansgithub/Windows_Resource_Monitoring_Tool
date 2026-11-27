@@ -1340,6 +1340,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
     match msg {
         WM_PAINT => {
             if let Some(a) = crate::app::app() {
+                let _p = crate::perf::span("popup_paint");
                 paint(a, hwnd);
             } else {
                 let mut ps = std::mem::zeroed();

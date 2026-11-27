@@ -143,6 +143,17 @@ impl Page {
         }
     }
 
+    /// Span name for the frame-time probe (`perf.rs`).
+    pub fn perf_key(self) -> &'static str {
+        match self {
+            Page::Overview => "draw_overview",
+            Page::Monitor => "draw_monitor",
+            Page::Achievements => "draw_achievements",
+            Page::Incidents | Page::Sleep | Page::HeldBack | Page::Baseline | Page::Ghost => "draw_insights",
+            _ => "draw_settings",
+        }
+    }
+
     pub fn from_key(k: &str) -> Option<Page> {
         Page::ALL.iter().copied().find(|p| p.key().eq_ignore_ascii_case(k.trim()))
     }
