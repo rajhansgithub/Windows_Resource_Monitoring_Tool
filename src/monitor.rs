@@ -64,6 +64,8 @@ pub enum Hit {
     CopyOutages,
     /// Admin-only details: restart the app elevated.
     Elevate,
+    /// "Run as administrator": 0 = the device tabs row, 1 = the drive-scan card.
+    RunAdmin(u8),
     /// Disk page: start (or redo) the "what fills this drive" scan.
     Scan,
     /// Disk page: open this folder of the scan.

@@ -494,6 +494,15 @@ impl Monitor {
             self.hits.push((Rect { l: x, t: y + self.sc(3), r: x + segw, b: y + th - self.sc(3) }, Hit::Range(secs)));
             x += segw;
         }
+        // Not elevated: a standing way to unlock the admin-only details, left of the range control.
+        let first_r = if is_admin() {
+            rx - self.sc(12)
+        } else {
+            let aw = self.sc(172);
+            let b = Rect { l: rx - self.sc(12) - aw, t: y + self.sc(2), r: rx - self.sc(12), b: y + th - self.sc(2) };
+            self.hits.push((b, Hit::RunAdmin(0)));
+            b.l - self.sc(12)
+        };
         self.dp.tabs.clear();
         let mut tx = l;
         let mut ty = y;
@@ -504,7 +513,7 @@ impl Monitor {
         for d in devs {
             let label = dev_label(self, d);
             let tw = crate::render::measure_text(self.tab_font, &label).0 + self.sc(24);
-            let limit = if ty == y0 { rx - self.sc(12) } else { r };
+            let limit = if ty == y0 { first_r } else { r };
             if tx + tw > limit && tx > l {
                 tx = l;
                 ty += th + self.sc(6);
@@ -598,6 +607,9 @@ impl Monitor {
             Card::Space => {
                 // Scan / rescan button in the header, an "up" row, then the folders.
                 self.hits.push((Rect { l: r.r - s(16) - s(96), t: r.t + s(12), r: r.r - s(16), b: r.t + s(36) }, Hit::Scan));
+                if self.dp.scan.is_none() && !is_admin() {
+                    self.hits.push((Rect { l: r.l + s(16), t: r.t + s(46 + 30), r: r.l + s(16) + s(200), b: r.t + s(46 + 30 + 32) }, Hit::RunAdmin(1)));
+                }
                 if self.dp.scan_tree.is_some() {
                     if self.dp.scan_dir != 0 {
                         self.hits.push((Rect { l: r.l + s(8), t: r.t + s(46), r: r.r - s(8), b: r.t + s(46 + 28) }, Hit::FolderUp));
@@ -1384,6 +1396,9 @@ impl Draw<'_> {
             let label = dev_label(m, *dv);
             self.text_c(cv, self.f.small, &label, (t.l + t.r) / 2, (t.t + t.b) / 2, if on || hot { self.col.fg } else { self.col.dim });
         }
+        if let Some(b) = self.hit_rect(Hit::RunAdmin(0)) {
+            self.admin_button(cv, b, Hit::RunAdmin(0));
+        }
         // Range control.
         if let (Some(first), Some(last)) = (self.hit_rect(Hit::Range(RANGES[0].1)), self.hit_rect(Hit::Range(RANGES[2].1))) {
             let r = Rect { l: first.l - self.s(2), t: first.t - self.s(2), r: last.r + self.s(2), b: last.b + self.s(2) };
@@ -2114,7 +2129,12 @@ impl Draw<'_> {
                 Some(p) if p.done => note(cv, p.error.as_deref().unwrap_or("The scan found nothing.")),
                 Some(_) => note(cv, "Reading the drive. Other pages stay live meanwhile."),
                 None if m.st().admin => note(cv, "Find the biggest folders. Takes a few seconds."),
-                None => note(cv, "Find the biggest folders. Much faster when the app runs as administrator."),
+                None => {
+                    note(cv, "Find the biggest folders. Much faster when the app runs as administrator.");
+                    if let Some(b) = self.hit_rect(Hit::RunAdmin(1)) {
+                        self.admin_button(cv, b, Hit::RunAdmin(1));
+                    }
+                }
             }
             return;
         };
@@ -2152,6 +2172,22 @@ impl Draw<'_> {
             let vwid = cv.measure(self.f.cap, &val).0;
             text_mid(cv, self.f.cap, &val, rr - vwid, cy, self.col.fg);
         }
+    }
+
+    /// Accent button that restarts the app elevated, with a small shield.
+    fn admin_button(&self, cv: &mut Canvas, b: Rect, h: Hit) {
+        let hot = self.is_hot(h);
+        cv.fill_round(b, b.h() as f32 / 2.0, if hot { self.col.accent.mix(self.col.fg, 0.15) } else { self.col.accent });
+        let white = Rgba::rgb(255, 255, 255);
+        // Shield: a rounded block narrowing to a point.
+        let (sx, cy) = (b.l + self.s(14), (b.t + b.b) / 2);
+        let (hw, top, mid, bot) = (self.s(5), cy - self.s(6), cy + self.s(1), cy + self.s(7));
+        cv.fill_round(Rect { l: sx - hw, t: top, r: sx + hw, b: mid }, self.sf(1.5), white);
+        for k in 0..(bot - mid) {
+            let w = hw - hw * k / (bot - mid).max(1);
+            cv.fill_rect(Rect { l: sx - w, t: mid + k, r: sx + w, b: mid + k + 1 }, white);
+        }
+        text_mid(cv, self.f.cap, "Run as administrator", b.l + self.s(26), cy, white);
     }
 
     fn traffic_card(&self, cv: &mut Canvas, r: Rect) {
@@ -2248,6 +2284,12 @@ fn chevron_left(cv: &mut Canvas, cx: i32, cy: i32, h: i32, c: Rgba) {
         cv.fill_rect(Rect { l: cx - half + k, t: cy - k, r: cx - half + k + 2, b: cy - k + 1 }, c);
         cv.fill_rect(Rect { l: cx - half + k, t: cy + k, r: cx - half + k + 2, b: cy + k + 1 }, c);
     }
+}
+
+/// The app runs elevated (checked once).
+fn is_admin() -> bool {
+    static A: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *A.get_or_init(crate::sensors::deep::reader::elevated)
 }
 
 /// Local time minus UTC, seconds (DST included).
