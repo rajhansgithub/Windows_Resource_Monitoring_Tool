@@ -194,6 +194,8 @@ pub struct Settings {
     pub window: Option<crate::nav::Placement>,
     /// Main window page last shown (`nav::Page::key`); empty = none yet.
     pub window_page: String,
+    /// Monitor page: processes grouped by app (chrome.exe ×56 → one "Google Chrome" row).
+    pub proc_groups: bool,
 }
 
 impl Default for Settings {
@@ -249,6 +251,7 @@ impl Default for Settings {
             first_run: true,
             window: None,
             window_page: String::new(),
+            proc_groups: true,
         }
     }
 }
@@ -430,6 +433,7 @@ impl Settings {
                 "alert_cap" => self.alert_cap = parse_bool(v).unwrap_or(self.alert_cap),
                 "window" => self.window = crate::nav::Placement::parse(v).or(self.window),
                 "window_page" => self.window_page = v.to_string(),
+                "proc_groups" => self.proc_groups = parse_bool(v).unwrap_or(self.proc_groups),
                 "max_width_pct" => {
                     self.max_width_pct = v.parse().map(|x: u32| x.min(90)).unwrap_or(self.max_width_pct)
                 }
@@ -616,6 +620,7 @@ impl Settings {
         for (k, v) in &self.offsets {
             o.push_str(&format!("dock_offset.{} = {}\n", k, v));
         }
+        o.push_str(&format!("\n# Monitor page: 1 = processes grouped by app\nproc_groups = {}\n", b(self.proc_groups)));
         if self.window.is_some() || !self.window_page.is_empty() {
             o.push_str("\n# Main window: x,y,width,height,maximized (screen pixels) and the last page\n");
             if let Some(w) = &self.window {
@@ -658,6 +663,9 @@ mod tests {
         s.apply("window = 10,20,1200,800,1\nwindow_page = alerts\n");
         assert_eq!(s.window.map(|w| (w.x, w.y, w.w, w.h, w.max)), Some((10, 20, 1200, 800, true)));
         assert_eq!(s.window_page, "alerts");
+        assert!(s.proc_groups, "grouped by default");
+        s.apply("proc_groups = 0\n");
+        assert!(!s.proc_groups);
         // Garbage keeps the last good value.
         s.apply("window = nonsense\n");
         assert!(s.window.is_some());

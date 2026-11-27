@@ -3464,6 +3464,24 @@ fn activate(hwnd: HWND, id: i32) {
                 u.refresh_hover();
                 invalidate(hwnd);
             }
+            Some(MonHit::Grouping) => {
+                let on = u.mon.toggle_grouped();
+                u.layout();
+                u.refresh_hover();
+                invalidate(hwnd);
+                if let Some(a) = app() {
+                    if a.m.s.proc_groups != on {
+                        a.m.s.proc_groups = on;
+                        a.save_settings();
+                    }
+                }
+            }
+            Some(MonHit::App(i)) => {
+                u.mon.toggle_open(i);
+                u.layout();
+                u.refresh_hover();
+                invalidate(hwnd);
+            }
             Some(MonHit::Proc(pid)) => crate::popup::proc_menu(pid),
             Some(MonHit::TaskMgr) => shell_open("taskmgr.exe", None),
             Some(MonHit::ResMon) => shell_open("resmon.exe", None),

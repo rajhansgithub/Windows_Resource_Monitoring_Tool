@@ -26,6 +26,7 @@ mod pdh;
 mod perf;
 mod power;
 mod procs;
+pub mod appname;
 mod volume;
 pub mod worker;
 
