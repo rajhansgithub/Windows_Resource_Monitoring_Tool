@@ -803,8 +803,9 @@ fn sharpen_lut() -> &'static [u8; 256] {
 /// Pixel columns `[x0, x1)` within `[bl, br)` whose centres lie in `[lo, hi]`.
 /// What is left, `[bl, x0)` and `[x1, br)`, is shaded per pixel.
 fn mid_span(lo: f32, hi: f32, bl: i32, br: i32) -> (i32, i32) {
-    let x0 = ((lo - 0.5).ceil() as i32).clamp(bl, br);
-    let x1 = ((hi - 0.5).floor() as i32 + 1).clamp(x0, br);
+    let br = br.max(bl);
+    let x0 = ((lo - 0.5).ceil() as i32).max(bl).min(br);
+    let x1 = ((hi - 0.5).floor() as i32 + 1).max(x0).min(br);
     (x0, x1)
 }
 
@@ -813,21 +814,26 @@ fn mid_span(lo: f32, hi: f32, bl: i32, br: i32) -> (i32, i32) {
 fn annulus_spans(cx: f32, dy: f32, ri: f32, ro: f32, bl: i32, br: i32) -> [(i32, i32); 2] {
     let none = [(bl, bl), (bl, bl)];
     let dy2 = dy * dy;
-    if ro <= 0.0 || dy2 >= ro * ro {
+    if ro <= 0.0 || dy2 >= ro * ro || bl >= br {
         return none;
     }
     let xo = (ro * ro - dy2).sqrt();
     let col = |v: f32| (v - 0.5).floor() as i32;
     let (ol, or) = (col(cx - xo).max(bl), (col(cx + xo) + 2).min(br));
+    if ol >= or {
+        return none;
+    }
+    // In [ol, or]; never panics (unlike clamp with crossed bounds).
+    let within = |v: i32| v.max(ol).min(or);
     if ri > 1.0 && dy2 < (ri - 1.0) * (ri - 1.0) {
         // Leave out the hole (shrunk a pixel so no edge pixel is skipped).
         let xi = ((ri - 1.0) * (ri - 1.0) - dy2).sqrt();
         let (il, ir) = (col(cx - xi) + 1, col(cx + xi));
         if il < ir {
-            return [(ol, il.clamp(ol, or)), (ir.clamp(ol, or), or)];
+            return [(ol, within(il)), (within(ir), or)];
         }
     }
-    [(ol, or.max(ol)), (bl, bl)]
+    [(ol, or), (bl, bl)]
 }
 
 /// Source-over of `c` (straight alpha) at coverage `cov` on every pixel of a row
@@ -1383,9 +1389,11 @@ mod tests {
     #[test]
     fn fast_circles_match_per_pixel_reference() {
         for c in COLS {
-            for (cx, cy, r, th) in [(60.0f32, 50.0f32, 30.0f32, 6.0f32), (100.3, 80.7, 44.5, 9.0), (10.0, 10.0, 25.0, 4.0), (120.0, 90.0, 3.0, 3.0), (50.5, 60.5, 0.6, 1.0)] {
-                for frac in [0.0f32, 0.1, 0.5, 0.77, 1.0] {
+            for (cx, cy, r, th) in [(-40.0f32, 50.0f32, 30.0f32, 6.0f32), (260.0, 50.0, 30.0, 6.0), (100.0, -60.0, 40.0, 5.0), (195.0, 155.0, 30.0, 8.0), (60.0f32, 50.0f32, 30.0f32, 6.0f32), (100.3, 80.7, 44.5, 9.0), (10.0, 10.0, 25.0, 4.0), (120.0, 90.0, 3.0, 3.0), (50.5, 60.5, 0.6, 1.0)] {
+                for (frac, clip) in [(0.0f32, None), (0.1, None), (0.5, Some(Rect { l: 70, t: 0, r: 120, b: 160 })), (0.77, Some(Rect { l: 150, t: 40, r: 200, b: 60 })), (1.0, None), (1.0, Some(Rect { l: 0, t: 0, r: 30, b: 160 }))] {
                     let (mut a, mut b) = pair(200, 160);
+                    a.set_clip(clip);
+                    b.set_clip(clip);
                     a.ring(cx, cy, r, th, frac, c);
                     b.ref_ring(cx, cy, r, th, frac, c);
                     same(&mut a, &mut b, &format!("ring {cx} {cy} {r} {th} {frac}"));
@@ -1395,6 +1403,8 @@ mod tests {
                     same(&mut a, &mut b, &format!("arc {cx} {cy} {r} {th} {a0} {a1}"));
                 }
                 let (mut a, mut b) = pair(200, 160);
+                a.set_clip(Some(Rect { l: 50, t: 10, r: 90, b: 150 }));
+                b.set_clip(Some(Rect { l: 50, t: 10, r: 90, b: 150 }));
                 a.fill_disc(cx, cy, r, c);
                 b.ref_fill_disc(cx, cy, r, c);
                 same(&mut a, &mut b, &format!("disc {cx} {cy} {r}"));
