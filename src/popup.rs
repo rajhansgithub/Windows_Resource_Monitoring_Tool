@@ -318,8 +318,9 @@ pub fn reposition(a: &mut App) {
     let (w, h) = size(a);
     let Some((anchor, tb, _)) = a.anchor() else { return };
     let g = sc(a, 10.0);
-    // Half gap on the taskbar side so the popup sits close to the strip it opened from.
-    let tg = sc(a, 5.0);
+    // Taskbar side: a fixed 5 px at every DPI (the 100% look), so the popup
+    // sits close to the strip it opened from.
+    let tg = 5;
     let center = POINT { x: (anchor.l + anchor.r) / 2, y: (anchor.t + anchor.b) / 2 };
     let work = crate::taskbar::monitor_info(unsafe { MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST) })
         .map_or(tb.work, |m| m.1);
