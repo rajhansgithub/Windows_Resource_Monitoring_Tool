@@ -571,7 +571,10 @@ jobs:
             $bmp = New-Object System.Drawing.Bitmap $img, ([int]($img.Width * $sc)), ([int]($img.Height * $sc))
             $ms = New-Object System.IO.MemoryStream
             $bmp.Save($ms, $enc, $ep)
-            Write-Output ("B64 " + $_.Name + " " + [Convert]::ToBase64String($ms.ToArray()))
+            $b64 = [Convert]::ToBase64String($ms.ToArray())
+            Write-Output ("B64_BEGIN " + $_.Name)
+            for ($i = 0; $i -lt $b64.Length; $i += 4000) { Write-Output $b64.Substring($i, [Math]::Min(4000, $b64.Length - $i)) }
+            Write-Output "B64_END"
             $img.Dispose()
           }
           if ($fails.Count -gt 0) { $fails | ForEach-Object { Write-Error $_ }; exit 1 }
