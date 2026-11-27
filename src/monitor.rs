@@ -12,12 +12,13 @@ use crate::fmt;
 use crate::insights::view::{Colors, Fonts};
 use crate::popup::{avatar_col, dial, log_frac};
 use crate::render::{Canvas, Rgba};
+use crate::sensors::appname;
 use crate::sensors::detail::{ghz, Detail, ProcRow};
 use crate::sensors::Snapshot;
 use crate::settings::Metric;
 use crate::usage;
 use crate::util::Rect;
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Process rows shown.
 const TOPN: usize = 14;
@@ -27,6 +28,8 @@ const RANGES: [(&str, usize); 3] = [("1m", 60), ("5m", 300), ("1h", 3600)];
 const SORTS: [&str; 5] = ["CPU", "Memory", "Disk", "GPU", "Name"];
 /// Reflow animation length, seconds.
 const MOVE_S: f32 = 0.34;
+/// App names looked up per tick (each reads one executable's version resource).
+const NAMES_PER_TICK: usize = 6;
 
 /// What a click on the page does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +43,10 @@ pub enum Hit {
     Pause,
     /// Top rows / every process.
     ShowAll,
+    /// Group processes by app / list every process on its own.
+    Grouping,
+    /// Open / close the app group on this row (index into the rows).
+    App(u32),
     Proc(u32),
     TaskMgr,
     ResMon,
@@ -82,6 +89,36 @@ fn ease(t: f32) -> f32 {
 fn lerp_rect(a: Rect, b: Rect, t: f32) -> Rect {
     let f = |x: i32, y: i32| x + ((y - x) as f32 * t).round() as i32;
     Rect { l: f(a.l, b.l), t: f(a.t, b.t), r: f(a.r, b.r), b: f(a.b, b.b) }
+}
+
+/// One row of the process table: a process, an app group, or a process inside an open group.
+#[derive(Clone, Debug, Default)]
+struct Line {
+    /// Values; summed over the processes of a group (`pid` is then the first one's).
+    p: ProcRow,
+    /// Group key: the image name, lower case.
+    key: String,
+    /// Shown name: the app's description when grouped ("Google Chrome"), else the image name.
+    title: String,
+    /// Processes in this row (more than 1: an app group).
+    n: u32,
+    /// A process inside an open group.
+    child: bool,
+    /// An open group (its processes follow).
+    open: bool,
+}
+
+impl Line {
+    fn group(&self) -> bool {
+        self.n > 1 && !self.child
+    }
+}
+
+/// What keeps a row's place while the order is held.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Pin {
+    Pid(u32),
+    App(String),
 }
 
 /// History of one named device (two traces).
@@ -132,8 +169,20 @@ pub struct Monitor {
     pub paused: bool,
     /// Every process instead of the top rows.
     pub all: bool,
+    /// Processes grouped by app (saved in the settings).
+    pub grouped: bool,
+    /// `grouped` taken from the settings yet.
+    grouped_init: bool,
+    /// Open app groups (keys).
+    open: HashSet<String>,
+    /// App names by group key; looked up a few per tick.
+    names: HashMap<String, String>,
+    /// Failed name lookups by key (gives up after a few).
+    name_fails: HashMap<String, u8>,
+    /// Apps (groups) in the last sample.
+    apps: usize,
     /// Row order while paused.
-    pinned: Vec<u32>,
+    pinned: Vec<Pin>,
     /// Animate reflows (system animation setting).
     pub motion: bool,
     /// Reflow animation: start and where each card was.
@@ -162,7 +211,7 @@ pub struct Monitor {
     /// Last 14 days (recv, sent), oldest first; month total.
     days: Vec<(u64, u64)>,
     month: u64,
-    top: Vec<ProcRow>,
+    top: Vec<Line>,
     has_data: bool,
     // ---- layout (content coordinates)
     l: i32,
@@ -181,6 +230,12 @@ impl Monitor {
             asc: false,
             paused: false,
             all: false,
+            grouped: true,
+            grouped_init: false,
+            open: HashSet::new(),
+            names: HashMap::new(),
+            name_fails: HashMap::new(),
+            apps: 0,
             pinned: Vec::new(),
             motion: true,
             anim: None,
@@ -298,9 +353,50 @@ impl Monitor {
         days.reverse();
         self.days = days;
 
+        if !self.grouped_init {
+            self.grouped_init = true;
+            self.grouped = a.m.s.proc_groups;
+        }
+        if self.grouped {
+            self.lookup_names();
+        }
         self.sort_top();
         self.has_data = true;
         shape != self.shape()
+    }
+
+    /// Look up the friendly names of a few apps not named yet.
+    fn lookup_names(&mut self) {
+        let mut todo: Vec<(String, u32)> = Vec::new();
+        for p in &self.det.procs {
+            if todo.len() >= NAMES_PER_TICK {
+                break;
+            }
+            let k = p.name.to_lowercase();
+            if !self.names.contains_key(&k) && !todo.iter().any(|t| t.0 == k) {
+                todo.push((k, p.pid));
+            }
+        }
+        for (k, pid) in todo {
+            match appname::describe(pid) {
+                Some(n) => {
+                    self.names.insert(k, n);
+                }
+                None => {
+                    // Another process of the app may be readable next tick; give up after 3.
+                    let f = self.name_fails.entry(k.clone()).or_insert(0);
+                    *f += 1;
+                    if *f >= 3 {
+                        let bare = self.det.procs.iter().find(|p| p.name.eq_ignore_ascii_case(&k)).map_or(k.clone(), |p| appname::bare(&p.name).to_string());
+                        self.names.insert(k, bare);
+                    }
+                }
+            }
+        }
+    }
+
+    fn title_of(&self, name: &str, key: &str) -> String {
+        self.names.get(key).cloned().unwrap_or_else(|| appname::bare(name).to_string())
     }
 
     /// Sort by key `k` (0 CPU, 1 memory, 2 disk, 3 GPU, 4 name, 5 threads, 6 PID); the
@@ -328,6 +424,32 @@ impl Monitor {
         self.resort();
     }
 
+    /// Group by app / flat list. Returns the new state (to save).
+    pub fn toggle_grouped(&mut self) -> bool {
+        self.grouped = !self.grouped;
+        self.grouped_init = true;
+        self.pinned.clear();
+        if self.grouped {
+            self.lookup_names();
+        }
+        self.resort();
+        self.grouped
+    }
+
+    /// Open or close the app group on row `i`.
+    pub fn toggle_open(&mut self, i: u32) {
+        let Some(l) = self.top.get(i as usize).filter(|l| l.group()) else { return };
+        let k = l.key.clone();
+        if !self.open.remove(&k) {
+            self.open.insert(k);
+        }
+        // Keep the held order; only the children change.
+        let p = self.paused;
+        self.paused = !self.pinned.is_empty();
+        self.sort_top();
+        self.paused = p;
+    }
+
     /// Re-sort now, even while paused (the user asked for a new order).
     fn resort(&mut self) {
         let p = self.paused;
@@ -337,13 +459,77 @@ impl Monitor {
     }
 
     fn sort_top(&mut self) {
-        if self.paused && !self.pinned.is_empty() {
-            let by: std::collections::HashMap<u32, &ProcRow> = self.det.procs.iter().map(|p| (p.pid, p)).collect();
-            self.top = self.pinned.iter().filter_map(|pid| by.get(pid).map(|p| (*p).clone())).collect();
-            return;
+        // Top-level rows: one per app when grouped, else one per process.
+        let lines: Vec<Line> = if self.grouped {
+            let mut by: HashMap<String, usize> = HashMap::new();
+            let mut v: Vec<Line> = Vec::new();
+            for p in &self.det.procs {
+                let k = p.name.to_lowercase();
+                match by.get(&k) {
+                    Some(&i) => {
+                        let g = &mut v[i];
+                        g.n += 1;
+                        g.p.cpu = (g.p.cpu + p.cpu).min(100.0);
+                        g.p.mem += p.mem;
+                        g.p.io += p.io;
+                        g.p.gpu = (g.p.gpu + p.gpu).min(100.0);
+                        g.p.threads += p.threads;
+                    }
+                    None => {
+                        by.insert(k.clone(), v.len());
+                        let title = self.title_of(&p.name, &k);
+                        v.push(Line { p: p.clone(), key: k, title, n: 1, ..Line::default() });
+                    }
+                }
+            }
+            v
+        } else {
+            self.det.procs.iter().map(|p| Line { p: p.clone(), key: p.name.to_lowercase(), title: p.name.clone(), n: 1, ..Line::default() }).collect()
+        };
+        self.apps = lines.len();
+        let pin = |l: &Line| if self.grouped { Pin::App(l.key.clone()) } else { Pin::Pid(l.p.pid) };
+        let tops: Vec<Line> = if self.paused && !self.pinned.is_empty() {
+            let mut by: HashMap<Pin, Line> = lines.into_iter().map(|l| (pin(&l), l)).collect();
+            self.pinned.iter().filter_map(|k| by.remove(k)).collect()
+        } else {
+            let mut v = lines;
+            self.order(&mut v);
+            let n = if self.all { v.len() } else { TOPN };
+            v.truncate(n);
+            self.pinned = v.iter().map(pin).collect();
+            v
+        };
+        // Open groups list their processes right below.
+        let mut out = Vec::with_capacity(tops.len());
+        for mut l in tops {
+            if !(l.group() && self.open.contains(&l.key)) {
+                out.push(l);
+                continue;
+            }
+            l.open = true;
+            let key = l.key.clone();
+            out.push(l);
+            let mut kids: Vec<Line> = self
+                .det
+                .procs
+                .iter()
+                .filter(|p| p.name.to_lowercase() == key)
+                .map(|p| Line { p: p.clone(), key: key.clone(), title: p.name.clone(), n: 1, child: true, open: false })
+                .collect();
+            if self.paused {
+                kids.sort_by_key(|k| k.p.pid);
+            } else {
+                self.order(&mut kids);
+            }
+            out.extend(kids);
         }
-        let mut v: Vec<&ProcRow> = self.det.procs.iter().collect();
-        let num = |p: &ProcRow| -> f64 {
+        self.top = out;
+    }
+
+    /// Sort rows by the current key and direction.
+    fn order(&self, v: &mut [Line]) {
+        let num = |l: &Line| -> f64 {
+            let p = &l.p;
             match self.sort {
                 1 => p.mem as f64,
                 2 => p.io,
@@ -354,17 +540,14 @@ impl Monitor {
             }
         };
         if self.sort == 4 {
-            v.sort_by_cached_key(|p| (p.name.to_lowercase(), p.pid));
+            v.sort_by_cached_key(|l| (l.title.to_lowercase(), l.p.pid));
         } else {
             // Ascending, ties by memory; reversed below for "largest first".
-            v.sort_by(|a, b| num(a).partial_cmp(&num(b)).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.mem.cmp(&b.mem)));
+            v.sort_by(|a, b| num(a).partial_cmp(&num(b)).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.p.mem.cmp(&b.p.mem)));
         }
         if !self.asc {
             v.reverse();
         }
-        let n = if self.all { v.len() } else { TOPN };
-        self.top = v.into_iter().take(n).cloned().collect();
-        self.pinned = self.top.iter().map(|p| p.pid).collect();
     }
 
     /// Process rows the table is laid out for.
@@ -372,7 +555,7 @@ impl Monitor {
         if self.all {
             self.top.len().max(1)
         } else {
-            TOPN
+            TOPN + self.top.iter().filter(|l| l.child).count()
         }
     }
 
@@ -624,7 +807,10 @@ impl Monitor {
         let (l, rr) = (r.l + s(16), r.r - s(16));
         let gap = s(12);
         let full = r.w() >= s(900);
-        let fixed = s(22) + if full { 2 * s(58) } else { 0 };
+        // Grouped: a chevron slot before the avatar.
+        let chev = if self.grouped { s(16) } else { 0 };
+        let l = l + chev;
+        let fixed = s(22) + chev + if full { 2 * s(58) } else { 0 };
         let flex: Vec<f32> = if full { vec![1.4, 1.0, 1.0, 1.0, 0.7] } else { vec![1.4, 1.0, 1.0, 1.0] };
         let ncol = 1 + flex.len() + if full { 2 } else { 0 };
         let room = (rr - l - fixed - gap * (ncol as i32 - 1)).max(0) as f32;
@@ -656,7 +842,9 @@ impl Monitor {
         let tw = if r.w() < s(700) { s(60) } else { s(70) };
         let mut x = r.r - s(16) - tw * SORTS.len() as i32 - s(4);
         let t = r.t + s(14);
-        self.hits.push((Rect { l: x - s(12) - s(84), t, r: x - s(12), b: t + s(22) }, Hit::Pause));
+        let pl = x - s(12) - s(84);
+        self.hits.push((Rect { l: pl - s(8) - s(30), t, r: pl - s(8), b: t + s(22) }, Hit::Grouping));
+        self.hits.push((Rect { l: pl, t, r: x - s(12), b: t + s(22) }, Hit::Pause));
         for i in 0..SORTS.len() as u8 {
             self.hits.push((Rect { l: x, t, r: x + tw, b: t + s(22) }, Hit::Tab(i)));
             x += tw;
@@ -675,9 +863,9 @@ impl Monitor {
             self.hits.push((Rect { l: *l, t: ht, r: *rr, b: ht + s(28) }, Hit::Sort(k)));
         }
         let mut y = ht + s(28) + s(4);
-        let pids: Vec<u32> = self.top.iter().map(|p| p.pid).collect();
-        for pid in pids {
-            self.hits.push((Rect { l: r.l + s(8), t: y, r: r.r - s(8), b: y + s(30) }, Hit::Proc(pid)));
+        let rows: Vec<Hit> = self.top.iter().enumerate().map(|(i, l)| if l.group() { Hit::App(i as u32) } else { Hit::Proc(l.p.pid) }).collect();
+        for h in rows {
+            self.hits.push((Rect { l: r.l + s(8), t: y, r: r.r - s(8), b: y + s(30) }, h));
             y += s(30);
         }
         // Footer: show all on the left, links on the right.
@@ -918,6 +1106,27 @@ impl Draw<'_> {
             let x = l + cx * (tw + g);
             let r = Rect { l: x, t: t + cy * (th + g), r: if cx == cols - 1 { l + w } else { x + tw }, b: t + cy * (th + g) + th };
             self.kv(cv, r, k, v);
+        }
+    }
+
+    /// Tree icon of the group toggle: an app bar with two processes hung under it
+    /// (open) or three flat rows (a plain list).
+    fn group_icon(&self, cv: &mut Canvas, cx: i32, cy: i32, tree: bool, c: Rgba) {
+        let s = |v: i32| self.s(v);
+        let bh = s(2).max(2);
+        let (l, r) = (cx - s(7), cx + s(7));
+        if tree {
+            cv.fill_rect(Rect { l, t: cy - s(5), r, b: cy - s(5) + bh }, c);
+            let gx = l + s(2);
+            cv.fill_rect(Rect { l: gx, t: cy - s(5), r: gx + s(1).max(1), b: cy + s(4) + bh / 2 }, c.with_a(170));
+            for t in [cy, cy + s(4)] {
+                cv.fill_rect(Rect { l: gx, t: t + bh / 2 - 1, r: l + s(5), b: t + bh / 2 }, c.with_a(170));
+                cv.fill_rect(Rect { l: l + s(5), t: t - bh / 2 + 1, r, b: t - bh / 2 + 1 + bh }, c);
+            }
+        } else {
+            for t in [cy - s(5), cy - s(1), cy + s(3)] {
+                cv.fill_rect(Rect { l, t, r, b: t + bh }, c);
+            }
         }
     }
 
@@ -1713,8 +1922,15 @@ impl Draw<'_> {
         let count = if d.processes > 0 { d.processes as usize } else { d.procs.len() };
         let tabs: Vec<Rect> = (0..SORTS.len() as u8).filter_map(|i| self.hit_rect(Hit::Tab(i))).collect();
         let pause = self.hit_rect(Hit::Pause);
-        let right = pause.map_or(r.r, |p| p.l);
-        let sub = if m.all { format!("All {}", m.top.len()) } else { format!("Top {} of {}", m.top.len(), count) };
+        let grp = self.hit_rect(Hit::Grouping);
+        let right = grp.or(pause).map_or(r.r, |p| p.l);
+        let shown = m.top.iter().filter(|l| !l.child).count();
+        let sub = match (m.grouped, m.all) {
+            (true, true) => format!("All {} apps \u{00B7} {} processes", m.apps, count),
+            (true, false) => format!("Top {} of {} apps \u{00B7} {} processes", shown, m.apps, count),
+            (false, true) => format!("All {}", shown),
+            (false, false) => format!("Top {} of {}", shown, count),
+        };
         let sub = if m.paused { format!("{sub} \u{00B7} order held") } else { sub };
         let y = self.header(cv, r, "Processes", &sub, r.r - right);
         let tab_cols = [self.acc(Metric::Cpu), self.acc(Metric::Ram), self.acc(Metric::DiskRead), self.acc(Metric::Gpu), self.col.fg.with_a(150)];
@@ -1760,6 +1976,14 @@ impl Draw<'_> {
             }
             text_mid(cv, self.f.small, label, x + iw + self.s(6), cy, fg);
         }
+        // Group by app: one click on the small tree icon.
+        if let Some(p) = grp {
+            let hot = self.is_hot(Hit::Grouping);
+            let acc = self.col.accent;
+            let (bg, fg) = if m.grouped { (acc.with_a(if self.dark() { 60 } else { 44 }), acc) } else { (self.sub, if hot { self.col.fg } else { self.col.dim }) };
+            cv.fill_round(p, p.h() as f32 / 2.0, if hot && !m.grouped { self.col.fg.with_a(if self.dark() { 26 } else { 22 }) } else { bg });
+            self.group_icon(cv, (p.l + p.r) / 2, (p.t + p.b) / 2, m.grouped, fg);
+        }
         let cols = m.proc_cols(r);
         let ht = y;
         let names = ["", "NAME", "CPU", "MEMORY", "DISK", "GPU", "THREADS", "PID"];
@@ -1790,29 +2014,60 @@ impl Draw<'_> {
             }
         }
         cv.fill_rect(Rect { l: r.l + self.s(16), t: ht + self.s(27), r: r.r - self.s(16), b: ht + self.s(28) }, self.col.card_border);
-        let mx = |f: &dyn Fn(&ProcRow) -> f64, floor: f64| m.top.iter().map(f).fold(floor, f64::max);
+        // Bars scale to the top-level rows (a group's sum is the largest of its processes).
+        let mx = |f: &dyn Fn(&ProcRow) -> f64, floor: f64| m.top.iter().map(|l| f(&l.p)).fold(floor, f64::max);
         let max_cpu = mx(&|p| f64::from(p.cpu), 10.0);
         let max_mem = mx(&|p| p.mem as f64, 1.0);
         let max_io = mx(&|p| p.io, 64.0 * 1024.0);
         let max_gpu = mx(&|p| f64::from(p.gpu), 10.0);
         let mut y = ht + self.s(32);
-        for p in &m.top {
+        let chev_x = r.l + self.s(16);
+        for (i, ln) in m.top.iter().enumerate() {
+            let p = &ln.p;
             let row = Rect { l: r.l + self.s(8), t: y, r: r.r - self.s(8), b: y + self.s(30) };
-            if self.is_hot(Hit::Proc(p.pid)) {
+            // An open group and its processes sit on one soft band.
+            if ln.open {
+                let kids = m.top[i + 1..].iter().take_while(|l| l.child).count() as i32;
+                let band = Rect { b: row.b + kids * self.s(30), ..row };
+                cv.fill_round(band, self.sf(6.0), self.col.fg.with_a(if self.dark() { 7 } else { 9 }));
+            }
+            let hit = if ln.group() { Hit::App(i as u32) } else { Hit::Proc(p.pid) };
+            if self.is_hot(hit) {
                 cv.fill_round(row, self.sf(5.0), self.sub);
             }
             let cy = y + self.s(15);
+            if ln.group() {
+                let c = if self.is_hot(hit) { self.col.fg } else { self.col.dim };
+                chevron(cv, chev_x + self.s(5), cy, self.s(4), ln.open, c);
+            } else if ln.child {
+                // Tree guide from the group's chevron.
+                let gx = chev_x + self.s(5);
+                let last = !m.top.get(i + 1).is_some_and(|l| l.child);
+                let gb = if last { cy } else { row.b };
+                cv.fill_rect(Rect { l: gx, t: row.t, r: gx + 1, b: gb }, self.col.card_border);
+                cv.fill_rect(Rect { l: gx, t: cy, r: gx + self.s(9), b: cy + 1 }, self.col.card_border);
+            }
             for (c, l, rr) in &cols {
                 match c {
                     0 => {
-                        let a = Rect { l: *l, t: cy - self.s(11), r: *l + self.s(22), b: cy + self.s(11) };
-                        cv.fill_round(a, self.sf(6.0), avatar_col(&p.name));
-                        let ch: String = p.name.chars().next().map_or(String::from("?"), |c| c.to_uppercase().collect());
-                        self.text_c(cv, self.f.cap, &ch, (a.l + a.r) / 2, cy, Rgba::rgb(17, 17, 17));
+                        let (sz, off) = if ln.child { (self.s(16), self.s(6)) } else { (self.s(22), 0) };
+                        let a = Rect { l: *l + off, t: cy - sz / 2, r: *l + off + sz, b: cy - sz / 2 + sz };
+                        cv.fill_round(a, self.sf(if ln.child { 4.5 } else { 6.0 }), avatar_col(&p.name));
+                        let ch: String = ln.title.chars().next().map_or(String::from("?"), |c| c.to_uppercase().collect());
+                        let font = if ln.child { self.f.tiny } else { self.f.cap };
+                        self.text_c(cv, font, &ch, (a.l + a.r) / 2, cy, Rgba::rgb(17, 17, 17));
                     }
                     1 => {
-                        let n = cv.ellipsize(self.f.small, &p.name, rr - l);
-                        text_mid(cv, self.f.small, &n, *l, cy, self.col.fg);
+                        let w = rr - l;
+                        let count = if ln.group() { format!("({})", ln.n) } else { String::new() };
+                        let cw = if count.is_empty() { 0 } else { cv.measure(self.f.small, &count).0 + self.s(6) };
+                        let n = cv.ellipsize(self.f.small, &ln.title, (w - cw).max(self.s(20)));
+                        let fg = if ln.child { self.col.fg.with_a(200) } else { self.col.fg };
+                        text_mid(cv, self.f.small, &n, *l, cy, fg);
+                        if cw > 0 {
+                            let nw = cv.measure(self.f.small, &n).0;
+                            text_mid(cv, self.f.small, &count, *l + nw + self.s(6), cy, self.col.dim);
+                        }
                     }
                     2..=5 => {
                         let (f, t, c2) = match c {
@@ -1833,8 +2088,11 @@ impl Draw<'_> {
                         cv.text_right(self.f.small, &t, *rr, cy - cv.measure(self.f.small, &t).1 / 2, self.col.dim);
                     }
                     _ => {
-                        let t = p.pid.to_string();
-                        cv.text_right(self.f.small, &t, *rr, cy - cv.measure(self.f.small, &t).1 / 2, self.col.dim);
+                        // A group has many PIDs: show none.
+                        if !ln.group() {
+                            let t = p.pid.to_string();
+                            cv.text_right(self.f.small, &t, *rr, cy - cv.measure(self.f.small, &t).1 / 2, self.col.dim);
+                        }
                     }
                 }
             }
@@ -1844,7 +2102,11 @@ impl Draw<'_> {
             self.text_c(cv, self.f.small, "Collecting\u{2026}", (r.l + r.r) / 2, y + self.s(40), self.col.dim);
         }
         if let Some(t) = self.hit_rect(Hit::ShowAll) {
-            let label = if m.all { "Show top 14".to_string() } else { format!("Show all {count}") };
+            let label = match (m.all, m.grouped) {
+                (true, _) => format!("Show top {TOPN}"),
+                (false, true) => format!("Show all {} apps", m.apps),
+                (false, false) => format!("Show all {count}"),
+            };
             let c = if self.is_hot(Hit::ShowAll) { self.col.accent.mix(self.col.fg, 0.25) } else { self.col.accent };
             text_mid(cv, self.f.small, &label, t.l, (t.t + t.b) / 2, c);
         }
@@ -1854,6 +2116,18 @@ impl Draw<'_> {
                 let tw = cv.measure(self.f.small, label).0;
                 text_mid(cv, self.f.small, label, t.r - tw, (t.t + t.b) / 2, c);
             }
+        }
+    }
+}
+
+/// Small solid chevron: pointing right (closed) or down (open), centred on `cx, cy`.
+fn chevron(cv: &mut Canvas, cx: i32, cy: i32, h: i32, down: bool, c: Rgba) {
+    for k in 0..h {
+        let half = h - k;
+        if down {
+            cv.fill_rect(Rect { l: cx - half, t: cy - h / 2 + k, r: cx + half, b: cy - h / 2 + k + 1 }, c);
+        } else {
+            cv.fill_rect(Rect { l: cx - h / 2 + k, t: cy - half, r: cx - h / 2 + k + 1, b: cy + half }, c);
         }
     }
 }
@@ -2004,5 +2278,80 @@ mod tests {
         };
         assert_eq!(count(600), 1);
         assert!(count(1500) >= 2);
+    }
+
+    fn pr(pid: u32, name: &str, cpu: f32, mb: u64) -> ProcRow {
+        ProcRow { pid, name: name.into(), cpu, mem: mb << 20, threads: 10, ..ProcRow::default() }
+    }
+
+    fn sample() -> Monitor {
+        let mut m = Monitor::new();
+        m.det.procs = vec![
+            pr(10, "chrome.exe", 1.0, 300),
+            pr(11, "chrome.exe", 2.0, 200),
+            pr(12, "Chrome.exe", 0.5, 100),
+            pr(20, "Code.exe", 5.0, 400),
+            pr(30, "explorer.exe", 0.1, 50),
+        ];
+        m.sort = 1; // memory, largest first
+        m
+    }
+
+    #[test]
+    fn groups_sum_by_app() {
+        let mut m = sample();
+        m.names.insert("chrome.exe".into(), "Google Chrome".into());
+        m.sort_top();
+        assert_eq!(m.apps, 3);
+        let g = &m.top[0];
+        assert!(g.group());
+        assert_eq!((g.title.as_str(), g.n), ("Google Chrome", 3));
+        assert_eq!(g.p.mem, 600 << 20);
+        assert!((g.p.cpu - 3.5).abs() < 1e-4);
+        assert_eq!(g.p.threads, 30);
+        assert_eq!(m.top[1].title, "Code", "unnamed apps show the bare image name");
+        assert!(!m.top[1].group());
+        assert_eq!(m.top.len(), 3);
+    }
+
+    #[test]
+    fn open_group_lists_its_processes() {
+        let mut m = sample();
+        m.sort_top();
+        m.toggle_open(0);
+        assert!(m.top[0].open);
+        let kids: Vec<u32> = m.top[1..4].iter().map(|l| (l.child as u32) * l.p.pid).collect();
+        assert_eq!(kids, vec![10, 11, 12], "children sorted by memory");
+        assert!(!m.top[4].child);
+        assert_eq!(m.rows(), TOPN + 3);
+        // Closing it again.
+        m.toggle_open(0);
+        assert_eq!(m.top.len(), 3);
+        // A non-group row does nothing.
+        m.toggle_open(2);
+        assert_eq!(m.top.len(), 3);
+    }
+
+    #[test]
+    fn flat_list_when_ungrouped() {
+        let mut m = sample();
+        assert!(!m.toggle_grouped());
+        assert_eq!(m.top.len(), 5);
+        assert!(m.top.iter().all(|l| l.n == 1 && !l.child));
+        assert_eq!(m.top[0].p.pid, 20);
+        assert!(m.toggle_grouped());
+        assert_eq!(m.top.len(), 3);
+    }
+
+    #[test]
+    fn held_order_keeps_groups_in_place() {
+        let mut m = sample();
+        m.sort_top();
+        m.toggle_pause();
+        // Explorer suddenly uses the most memory; the order stays.
+        m.det.procs[4].mem = 9 << 30;
+        m.sort_top();
+        assert_eq!(m.top.iter().map(|l| l.key.as_str()).collect::<Vec<_>>(), ["chrome.exe", "code.exe", "explorer.exe"]);
+        assert_eq!(m.top[2].p.mem, 9 << 30, "values still update");
     }
 }
