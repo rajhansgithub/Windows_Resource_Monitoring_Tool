@@ -382,17 +382,13 @@ impl Overlay {
             };
             let lab_part = if lw > 0 { lw + g.gap } else { 0 };
             let y0 = (hh - col.len() as i32 * pitch) / 2 + (pitch - line_h) / 2;
-            let col_r = x + lab_part + val_w;
             for (j, &r) in col.iter().enumerate() {
                 let y = y0 + j as i32 * pitch;
-                // Each row ends at its own reserved width, so a short value
-                // (GPU 10%) sits next to its label instead of being pushed
-                // out by a wider neighbour (VRAM 3.73 GB). Sparks stay aligned.
-                let vr = x + lab_part + vw(r);
+                let vr = x + lab_part + val_w;
                 let spark = (spark_part(r) > 0).then(|| Rect {
-                    l: col_r + g.gap,
+                    l: vr + g.gap,
                     t: y + (line_h - spark_h) / 2,
-                    r: col_r + g.gap + g.spark_w,
+                    r: vr + g.gap + g.spark_w,
                     b: y + (line_h - spark_h) / 2 + spark_h,
                 });
                 cells.push((idx, x, y, x + lab_part, vr, spark, lw > 0, fi));
@@ -465,9 +461,8 @@ impl Overlay {
             self.meters[r.idx()] = if self.style == LabelStyle::Text { None } else { meter_frac(m, r) };
         }
 
-        // Compact strip: label→value 4px, between columns 8px (5px for ▲ ▼ pairs on one line).
-        let gap = sc(4.0);
-        let col_gap = sc(8.0);
+        let gap = sc(6.0);
+        let col_gap = sc(16.0);
         let pad = sc(6.0);
         let spark_w = if m.s.sparklines { sc(30.0) } else { 0 };
         // Row pitch: use the taskbar's height for breathing room between rows
@@ -508,7 +503,7 @@ impl Overlay {
         };
         let vw = |r: Metric| self.faces[vf].sticky[r.idx()];
 
-        let geo = Geo { gap, col_gap, pad, spark_w, small_gap: sc(5.0) };
+        let geo = Geo { gap, col_gap, pad, spark_w, small_gap: sc(10.0) };
         let mut cells: Vec<Cell> = Vec::with_capacity(n);
         // "+N" marker for metrics that only fit in the hover panel.
         let mut more: Option<(String, i32, i32)> = None;
