@@ -7,12 +7,12 @@ pub mod battery;
 pub mod cpu;
 pub mod disk;
 pub mod display;
-pub mod etw;
 pub mod gpu;
 pub mod live;
 pub mod net;
 pub mod reader;
 pub mod refresh;
+pub mod space;
 
 #[cfg(test)]
 mod tests {
