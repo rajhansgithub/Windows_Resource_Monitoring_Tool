@@ -12,12 +12,14 @@
 
 use super::*;
 use crate::insights::Tone;
-use crate::sensors::deep::{battery, display, net, AppNet, DeepLive, DeepStatic, Dev};
+use crate::sensors::deep::{battery, display, net, space, AppNet, DeepLive, DeepStatic, Dev};
 
 /// Samples of per-second app history kept for chart hover (one hour).
 const TOPS: usize = HIST;
 /// Chart height, unscaled.
 const CHART_H: i32 = 250;
+/// Folder rows in the space card.
+const SPACE_ROWS: usize = 8;
 /// Rows in an apps card.
 const APP_ROWS: usize = 6;
 
@@ -51,6 +53,8 @@ pub(super) enum Card {
     Health,
     DriveFacts,
     Volumes,
+    /// What fills the drive: biggest folders, on demand.
+    Space,
     Signal,
     Link,
     Hdr,
@@ -80,6 +84,12 @@ pub(super) struct DevPage {
     verdict: Rect,
     chart: Rect,
     cards: Vec<(Card, Rect)>,
+    /// "What fills this drive" scan of the open disk (runs on its own thread).
+    scan: Option<space::Scan>,
+    scan_root: String,
+    scan_tree: Option<std::sync::Arc<space::Tree>>,
+    scan_dir: space::NodeId,
+    scan_rows: Vec<space::Entry>,
 }
 
 impl DevPage {
@@ -87,6 +97,10 @@ impl DevPage {
         self.hist.clear();
         self.tops.clear();
         self.hover = None;
+        self.scan = None;
+        self.scan_tree = None;
+        self.scan_rows.clear();
+        self.scan_dir = 0;
     }
 
     fn push(&mut self, key: &str, v: f32) {
@@ -253,6 +267,47 @@ impl Monitor {
         &self.det.deep
     }
 
+    /// A click on the space card.
+    pub fn scan_click(&mut self, h: Hit) {
+        match h {
+            Hit::Scan => {
+                if self.dp.scan.as_ref().is_some_and(|s| !s.progress().done) {
+                    return;
+                }
+                let Some(root) = self.dev_vols().first().map(|v| format!("{}\\", v.letter)) else { return };
+                self.dp.scan_tree = None;
+                self.dp.scan_rows.clear();
+                self.dp.scan_dir = 0;
+                self.dp.scan = Some(space::start(&root, true));
+                self.dp.scan_root = root;
+            }
+            Hit::Folder(id) => self.scan_go(id),
+            Hit::FolderUp => {
+                if let Some(p) = self.dp.scan_tree.as_ref().and_then(|t| t.parent(self.dp.scan_dir)) {
+                    self.scan_go(p);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn scan_go(&mut self, dir: space::NodeId) {
+        if let Some(t) = &self.dp.scan_tree {
+            self.dp.scan_dir = dir;
+            self.dp.scan_rows = t.top(Some(dir), SPACE_ROWS);
+        }
+    }
+
+    /// Pick the finished scan up (once a second, from `feed`).
+    fn scan_poll(&mut self) {
+        if self.dp.scan_tree.is_none() {
+            if let Some(t) = self.dp.scan.as_ref().and_then(space::Scan::result) {
+                self.dp.scan_tree = Some(t);
+                self.scan_go(0);
+            }
+        }
+    }
+
     /// Pointer moved over the page (content coordinates, None = left). True = redraw.
     pub fn pointer(&mut self, p: Option<(i32, i32)>) -> bool {
         if self.view.is_none() {
@@ -289,6 +344,7 @@ impl Monitor {
         }
         self.dp.tops.push_back(t);
 
+        self.scan_poll();
         let Some(dev) = self.view else { return };
         let lv = self.det.deep.clone();
         match dev {
@@ -360,7 +416,7 @@ impl Monitor {
                 v
             }
             Dev::Disk(n) => {
-                let mut v = vec![Card::Health, Card::DriveFacts, Card::Apps(2), Card::Volumes];
+                let mut v = vec![Card::Health, Card::DriveFacts, Card::Apps(2), Card::Volumes, Card::Space];
                 let nvme = self.st().disk(n).is_some_and(|x| x.extra.nvme);
                 if !nvme && !self.st().admin && self.st().disk(n).is_none_or(|x| x.health.is_none()) {
                     v.push(Card::Admin);
@@ -402,6 +458,7 @@ impl Monitor {
             Card::Health => s(120) + s(8),
             Card::DriveFacts => kv_rows(self.drive_facts().len(), w),
             Card::Volumes => self.dev_vols().len().max(1) as i32 * s(28),
+            Card::Space => s(34) + SPACE_ROWS as i32 * s(30),
             Card::Signal => s(72),
             Card::Link => kv_rows(self.link_facts().len(), w),
             Card::Hdr => s(150),
@@ -537,6 +594,22 @@ impl Monitor {
             Card::Admin => {
                 let b = Rect { l: r.l + s(16), t: r.b - s(16) - s(32), r: r.l + s(16) + s(200), b: r.b - s(16) };
                 self.hits.push((b, Hit::Elevate));
+            }
+            Card::Space => {
+                // Scan / rescan button in the header, an "up" row, then the folders.
+                self.hits.push((Rect { l: r.r - s(16) - s(96), t: r.t + s(12), r: r.r - s(16), b: r.t + s(36) }, Hit::Scan));
+                if self.dp.scan_tree.is_some() {
+                    if self.dp.scan_dir != 0 {
+                        self.hits.push((Rect { l: r.l + s(8), t: r.t + s(46), r: r.r - s(8), b: r.t + s(46 + 28) }, Hit::FolderUp));
+                    }
+                    let rows: Vec<(u32, bool)> = self.dp.scan_rows.iter().map(|e| (e.id, e.is_files_here)).collect();
+                    for (i, (id, files)) in rows.into_iter().enumerate() {
+                        if !files {
+                            let t = r.t + s(46 + 34) + i as i32 * s(30);
+                            self.hits.push((Rect { l: r.l + s(8), t, r: r.r - s(8), b: t + s(30) }, Hit::Folder(id)));
+                        }
+                    }
+                }
             }
             Card::AppTraffic => {
                 if self.live().app_net_state == AppNet::NeedsAdmin {
@@ -1591,6 +1664,7 @@ impl Draw<'_> {
             }
             Card::Conns => self.conns_card(cv, r),
             Card::AppTraffic => self.traffic_card(cv, r),
+            Card::Space => self.space_card(cv, r),
             Card::Traffic => {
                 let y = self.card_head(cv, r, "Traffic", "all adapters");
                 let cr = Rect { l: r.l + self.s(16), t: y, r: r.r - self.s(16), b: r.b - self.s(16) };
@@ -2005,6 +2079,72 @@ impl Draw<'_> {
             let hx = l + (rr - l) / 3 + self.s(10);
             let h = cv.ellipsize(self.f.small, hosts, rr - cw - self.s(12) - hx);
             text_mid(cv, self.f.small, &h, hx, cy, self.col.dim);
+        }
+    }
+
+    fn space_card(&self, cv: &mut Canvas, r: Rect) {
+        let m = self.m;
+        let dp = &m.dp;
+        let prog = dp.scan.as_ref().map(space::Scan::progress);
+        let sub = match (&dp.scan_tree, &prog) {
+            (Some(t), p) => format!("{} \u{00B7} {} files{}", fmt::bytes(t.total()), t.total_files(), if p.as_ref().is_some_and(|p| p.fast) { "" } else { " \u{00B7} folder walk" }),
+            (None, Some(p)) if !p.done => format!("scanning\u{2026} {} files, {}", p.files, fmt::bytes(p.bytes)),
+            _ => String::new(),
+        };
+        let y = self.card_head(cv, r, "What fills this drive", &sub);
+        let (l, rr) = (r.l + self.s(16), r.r - self.s(16));
+        let busy = prog.as_ref().is_some_and(|p| !p.done);
+        if let Some(b) = self.hit_rect(Hit::Scan).filter(|_| !busy) {
+            let hot = self.is_hot(Hit::Scan);
+            cv.fill_round(b, self.sf(5.0), if hot { self.col.fg.with_a(40) } else { self.sub });
+            self.text_c(cv, self.f.cap, if dp.scan_tree.is_some() { "Scan again" } else { "Scan" }, (b.l + b.r) / 2, (b.t + b.b) / 2, self.col.fg);
+        }
+        let note = |cv: &mut Canvas, t: &str| {
+            let t = cv.ellipsize(self.f.small, t, rr - l);
+            cv.text(self.f.small, &t, l, y, self.col.dim);
+        };
+        let Some(tree) = &dp.scan_tree else {
+            match prog {
+                Some(p) if p.done => note(cv, p.error.as_deref().unwrap_or("The scan found nothing.")),
+                Some(_) => note(cv, "Reading the drive. Other pages stay live meanwhile."),
+                None if m.st().admin => note(cv, "Find the biggest folders. Takes a few seconds."),
+                None => note(cv, "Find the biggest folders. Much faster when the app runs as administrator."),
+            }
+            return;
+        };
+        // Where we are; click to go up.
+        let here = if dp.scan_dir == 0 { dp.scan_root.clone() } else { tree.path(dp.scan_dir) };
+        let cy = y + self.s(14);
+        let mut x = l;
+        if let Some(b) = self.hit_rect(Hit::FolderUp) {
+            if self.is_hot(Hit::FolderUp) {
+                cv.fill_round(b, self.sf(5.0), self.sub);
+            }
+            chevron_left(cv, l + self.s(6), cy, self.s(8), self.col.fg);
+            x += self.s(18);
+        }
+        let ht = cv.ellipsize(self.f.small, &here, rr - x);
+        text_mid(cv, self.f.small, &ht, x, cy, self.col.fg);
+        let top = dp.scan_rows.first().map_or(1, |e| e.bytes).max(1) as f32;
+        let c = self.acc(Metric::DiskRead);
+        let nw = ((rr - l) as f32 * 0.42) as i32;
+        for (i, e) in dp.scan_rows.iter().enumerate() {
+            let t = y + self.s(34) + i as i32 * self.s(30);
+            let cy = t + self.s(15);
+            if !e.is_files_here && self.is_hot(Hit::Folder(e.id)) {
+                cv.fill_round(Rect { l: r.l + self.s(8), t, r: r.r - self.s(8), b: t + self.s(30) }, self.sf(5.0), self.sub);
+            }
+            let name = if e.is_files_here { "Files in this folder" } else { e.name.as_str() };
+            let nm = cv.ellipsize(self.f.small, name, nw - self.s(8));
+            text_mid(cv, self.f.small, &nm, l, cy, if e.is_files_here { self.col.dim } else { self.col.fg });
+            let val = fmt::bytes(e.bytes);
+            let vw = self.s(76);
+            let br = Rect { l: l + nw, t: cy - self.s(4), r: rr - vw - self.s(8), b: cy + self.s(4) };
+            if br.w() > self.s(20) {
+                self.hbar(cv, br, e.bytes as f32 / top, c);
+            }
+            let vwid = cv.measure(self.f.cap, &val).0;
+            text_mid(cv, self.f.cap, &val, rr - vwid, cy, self.col.fg);
         }
     }
 

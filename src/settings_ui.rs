@@ -3522,6 +3522,12 @@ fn activate(hwnd: HWND, id: i32) {
             }
             Some(MonHit::CopyOutages) => crate::util::copy_text(hwnd, &u.mon.outage_text()),
             Some(MonHit::Elevate) => crate::app::restart_elevated(),
+            Some(h @ (MonHit::Scan | MonHit::Folder(_) | MonHit::FolderUp)) => {
+                u.mon.scan_click(h);
+                u.layout();
+                u.refresh_hover();
+                invalidate(hwnd);
+            }
             None => {}
         },
         Kind::Coin => {

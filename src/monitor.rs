@@ -64,6 +64,12 @@ pub enum Hit {
     CopyOutages,
     /// Admin-only details: restart the app elevated.
     Elevate,
+    /// Disk page: start (or redo) the "what fills this drive" scan.
+    Scan,
+    /// Disk page: open this folder of the scan.
+    Folder(u32),
+    /// Disk page: up one folder.
+    FolderUp,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
