@@ -13,6 +13,7 @@ mod look;
 mod monitor;
 mod nav;
 mod overlay;
+mod pagetrans;
 mod perf;
 mod popup;
 mod render;

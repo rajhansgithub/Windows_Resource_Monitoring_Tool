@@ -132,11 +132,8 @@ const T_REPEAT: usize = 2;
 /// Debounced live apply: changes take effect ~150 ms after the last edit.
 const T_LIVE: usize = 3;
 /// Durations of the transitions (Fluent "fast" ~150 ms, pane ~200 ms).
-const PAGE_ANIM_S: f32 = 0.15;
 const IND_ANIM_S: f32 = 0.15;
 const PANE_ANIM_S: f32 = 0.2;
-/// Page content slides up this far while it fades in.
-const PAGE_SLIDE: i32 = 8;
 /// Rebuild the Insights panels at most this often while they are showing.
 const REBUILD_MS: u64 = 2000;
 
@@ -307,7 +304,6 @@ struct Pal {
     /// Opaque fills: chart value bubble, tooltip, the overlay pane.
     bubble: Rgba,
     pane: Rgba,
-    nav_sel: Rgba,
     nav_hover: Rgba,
     nav_press: Rgba,
     /// Standard control (button, drop-down, number box) fills and outline.
@@ -367,7 +363,6 @@ impl Pal {
             card_border: t.border,
             bubble: t.raised2,
             pane: t.panel,
-            nav_sel: ink(0x14),
             nav_hover: ink(0x0B),
             nav_press: ink(0x07),
             ctl: t.raised,
@@ -896,6 +891,12 @@ struct Drawn {
     chart_hover: Option<i32>,
 }
 
+/// Position of a page in the navigation pane (top to bottom, footer last):
+/// a transition runs forward to a lower page and mirrored to a higher one.
+fn nav_rank(p: Page) -> usize {
+    nav::nav_order().position(|x| x == p).unwrap_or(0)
+}
+
 /// Make sure the order lists every metric exactly once.
 fn full_order(order: &[Metric]) -> Vec<Metric> {
     let mut v: Vec<Metric> = Vec::new();
@@ -911,8 +912,6 @@ fn full_order(order: &[Metric]) -> Vec<Metric> {
 
 /// Running transitions (start times); None = not running.
 struct Anim {
-    /// Page content fading / sliding in.
-    page: Option<Instant>,
     /// Selection indicator sliding from this centre y (menu coordinates).
     ind: Option<(i32, Instant)>,
     /// Overlay pane width animating from .0 to .1.
@@ -979,6 +978,10 @@ struct Ui {
     open_dd: Option<i32>,
     cv: Canvas,
     anim: Anim,
+    /// The look's page transition, while it runs; `trans_spare` keeps the
+    /// buffers of the last one for reuse.
+    trans: Option<crate::pagetrans::PageTrans>,
+    trans_spare: Option<crate::pagetrans::PageTrans>,
     animate: bool,
     /// Last normal (not minimized / maximized) window rectangle, and maximized.
     normal: Rect,
@@ -1079,7 +1082,9 @@ impl Ui {
             repeat_n: 0,
             open_dd: None,
             cv: Canvas::new(),
-            anim: Anim { page: None, ind: None, pane: None, timer: false },
+            anim: Anim { ind: None, pane: None, timer: false },
+            trans: None,
+            trans_spare: None,
             animate: animations_on(),
             normal: Rect { l: 0, t: 0, r: 0, b: 0 },
             maximized: false,
@@ -2284,9 +2289,12 @@ impl Ui {
         // Anything besides the scroll offset moving this frame.
         let mut other = false;
         let done = |t: Option<Instant>, dur: f32| t.is_none_or(|t| t.elapsed().as_secs_f32() >= dur);
-        if done(self.anim.page, PAGE_ANIM_S) {
-            self.anim.page = None;
-        } else {
+        if self.trans.as_ref().is_some_and(|t| t.done()) {
+            self.trans_spare = self.trans.take();
+            // The last frame is the plain new page.
+            self.drawn = None;
+            other = true;
+        } else if self.trans.is_some() {
             other = true;
         }
         if done(self.anim.ind.map(|x| x.1), IND_ANIM_S) {
@@ -2413,6 +2421,21 @@ impl Ui {
             return false;
         }
         let from = self.indicator_y(self.page);
+        // The old page, fully drawn (a running transition is finished first),
+        // for the look's transition into the new one.
+        let old = (!self.hwnd.is_null() && self.cw > 0 && self.ch > 0).then(|| {
+            if let Some(t) = self.trans.take() {
+                self.trans_spare = Some(t);
+            }
+            let mut cv = std::mem::replace(&mut self.cv, Canvas::new());
+            cv.resize(self.cw, self.ch);
+            cv.set_clip(None);
+            self.draw(&mut cv);
+            cv.set_clip(None);
+            self.drawn = None;
+            cv
+        });
+        let dir = if nav_rank(p) >= nav_rank(self.page) { 1 } else { -1 };
         if record {
             self.history.push(self.page);
         }
@@ -2427,14 +2450,63 @@ impl Ui {
         }
         self.layout();
         self.refresh_hover();
-        if self.animate && !self.hwnd.is_null() {
-            let now = Instant::now();
-            self.anim.page = Some(now);
-            self.anim.ind = from.map(|y| (y, now));
+        if let Some(mut cv) = old {
+            let (kind, dur) = crate::pagetrans::pick(self.animate);
+            let region = Rect { l: self.content_x(), t: 0, r: self.cw, b: self.ch };
+            let panels = self.panel_rects();
+            let scale = self.dpi as f32 / 96.0;
+            let stride = cv.w;
+            let tr = crate::pagetrans::PageTrans::new(kind, dur, dir, region, cv.pixels(), stride, panels, scale, self.trans_spare.take());
+            self.cv = cv;
+            self.trans = Some(tr);
+            if self.animate {
+                self.anim.ind = from.map(|y| (y, Instant::now()));
+            }
             self.kick();
         }
         invalidate(self.hwnd);
         true
+    }
+
+    /// Panels of the current page in client pixels (cards, summaries, look
+    /// cards, the goal card): what the Boot transition powers on one by one.
+    /// Pages drawn by their own renderers (Monitor, Insights) get bands.
+    fn panel_rects(&self) -> Vec<Rect> {
+        let (vt, vb) = self.view();
+        let dy = vt - self.scroll_px();
+        let mut v: Vec<Rect> = Vec::new();
+        for b in &self.blocks {
+            match b {
+                Block::Card { rect, .. } | Block::Brand(rect) => v.push(shift(*rect, dy)),
+                _ => {}
+            }
+        }
+        for c in self.controls.iter().filter(|c| c.layer == Layer::Page) {
+            if matches!(c.kind, Kind::Summary(_) | Kind::Look(_) | Kind::Goal) {
+                v.push(shift(c.rect, dy));
+            }
+        }
+        v.retain(|r| r.b > vt && r.t < vb);
+        if v.len() < 2 {
+            v.clear();
+            let (l, r) = (self.content_x() + self.sc(24), self.cw - self.sc(24));
+            let two = r - l > self.sc(720);
+            let bh = self.sc(150);
+            let mut t = vt + self.sc(8);
+            while t < vb && v.len() < 16 {
+                let b = (t + bh - self.sc(12)).min(vb);
+                if two {
+                    let m = (l + r) / 2;
+                    v.push(Rect { l, t, r: m - self.sc(6), b });
+                    v.push(Rect { l: m + self.sc(6), t, r, b });
+                } else {
+                    v.push(Rect { l, t, r, b });
+                }
+                t += bh;
+            }
+        }
+        v.truncate(24);
+        v
     }
 
     fn back(&mut self) -> bool {
@@ -2575,6 +2647,13 @@ impl Ui {
                 self.draw(&mut cv);
             }
         }
+        if let Some(tr) = self.trans.as_mut() {
+            let _t = crate::perf::span("transition");
+            let tk = crate::look::tokens(self.dark);
+            let stride = cv.w;
+            cv.set_clip(None);
+            tr.compose(cv.pixels_mut(), stride, &tk);
+        }
         self.drawn = Some(now);
         cv.set_clip(None);
         let _b = crate::perf::span("blit");
@@ -2602,7 +2681,7 @@ impl Ui {
     /// scroll may shift its pixels: no transition, overlay pane, tooltip, or
     /// live scene (the Server Room draws its coin straight into the pixels).
     fn can_shift(&self) -> bool {
-        self.anim.page.is_none() && self.anim.pane.is_none() && !self.overlay && self.tip.is_none() && !self.room_on
+        self.trans.is_none() && self.anim.pane.is_none() && !self.overlay && self.tip.is_none() && !self.room_on
     }
 
     fn state(&self, id: i32, part: Part) -> (bool, bool) {
@@ -2619,10 +2698,9 @@ impl Ui {
         let cx0 = self.content_x();
         let (_, col_r) = self.col();
         let rad = self.sc(crate::look::tokens(self.dark).r_card) as f32;
-        // Page transition: content slides up `PAGE_SLIDE` while it fades in.
-        let fade = self.anim.page.map(|t| Self::progress(t, PAGE_ANIM_S));
-        let slide = fade.map_or(0, |e| ((1.0 - e) * self.sc(PAGE_SLIDE) as f32).round() as i32);
-        let dy = vt - self.scroll_px() + slide;
+        // Bento's new page settles in a few px as the splash lifts off.
+        let settle = self.trans.as_ref().map_or(0, |t| t.page_dy());
+        let dy = vt - self.scroll_px() + settle;
 
         // Page content, clipped to the band under the header.
         cv.set_clip(Some(Rect { l: cx0, t: vt, r: self.cw, b: vb }));
@@ -2722,9 +2800,9 @@ impl Ui {
         // Page header: back button and title.
         cv.set_clip(Some(Rect { l: cx0, t: 0, r: self.cw, b: vt }));
         let mut tx = self.col().0;
-        let mut tcy = vt / 2 + slide;
+        let mut tcy = vt / 2 + settle;
         if let Some(c) = self.control(ID_BACK) {
-            let r = shift(c.rect, slide);
+            let r = shift(c.rect, settle);
             self.draw_control(cv, c, r);
             tx = r.r + self.sc(12);
             tcy = (r.t + r.b) / 2;
@@ -2732,9 +2810,6 @@ impl Ui {
         let title = cv.ellipsize(f.title, self.page.title(), col_r - tx);
         text_mid(cv, f.title, &title, tx, tcy - self.sc(2), p.fg);
         cv.set_clip(None);
-        if let Some(e) = fade {
-            cv.fade_rect(Rect { l: cx0, t: 0, r: self.cw, b: self.ch }, e, p.bg);
-        }
 
         // Overlay scroll bar.
         if let Some((track, thumb)) = self.scrollbar() {

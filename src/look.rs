@@ -141,6 +141,7 @@ pub enum Bars {
 
 /// Every colour and shape decision of a look, for one light/dark pair.
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 pub struct Tokens {
     pub look: Look,
     pub dark: bool,

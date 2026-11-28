@@ -204,6 +204,7 @@ impl Canvas {
     /// Fade the pixels of `r` toward `to` (straight alpha): `keep` = 1 leaves
     /// them, 0 replaces them with `to`. Used for page transitions; with a
     /// transparent `to` (Mica) it fades to the backdrop.
+    #[allow(dead_code)]
     pub fn fade_rect(&mut self, r: Rect, keep: f32, to: Rgba) {
         let k = (keep.clamp(0.0, 1.0) * 256.0) as u32;
         if k >= 256 {
