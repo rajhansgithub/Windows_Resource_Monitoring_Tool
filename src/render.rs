@@ -439,7 +439,9 @@ impl Canvas {
                     }
                 }
             }
-            let lut = sharpen_lut();
+            // ClearType coverage is already gamma-boosted by GDI; only
+            // grayscale coverage gets the sharpening curve.
+            let lut = if g.cleartype { linear_lut() } else { sharpen_lut() };
             for yy in ct..cb {
                 let src = &g.cov[((yy - gt) * g.w + (cl - gl)) as usize..((yy - gt) * g.w + (cr - gl)) as usize];
                 let dst = &mut buf[(yy * w + cl) as usize..(yy * w + cr) as usize];
@@ -933,6 +935,12 @@ fn sharpen_lut() -> &'static [u8; 256] {
     })
 }
 
+fn linear_lut() -> &'static [u8; 256] {
+    use std::sync::OnceLock;
+    static LUT: OnceLock<[u8; 256]> = OnceLock::new();
+    LUT.get_or_init(|| std::array::from_fn(|i| i as u8))
+}
+
 /// Pixel columns `[x0, x1)` within `[bl, br)` whose centres lie in `[lo, hi]`.
 /// What is left, `[bl, x0)` and `[x1, br)`, is shaded per pixel.
 fn mid_span(lo: f32, hi: f32, bl: i32, br: i32) -> (i32, i32) {
@@ -1138,6 +1146,8 @@ mod text_cache {
         /// Advance width of the text.
         pub tw: i32,
         pub cov: Vec<u8>,
+        /// Coverage came from the ClearType fallback (see `raster`).
+        pub cleartype: bool,
     }
 
     #[derive(Default)]
@@ -1150,12 +1160,48 @@ mod text_cache {
         /// White-on-black scratch for rasterising (grows to the widest string).
         scratch: Option<(Dib, i32, i32)>,
         fonts: HashMap<u64, Font>,
+        /// ClearType twin of each font that GDI draws without smoothing
+        /// (kept for the life of the thread; one per distinct LOGFONT).
+        twins: HashMap<u64, HFONT>,
         entries: usize,
         bytes: usize,
     }
 
     thread_local! {
-        static CACHE: RefCell<Cache> = RefCell::new(Cache { scratch: None, fonts: HashMap::new(), entries: 0, bytes: 0 });
+        static CACHE: RefCell<Cache> = RefCell::new(Cache {
+            scratch: None,
+            fonts: HashMap::new(),
+            twins: HashMap::new(),
+            entries: 0,
+            bytes: 0,
+        });
+    }
+
+    /// True when GDI drew `cov` with hard edges: ink but no partly covered
+    /// pixel. GDI's grayscale smoothing obeys each font's `gasp` table and
+    /// skips fonts made for ClearType (Cascadia Mono, Consolas) at small
+    /// sizes and bold weights, so those come out jagged next to smooth text.
+    pub fn is_aliased(cov: &[u8]) -> bool {
+        let mut ink = false;
+        for &v in cov {
+            match v {
+                0 => {}
+                255 => ink = true,
+                _ => return false,
+            }
+        }
+        ink
+    }
+
+    /// The same font with ClearType quality, which GDI always smooths.
+    fn twin(font: HFONT) -> HFONT {
+        let mut lf: LOGFONTW = unsafe { std::mem::zeroed() };
+        let n = unsafe { GetObjectW(font, std::mem::size_of::<LOGFONTW>() as i32, &mut lf as *mut _ as *mut core::ffi::c_void) };
+        if n <= 0 {
+            return std::ptr::null_mut();
+        }
+        lf.lfQuality = CLEARTYPE_QUALITY as u8;
+        unsafe { CreateFontIndirectW(&lf) }
     }
 
     fn font_key(font: HFONT) -> Option<u64> {
@@ -1217,25 +1263,49 @@ mod text_cache {
             self.scratch(w, h)?;
             let (d, sw, _) = self.scratch.as_ref()?;
             let stride = *sw as usize;
-            let mut cov = vec![0u8; (w * h) as usize];
-            unsafe {
-                GdiFlush();
-                for y in 0..h as usize {
-                    std::ptr::write_bytes(d.bits.add(y * stride), 0, w as usize);
-                }
-                let old = SelectObject(d.dc, font);
-                let ws: Vec<u16> = s.encode_utf16().collect();
-                TextOutW(d.dc, PAD_L, PAD_T, ws.as_ptr(), ws.len() as i32);
-                SelectObject(d.dc, old);
-                GdiFlush();
-                for y in 0..h as usize {
-                    let row = std::slice::from_raw_parts(d.bits.add(y * stride), w as usize);
-                    for (o, m) in cov[y * w as usize..(y + 1) * w as usize].iter_mut().zip(row) {
-                        *o = ((m >> 16) & 0xff).max((m >> 8) & 0xff).max(m & 0xff) as u8;
+            let dc = d.dc;
+            let bits = d.bits;
+            let ws: Vec<u16> = s.encode_utf16().collect();
+            // White on black into the scratch; `px` turns one pixel into coverage.
+            let draw = |f: HFONT, px: fn(u32) -> u8| -> Vec<u8> {
+                let mut cov = vec![0u8; (w * h) as usize];
+                unsafe {
+                    GdiFlush();
+                    for y in 0..h as usize {
+                        std::ptr::write_bytes(bits.add(y * stride), 0, w as usize);
+                    }
+                    let old = SelectObject(dc, f);
+                    TextOutW(dc, PAD_L, PAD_T, ws.as_ptr(), ws.len() as i32);
+                    SelectObject(dc, old);
+                    GdiFlush();
+                    for y in 0..h as usize {
+                        let row = std::slice::from_raw_parts(bits.add(y * stride), w as usize);
+                        for (o, &m) in cov[y * w as usize..(y + 1) * w as usize].iter_mut().zip(row) {
+                            *o = px(m);
+                        }
                     }
                 }
+                cov
+            };
+            let cov = draw(font, |m| ((m >> 16) & 0xff).max((m >> 8) & 0xff).max(m & 0xff) as u8);
+            if !is_aliased(&cov) {
+                return Some(Glyphs { w, h, tw, cov, cleartype: false });
             }
-            Some(Glyphs { w, h, tw, cov })
+            // Jagged: draw it again with ClearType and average the three
+            // subpixels into one grey coverage (same advance widths, so the
+            // layout does not move).
+            let twin = match key {
+                Some(k) => *self.twins.entry(k).or_insert_with(|| twin(font)),
+                None => twin(font),
+            };
+            if twin.is_null() {
+                return Some(Glyphs { w, h, tw, cov, cleartype: false });
+            }
+            let ct = draw(twin, |m| ((((m >> 16) & 0xff) + ((m >> 8) & 0xff) + (m & 0xff) + 1) / 3) as u8);
+            if key.is_none() {
+                unsafe { DeleteObject(twin) };
+            }
+            Some(Glyphs { w, h, tw, cov: ct, cleartype: true })
         }
     }
 
@@ -1586,6 +1656,33 @@ mod tests {
             for y in band.t..band.b {
                 let row = |p: &Vec<u32>| p[(y * 200) as usize..(y * 200 + 200) as usize].to_vec();
                 assert_eq!(row(&pa), row(&pb), "row {y} after a shift of {d}");
+            }
+        }
+    }
+
+    /// Every look's label, number and body fonts must come out smooth: no
+    /// string may be drawn with hard, unsmoothed edges (the jagged bold mono
+    /// labels of v2.22.0).
+    #[test]
+    fn text_is_never_aliased() {
+        use crate::look::{faces_for, Look};
+        let words = ["Ethernet", "Full speed", "Try DisplayPort", "Scan", "S", "D", "GRAPHICS", "60", "1G"];
+        for look in [Look::Lime, Look::Tactile, Look::Bento] {
+            let fc = faces_for(look);
+            for (face, weight) in [(fc.mono, 600), (fc.mono, 400), (fc.ui, 400), (fc.ui, 600), (fc.num, fc.num_weight), (fc.display, fc.title_weight)] {
+                for px in [11, 12, 13, 14, 16, 20, 28] {
+                    let f = create_font(px, weight, face, true);
+                    let mut fallback = 0;
+                    for w in words {
+                        let (aliased, ct) = text_cache::with(f, w, |g| (text_cache::is_aliased(&g.cov), g.cleartype)).unwrap();
+                        assert!(!aliased, "{look:?}: '{w}' in {face} {weight} at {px}px is jagged");
+                        fallback += ct as usize;
+                    }
+                    if fallback > 0 {
+                        println!("{look:?} {face} {weight} {px}px: {fallback}/{} strings use the ClearType fallback", words.len());
+                    }
+                    unsafe { DeleteObject(f) };
+                }
             }
         }
     }
