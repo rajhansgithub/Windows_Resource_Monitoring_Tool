@@ -614,6 +614,12 @@ impl Canvas {
     /// Lime draws it as a ring of dots, Tactile as LED segments, Bento smooth.
     /// Only pixels in the ring's annulus are visited.
     pub fn ring(&mut self, cx: f32, cy: f32, r: f32, thick: f32, frac: f32, c: Rgba) {
+        self.ring_in(cx, cy, r, thick, frac, c, crate::look::current());
+    }
+
+    /// `ring` in a given look (`Bento` = the plain smooth ring).
+    #[allow(clippy::too_many_arguments)]
+    pub fn ring_in(&mut self, cx: f32, cy: f32, r: f32, thick: f32, frac: f32, c: Rgba, look: crate::look::Look) {
         let frac = frac.clamp(0.0, 1.0);
         if frac <= 0.0 {
             return;
@@ -623,7 +629,7 @@ impl Canvas {
         let mid = r - half;
         let tau = std::f32::consts::TAU;
         // Segments (count, lit share of each) of the look; values snap to whole segments.
-        let seg = match crate::look::current() {
+        let seg = match look {
             crate::look::Look::Lime => Some(((mid * tau / (thick * 1.9).max(3.0)).round().clamp(12.0, 60.0), 0.55f32)),
             crate::look::Look::Tactile => Some((24.0f32, 0.74f32)),
             crate::look::Look::Bento => None,
@@ -1526,7 +1532,7 @@ mod tests {
                     let (mut a, mut b) = pair(200, 160);
                     a.set_clip(clip);
                     b.set_clip(clip);
-                    a.ring(cx, cy, r, th, frac, c);
+                    a.ring_in(cx, cy, r, th, frac, c, crate::look::Look::Bento);
                     b.ref_ring(cx, cy, r, th, frac, c);
                     same(&mut a, &mut b, &format!("ring {cx} {cy} {r} {th} {frac}"));
                     let (a0, a1) = (frac * 2.0 - 1.0, frac * 6.0 + 0.3);
