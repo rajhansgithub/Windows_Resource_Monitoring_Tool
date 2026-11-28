@@ -761,6 +761,7 @@ impl App {
             // The Monitor page is on screen (no extra timer: it rides this tick).
             detail: crate::settings_ui::monitor_visible(),
             dev: crate::settings_ui::monitor_dev(),
+            bt: self.m.s.mod_bluetooth,
         }
     }
 

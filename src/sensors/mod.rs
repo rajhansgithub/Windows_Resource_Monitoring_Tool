@@ -126,6 +126,8 @@ pub struct SampleOpts {
     pub detail: bool,
     /// The device page open on the Monitor page (with `detail`): its deep live values.
     pub dev: Option<deep::Dev>,
+    /// The Bluetooth module is on: list paired devices while the Monitor page is on screen.
+    pub bt: bool,
 }
 
 /// Monotonic clock based on QueryPerformanceCounter.
@@ -214,6 +216,7 @@ impl Sensors {
             self.disk.sync(q, opts.disk);
             self.detail.sync(q, opts.detail);
             self.deep.sync(q, if opts.detail { opts.dev } else { None });
+            self.deep.bt_on = opts.bt;
             q.collect();
         }
 
