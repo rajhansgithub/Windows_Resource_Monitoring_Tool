@@ -159,10 +159,11 @@ pub fn speed_from_name(desc: &str) -> u64 {
     let d = desc.to_ascii_lowercase();
     if d.contains("10gbe") || d.contains("10 gigabit") || d.contains("aqc1") || d.contains("x550") {
         10_000_000_000
+    } else if d.contains("2.5g") || d.contains("i225") || d.contains("i226") || d.contains("rtl8125") || d.contains("e3100") || d.contains("e3000") {
+        // Before 5G: "2.5gbe" contains "5gbe".
+        2_500_000_000
     } else if d.contains("5gbe") || d.contains("5 gigabit") {
         5_000_000_000
-    } else if d.contains("2.5g") || d.contains("i225") || d.contains("i226") || d.contains("rtl8125") || d.contains("e3100") || d.contains("e3000") {
-        2_500_000_000
     } else if d.contains("gbe") || d.contains("gigabit") || d.contains("1000") || d.contains("i219") || d.contains("i211") || d.contains("i210") || d.contains("rtl8168") || d.contains("e2600") || d.contains("e2500") {
         1_000_000_000
     } else {
