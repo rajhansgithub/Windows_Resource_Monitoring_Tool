@@ -196,6 +196,10 @@ pub struct Settings {
     pub window_page: String,
     /// Monitor page: processes grouped by app (chrome.exe ×56 → one "Google Chrome" row).
     pub proc_groups: bool,
+    /// Bluetooth module (built in): paired devices and their batteries on the Monitor page.
+    pub mod_bluetooth: bool,
+    /// Bluetooth page layout: 0 list, 1 rack, 2 hero.
+    pub bt_layout: u8,
 }
 
 impl Default for Settings {
@@ -252,6 +256,8 @@ impl Default for Settings {
             window: None,
             window_page: String::new(),
             proc_groups: true,
+            mod_bluetooth: true,
+            bt_layout: 1,
         }
     }
 }
@@ -434,6 +440,8 @@ impl Settings {
                 "window" => self.window = crate::nav::Placement::parse(v).or(self.window),
                 "window_page" => self.window_page = v.to_string(),
                 "proc_groups" => self.proc_groups = parse_bool(v).unwrap_or(self.proc_groups),
+                "mod_bluetooth" => self.mod_bluetooth = parse_bool(v).unwrap_or(self.mod_bluetooth),
+                "bt_layout" => self.bt_layout = v.parse().map(|x: u8| x.min(2)).unwrap_or(self.bt_layout),
                 "max_width_pct" => {
                     self.max_width_pct = v.parse().map(|x: u32| x.min(90)).unwrap_or(self.max_width_pct)
                 }
@@ -621,6 +629,11 @@ impl Settings {
             o.push_str(&format!("dock_offset.{} = {}\n", k, v));
         }
         o.push_str(&format!("\n# Monitor page: 1 = processes grouped by app\nproc_groups = {}\n", b(self.proc_groups)));
+        o.push_str(&format!(
+            "\n# Modules: 1 = Bluetooth devices on the Monitor page; its layout 0 list, 1 rack, 2 hero\nmod_bluetooth = {}\nbt_layout = {}\n",
+            b(self.mod_bluetooth),
+            self.bt_layout
+        ));
         if self.window.is_some() || !self.window_page.is_empty() {
             o.push_str("\n# Main window: x,y,width,height,maximized (screen pixels) and the last page\n");
             if let Some(w) = &self.window {
@@ -666,6 +679,10 @@ mod tests {
         assert!(s.proc_groups, "grouped by default");
         s.apply("proc_groups = 0\n");
         assert!(!s.proc_groups);
+        assert!(s.mod_bluetooth, "Bluetooth module on by default");
+        s.apply("mod_bluetooth = 0\nbt_layout = 9\n");
+        assert!(!s.mod_bluetooth);
+        assert_eq!(s.bt_layout, 2, "clamped");
         // Garbage keeps the last good value.
         s.apply("window = nonsense\n");
         assert!(s.window.is_some());

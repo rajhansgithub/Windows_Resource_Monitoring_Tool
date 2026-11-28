@@ -169,6 +169,7 @@ const ID_RESETPOS: i32 = 116;
 const ID_RECHECK: i32 = 117;
 const ID_SHOWON: i32 = 118;
 const ID_ACHIEVE: i32 = 199;
+const ID_MODBT: i32 = 198;
 
 const ID_SWATCH: i32 = 300; // + metric index
 const ID_CRESET: i32 = 330; // + metric index
@@ -591,6 +592,9 @@ struct Fonts {
     title: HFONT,
     icon: HFONT,
     icon_sm: HFONT,
+    /// Big light numerals (Bluetooth levels).
+    num: HFONT,
+    num_sm: HFONT,
 }
 
 
@@ -632,6 +636,8 @@ impl Fonts {
             title: create_font(sc(28), 600, display, true),
             icon: create_font(sc(16), 400, icons, true),
             icon_sm: create_font(sc(12), 400, icons, true),
+            num: create_font(sc(32), 300, display, true),
+            num_sm: create_font(sc(24), 300, display, true),
         }
     }
 
@@ -640,7 +646,7 @@ impl Fonts {
     }
 
     fn free(&self) {
-        for f in [self.body, self.small, self.tiny, self.semi, self.cap, self.head, self.title, self.icon, self.icon_sm] {
+        for f in [self.body, self.small, self.tiny, self.semi, self.cap, self.head, self.title, self.icon, self.icon_sm, self.num, self.num_sm] {
             unsafe { DeleteObject(f) };
         }
     }
@@ -1175,6 +1181,7 @@ impl Ui {
             ID_CLICKTHRU => d.click_through,
             ID_AUTOUPDATE => d.auto_update,
             ID_ACHIEVE => d.achievements,
+            ID_MODBT => d.mod_bluetooth,
             ID_AUTOSTART => self.autostart,
             ID_ALERTS => d.alerts,
             ID_A_CAP => d.alert_cap,
@@ -1202,6 +1209,7 @@ impl Ui {
             ID_CLICKTHRU => &mut d.click_through,
             ID_AUTOUPDATE => &mut d.auto_update,
             ID_ACHIEVE => &mut d.achievements,
+            ID_MODBT => &mut d.mod_bluetooth,
             ID_AUTOSTART => &mut self.autostart,
             ID_ALERTS => &mut d.alerts,
             ID_A_CAP => &mut d.alert_cap,
@@ -1563,6 +1571,12 @@ impl Ui {
                     toggle_card("Update automatically", "Install new versions when they are released", ID_AUTOUPDATE),
                     toggle_card("Start with Windows", "Launch Resource Monitor when you sign in", ID_AUTOSTART),
                     toggle_card("Achievements", "Earn medals for real use. Nothing leaves this PC", ID_ACHIEVE),
+                    Def::Heading("Modules"),
+                    toggle_card(
+                        "Bluetooth devices",
+                        "Battery of earbuds, mice, keyboards and controllers on the Monitor page. Built in",
+                        ID_MODBT,
+                    ),
                 ]);
                 v
             }
@@ -1992,6 +2006,8 @@ impl Ui {
                 Def::Monitor => {
                     self.mon.motion = self.animate;
                     self.mon.tab_font = self.fonts.view().small;
+                    self.mon.num_font = self.fonts.num;
+                    self.mon.num_sm_font = self.fonts.num_sm;
                     y = self.mon.layout(self.dpi, l, r, y);
                     if self.mon.animating() {
                         mon_anim = true;
@@ -3506,6 +3522,19 @@ fn activate(hwnd: HWND, id: i32) {
                 // Ask for the device's deep facts now instead of on the next tick.
                 if let Some(a) = app() {
                     a.request_sample();
+                }
+            }
+            Some(MonHit::BtSettings) => shell_open("ms-settings:bluetooth", None),
+            Some(MonHit::BtLayout(k)) => {
+                u.mon.bt_layout = k;
+                u.layout();
+                u.refresh_hover();
+                invalidate(hwnd);
+                if let Some(a) = app() {
+                    if a.m.s.bt_layout != k {
+                        a.m.s.bt_layout = k;
+                        a.save_settings();
+                    }
                 }
             }
             Some(MonHit::Overview) => {
