@@ -1669,6 +1669,7 @@ mod tests {
         let words = ["Ethernet", "Full speed", "Try DisplayPort", "Scan", "S", "D", "GRAPHICS", "60", "1G"];
         for look in [Look::Lime, Look::Tactile, Look::Bento] {
             let fc = faces_for(look);
+            println!("{look:?}: ui {} / mono {} / num {}", fc.ui, fc.mono, fc.num);
             for (face, weight) in [(fc.mono, 600), (fc.mono, 400), (fc.ui, 400), (fc.ui, 600), (fc.num, fc.num_weight), (fc.display, fc.title_weight)] {
                 for px in [11, 12, 13, 14, 16, 20, 28] {
                     let f = create_font(px, weight, face, true);
@@ -1685,5 +1686,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A font GDI is told never to smooth must still come out smooth: the
+    /// ClearType fallback kicks in (this is what the bold mono labels hit on
+    /// PCs with Cascadia Mono).
+    #[test]
+    fn unsmoothed_font_takes_the_cleartype_fallback() {
+        let f = create_font(13, 600, "Consolas", true);
+        let mut lf: LOGFONTW = unsafe { std::mem::zeroed() };
+        unsafe { GetObjectW(f, std::mem::size_of::<LOGFONTW>() as i32, &mut lf as *mut _ as *mut core::ffi::c_void) };
+        unsafe { DeleteObject(f) };
+        lf.lfQuality = NONANTIALIASED_QUALITY as u8;
+        let hard = unsafe { CreateFontIndirectW(&lf) };
+        for w in ["Ethernet", "Full speed", "Try DisplayPort"] {
+            let (aliased, ct) = text_cache::with(hard, w, |g| (text_cache::is_aliased(&g.cov), g.cleartype)).unwrap();
+            assert!(ct, "'{w}' should use the ClearType fallback");
+            assert!(!aliased, "'{w}' is still jagged");
+        }
+        unsafe { DeleteObject(hard) };
     }
 }
