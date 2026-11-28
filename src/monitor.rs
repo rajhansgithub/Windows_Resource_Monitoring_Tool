@@ -23,6 +23,7 @@ use windows_sys::Win32::Graphics::Gdi::HFONT;
 
 mod btpage;
 mod devpage;
+mod speedpage;
 pub use crate::sensors::deep::Dev;
 
 /// Process rows shown.
@@ -77,6 +78,14 @@ pub enum Hit {
     BtLayout(u8),
     /// Bluetooth page: open Windows Bluetooth settings.
     BtSettings,
+    /// Full speed page: check again.
+    SpScan,
+    /// Full speed page: get the missing drivers.
+    SpDriver,
+    /// Full speed page: show this check's details.
+    SpPick(u8),
+    /// Full speed page: the detail card's fix button.
+    SpAct,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -261,6 +270,10 @@ pub struct Monitor {
     pub bt_on: bool,
     /// Bluetooth page layout: 0 list, 1 rack, 2 hero.
     pub bt_layout: u8,
+    /// Full speed page.
+    sp: speedpage::SpeedState,
+    /// Laid out and drawn as the Full speed page instead of the Monitor page.
+    pub speed: bool,
 }
 
 impl Monitor {
@@ -316,6 +329,8 @@ impl Monitor {
             num_sm_font: std::ptr::null_mut(),
             bt_on: true,
             bt_layout: 1,
+            sp: speedpage::SpeedState::default(),
+            speed: false,
         }
     }
 
@@ -678,6 +693,9 @@ impl Monitor {
 
     /// Cards still moving after a reflow.
     pub fn animating(&self) -> bool {
+        if self.speed {
+            return self.speed_animating();
+        }
         self.anim.as_ref().is_some_and(|a| a.0.elapsed().as_secs_f32() < MOVE_S)
     }
 
@@ -710,6 +728,10 @@ impl Monitor {
         self.vits.clear();
         self.boxes.clear();
         self.hits.clear();
+        if self.speed {
+            self.anim = None;
+            return self.speed_layout(l, r, y0);
+        }
         if self.view.is_some() {
             self.anim = None;
             return self.layout_dev(l, r, y0);
@@ -1009,6 +1031,10 @@ impl Monitor {
     /// `hot` indexes `hits`.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(&self, cv: &mut Canvas, f: &Fonts, col: &Colors, dy: i32, vt: i32, vb: i32, hot: Option<usize>) {
+        if self.speed {
+            self.speed_draw(cv, f, col, dy, hot);
+            return;
+        }
         if self.view.is_some() {
             self.draw_dev(cv, f, col, dy, vt, vb, hot);
             return;

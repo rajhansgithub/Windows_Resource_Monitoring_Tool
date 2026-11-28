@@ -15,6 +15,7 @@ pub mod net;
 pub mod reader;
 pub mod refresh;
 pub mod space;
+pub mod speed;
 
 #[cfg(test)]
 mod tests {

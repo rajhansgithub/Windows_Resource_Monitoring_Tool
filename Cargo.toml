@@ -68,6 +68,8 @@ features = [
   "Win32_UI_Shell", "Win32_Storage_FileSystem",
   # D3D11 badge shaders (src/achievements/gpu.rs)
   "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common",
+  # Full speed page: install missing drivers through Windows Update (src/driver.rs)
+  "Win32_System_UpdateAgent", "Win32_System_Ole", "Win32_System_Variant",
 ]
 
 [build-dependencies]

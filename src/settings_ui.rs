@@ -1683,7 +1683,7 @@ impl Ui {
         match page {
             Page::Overview => self.overview_defs(),
             Page::Achievements => self.achievements_defs(),
-            Page::Monitor => vec![Def::Monitor],
+            Page::Monitor | Page::FullSpeed => vec![Def::Monitor],
             p if p.panel().is_some() => self.insight_defs(p),
             p => self.settings_defs(p),
         }
@@ -1780,7 +1780,7 @@ impl Ui {
         match self.page {
             Page::Overview => grid::Class::Overview,
             // the Server Room fills the window
-            Page::Achievements | Page::Monitor => grid::Class::Fill,
+            Page::Achievements | Page::Monitor | Page::FullSpeed => grid::Class::Fill,
             // an ordered list: one column, never gridded
             Page::Metrics => grid::Class::List,
             p if p.panel().is_some() => grid::Class::Insights,
@@ -2012,6 +2012,7 @@ impl Ui {
                     }
                 }
                 Def::Monitor => {
+                    self.mon.speed = self.page == Page::FullSpeed;
                     self.mon.motion = self.animate;
                     self.mon.tab_font = self.fonts.view().small;
                     self.mon.num_font = self.fonts.num;
@@ -2328,6 +2329,10 @@ impl Ui {
         }
         if self.mon_on && self.mon.animating() {
             other = true;
+            // Full speed: pick up a finished scan or driver step without waiting for the tick.
+            if self.mon.speed && self.mon.speed_tick() {
+                self.layout();
+            }
         }
         if self.room_on {
             if let Some(st) = &self.ach {
@@ -3780,6 +3785,27 @@ fn activate(hwnd: HWND, id: i32) {
                 }
             }
             Some(MonHit::BtSettings) => shell_open("ms-settings:bluetooth", None),
+            Some(MonHit::SpScan) => {
+                u.mon.speed_scan();
+                u.layout();
+                invalidate(hwnd);
+            }
+            Some(MonHit::SpDriver) => {
+                u.mon.speed_driver();
+                u.layout();
+                invalidate(hwnd);
+            }
+            Some(MonHit::SpPick(i)) => {
+                u.mon.speed_pick(i as usize);
+                u.layout();
+                u.refresh_hover();
+                invalidate(hwnd);
+            }
+            Some(MonHit::SpAct) => {
+                u.mon.speed_act();
+                u.layout();
+                invalidate(hwnd);
+            }
             Some(MonHit::BtLayout(k)) => {
                 u.mon.bt_layout = k;
                 u.layout();
@@ -4582,6 +4608,14 @@ pub fn insights_tick(a: &crate::app::App) {
             u.layout();
             invalidate(u.hwnd);
         }
+    }
+    if u.page == Page::FullSpeed {
+        if u.mon.speed_tick() {
+            u.layout();
+            u.refresh_hover();
+            invalidate(u.hwnd);
+        }
+        return;
     }
     if u.page == Page::Monitor {
         if monitor_visible() {
