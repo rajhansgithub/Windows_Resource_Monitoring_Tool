@@ -1,6 +1,6 @@
 ; Inno Setup script. Build the exe first: cargo build --release
 #define MyAppName "Resource Monitor"
-#define MyAppVersion "2.22.0"
+#define MyAppVersion "2.23.0"
 #define MyAppPublisher "Emulsion Labs"
 #define MyAppURL "https://github.com/rajhansgithub/Windows_Resource_Monitoring_Tool"
 #define MyAppExeName "ResourceMonitor.exe"
@@ -61,6 +61,8 @@ Type: files; Name: "{autodesktop}\{#MyAppName}.lnk"
 
 [Files]
 Source: "target\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+; Font licenses (SIL OFL) for the fonts built into the exe
+Source: "res\fonts\OFL-*.txt"; DestDir: "{app}\fonts"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
