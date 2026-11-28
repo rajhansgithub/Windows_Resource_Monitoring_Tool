@@ -337,7 +337,8 @@ mod tests {
         assert_eq!(MENU[3], Entry::Header("INSIGHTS"));
         let sep = MENU.iter().position(|e| *e == Entry::Separator).unwrap();
         assert_eq!(MENU[sep + 1], Entry::Header("SETTINGS"));
-        assert_eq!(MENU[sep + 2], Entry::Item(Page::General));
+        assert_eq!(MENU[sep + 2], Entry::Item(Page::Appearance));
+        assert_eq!(MENU[sep + 3], Entry::Item(Page::General));
         assert_eq!(FOOTER, [Page::About]);
         // Every page appears exactly once.
         for p in Page::ALL {
@@ -379,8 +380,9 @@ mod tests {
         assert_eq!(Page::Monitor.step(1), Page::Achievements);
         assert_eq!(Page::About.step(1), Page::Overview);
         assert_eq!(Page::Overview.step(-1), Page::About);
-        assert_eq!(Page::Ghost.step(1), Page::General);
-        assert_eq!(Page::General.step(-1), Page::Ghost);
+        assert_eq!(Page::Ghost.step(1), Page::Appearance);
+        assert_eq!(Page::Appearance.step(1), Page::General);
+        assert_eq!(Page::General.step(-1), Page::Appearance);
     }
 
     #[test]

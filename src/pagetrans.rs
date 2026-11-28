@@ -48,6 +48,8 @@ pub struct PageTrans {
     panels: Vec<Rect>,
     /// Device scale (dpi / 96).
     scale: f32,
+    /// A fixed progress instead of the clock (tests, offline frame checks).
+    frozen: Option<f32>,
 }
 
 // ------------------------------------------------------------------ easing
@@ -160,18 +162,21 @@ impl PageTrans {
         // Reading order: rows top to bottom (a little slack), then left to right.
         let row_tol = (24.0 * scale) as i32;
         panels.sort_by_key(|r| (r.t / row_tol.max(1), r.l));
-        PageTrans { kind, start: Instant::now(), dur: dur.max(0.01), dir: dir.signum().max(-1), region, old, new, panels, scale }
+        PageTrans { kind, start: Instant::now(), dur: dur.max(0.01), dir: dir.signum().max(-1), region, old, new, panels, scale, frozen: None }
     }
 
     /// Linear progress 0..1.
     pub fn t(&self) -> f32 {
+        if let Some(t) = self.frozen {
+            return t;
+        }
         clamp01(self.start.elapsed().as_secs_f32() / self.dur)
     }
 
     /// Jump to progress `t` (tests and the offline frame check).
     #[cfg(any(test, not(windows)))]
     pub fn set_t(&mut self, t: f32) {
-        self.start = Instant::now() - std::time::Duration::from_secs_f32(clamp01(t) * self.dur);
+        self.frozen = Some(clamp01(t));
     }
 
     pub fn done(&self) -> bool {
@@ -535,7 +540,7 @@ mod tests {
         let (w, h) = (64i32, 48i32);
         let old = vec![0xFF11_1111u32; (w * h) as usize];
         let mut tr = PageTrans::new(kind, 1.0, 1, Rect { l: 0, t: 0, r: w, b: h }, &old, w, vec![Rect { l: 4, t: 8, r: 40, b: 30 }], 1.0, None);
-        tr.start = Instant::now() - std::time::Duration::from_secs_f32(t_override);
+        tr.set_t(t_override);
         let mut buf = vec![0xFF99_9999u32; (w * h) as usize];
         let tk = crate::look::tokens_for(crate::look::Look::Lime, true);
         tr.compose(&mut buf, w, &tk);
