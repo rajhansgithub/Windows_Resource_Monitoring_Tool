@@ -69,8 +69,6 @@ impl Look {
     }
 
     /// The Bluetooth page layout this look opens with (0 List, 1 Rack, 2 Hero).
-    /// Used once the Bluetooth page (PR #47) is in.
-    #[allow(dead_code)]
     pub fn bt_layout(self) -> u8 {
         match self {
             Look::Lime => 0,

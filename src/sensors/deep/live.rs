@@ -6,7 +6,7 @@
 //! pinging (two tiny ICMP echoes a second, on its own thread) so the outage log covers the
 //! whole session, not only the minutes the page was on screen.
 
-use super::{battery, cpu, etw, gpu, net, reader::Reader, refresh::Meter, AppNet, DeepLive, Dev};
+use super::{battery, bluetooth, cpu, etw, gpu, net, reader::Reader, refresh::Meter, AppNet, DeepLive, Dev};
 use std::sync::{Arc, Mutex};
 use crate::sensors::pdh::{Counter, Query};
 
@@ -14,6 +14,11 @@ use crate::sensors::pdh::{Counter, Query};
 const STATIC_SECS: f64 = 60.0;
 /// Connections and Wi-Fi are re-read this often.
 const NET_SECS: f64 = 2.0;
+/// Paired Bluetooth devices are re-read this often on the overview (battery levels move
+/// in 10% steps; Windows itself refreshes them rarely)...
+const BT_SECS: f64 = 30.0;
+/// ...and this often while the Bluetooth page is open.
+const BT_PAGE_SECS: f64 = 10.0;
 
 #[derive(Default)]
 struct Counters {
@@ -80,6 +85,11 @@ pub struct LiveSensors {
     bats: Option<battery::Batteries>,
     bat: Vec<battery::Battery>,
     etw: Etw,
+    /// The Bluetooth module is on (set before each sample).
+    pub bt_on: bool,
+    bt: std::sync::Arc<Vec<bluetooth::BtDevice>>,
+    /// Seconds since the last Bluetooth read (None = never, or the module was off).
+    bt_age: Option<f64>,
 }
 
 fn utf16(s: &[u16]) -> String {
@@ -96,6 +106,9 @@ impl LiveSensors {
         }
         if dev != self.dev {
             self.leave(self.dev, dev);
+            if dev == Some(Dev::Bluetooth) {
+                self.bt_now();
+            }
         }
         self.dev = dev;
         if was == now {
@@ -146,8 +159,9 @@ impl LiveSensors {
 
     /// Fill `out` after `Query::collect`. `disks` = PhysicalDrive numbers present now.
     pub fn sample(&mut self, elapsed: f64, disks: &[u32], out: &mut DeepLive) {
+        self.bluetooth(elapsed);
         let Some(dev) = self.dev else {
-            *out = DeepLive { st: self.reader.latest(), ping: self.pinger.as_ref().map(net::Pinger::snapshot), ..Default::default() };
+            *out = DeepLive { st: self.reader.latest(), ping: self.pinger.as_ref().map(net::Pinger::snapshot), bt: self.bt.clone(), ..Default::default() };
             return;
         };
 
@@ -165,6 +179,7 @@ impl LiveSensors {
         out.dev = Some(dev);
         out.st = self.reader.latest();
         out.ping = self.pinger.as_ref().map(net::Pinger::snapshot);
+        out.bt = self.bt.clone();
 
         match dev {
             Dev::Cpu => self.cpu(out),
@@ -199,7 +214,38 @@ impl LiveSensors {
                 }
                 out.batteries = self.bat.clone();
             }
-            Dev::Mem | Dev::Disk(_) => {}
+            Dev::Mem | Dev::Disk(_) | Dev::Bluetooth => {}
+        }
+    }
+
+    /// Re-read the paired Bluetooth devices when due (only while the Monitor page is on
+    /// screen, since `sample` runs only then). One device-query call plus a short devnode
+    /// walk: a few ms, every 10-30 s.
+    fn bluetooth(&mut self, elapsed: f64) {
+        if !self.bt_on {
+            if self.bt_age.is_some() {
+                self.bt_age = None;
+                self.bt = std::sync::Arc::default();
+            }
+            return;
+        }
+        let every = if self.dev == Some(Dev::Bluetooth) { BT_PAGE_SECS } else { BT_SECS };
+        match &mut self.bt_age {
+            Some(a) if *a + elapsed < every => *a += elapsed,
+            _ => {
+                let _p = crate::perf::span("bluetooth");
+                self.bt_age = Some(0.0);
+                // CI has no Bluetooth radio: RESMON_BT_DEMO fills the page with example devices.
+                let list = if std::env::var_os("RESMON_BT_DEMO").is_some() { bluetooth::demo() } else { bluetooth::read() };
+                self.bt = std::sync::Arc::new(list);
+            }
+        }
+    }
+
+    /// Read the Bluetooth devices on the next sample (the page just opened).
+    pub fn bt_now(&mut self) {
+        if self.bt_age.is_some() {
+            self.bt_age = Some(f64::MAX / 2.0);
         }
     }
 

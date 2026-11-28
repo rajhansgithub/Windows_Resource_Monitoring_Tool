@@ -21,6 +21,7 @@ use crate::util::Rect;
 use std::collections::{HashMap, HashSet, VecDeque};
 use windows_sys::Win32::Graphics::Gdi::HFONT;
 
+mod btpage;
 mod devpage;
 pub use crate::sensors::deep::Dev;
 
@@ -72,6 +73,10 @@ pub enum Hit {
     Folder(u32),
     /// Disk page: up one folder.
     FolderUp,
+    /// Bluetooth page: layout 0 list, 1 rack, 2 hero.
+    BtLayout(u8),
+    /// Bluetooth page: open Windows Bluetooth settings.
+    BtSettings,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,6 +86,8 @@ enum Sec {
     Gpu,
     Disk,
     Net,
+    /// Paired Bluetooth devices (the Bluetooth module).
+    Bt,
     Sys,
     Procs,
 }
@@ -247,6 +254,13 @@ pub struct Monitor {
     dp: devpage::DevPage,
     /// Font the device tabs are drawn with (set by the host before `layout`).
     pub tab_font: HFONT,
+    /// Big light numerals (Bluetooth levels), large and small; set with `tab_font`.
+    pub num_font: HFONT,
+    pub num_sm_font: HFONT,
+    /// Bluetooth module on (from the settings each tick).
+    pub bt_on: bool,
+    /// Bluetooth page layout: 0 list, 1 rack, 2 hero.
+    pub bt_layout: u8,
 }
 
 impl Monitor {
@@ -298,6 +312,10 @@ impl Monitor {
             view: std::env::var("RESMON_DEV").ok().and_then(|k| Dev::from_key(&k)),
             dp: devpage::DevPage::default(),
             tab_font: std::ptr::null_mut(),
+            num_font: std::ptr::null_mut(),
+            num_sm_font: std::ptr::null_mut(),
+            bt_on: true,
+            bt_layout: 1,
         }
     }
 
@@ -336,6 +354,11 @@ impl Monitor {
     pub fn feed(&mut self, a: &App) -> bool {
         let shape = self.shape();
         self.ms = a.m.s.interval_ms.max(100) as usize;
+        self.bt_on = a.m.s.mod_bluetooth;
+        self.bt_layout = a.m.s.bt_layout_now();
+        if !self.bt_on && self.view == Some(Dev::Bluetooth) {
+            self.close_dev();
+        }
         self.warn = a.m.s.warn_pct;
         self.crit = a.m.s.crit_pct;
         self.snap = a.m.snap.clone();
@@ -595,7 +618,7 @@ impl Monitor {
     }
 
     /// What decides the layout besides the width.
-    fn shape(&self) -> [usize; 11] {
+    fn shape(&self) -> [usize; 12] {
         let hw = &self.det.hw;
         [
             self.det.core_pct.len(),
@@ -609,6 +632,7 @@ impl Monitor {
             hw.displays.len(),
             self.rows(),
             self.det.adapters.iter().filter(|a| a.connected).count(),
+            if self.bt_on { self.bt().len() } else { 0 },
         ]
     }
 
@@ -757,6 +781,9 @@ impl Monitor {
         let wide = if cols == 4 { 2 } else { 1 };
         items.push((Sec::Disk, wide));
         items.push((Sec::Net, wide));
+        if self.has_bt() {
+            items.push((Sec::Bt, 1));
+        }
         items.push((Sec::Sys, cols));
         items.push((Sec::Procs, cols));
         // Pack into rows; the last card of a short row takes the rest of it.
@@ -840,6 +867,7 @@ impl Monitor {
                 let rest = if iw >= s(640) { mem.max(disp) } else { mem + s(16) + disp };
                 head + tiles + s(8) + rest + foot
             }
+            Sec::Bt => self.bt_card_h(),
             Sec::Procs => head + s(28) + self.rows() as i32 * s(30) + s(8 + 24) + foot,
         }
     }
@@ -893,6 +921,7 @@ impl Monitor {
             Sec::Mem => self.hits.push((r, Hit::Open(Dev::Mem))),
             Sec::Gpu => self.hits.push((r, Hit::Open(Dev::Gpu))),
             Sec::Net => self.hits.push((r, Hit::Open(Dev::Net))),
+            Sec::Bt => self.hits.push((r, Hit::Open(Dev::Bluetooth))),
             Sec::Disk => {
                 let rows: Vec<u32> = self.det.disks.iter().map(|d| d.num.unwrap_or(u32::MAX)).collect();
                 let mut y = r.t + head;
@@ -1018,9 +1047,11 @@ impl Monitor {
                 Sec::Disk => d.disks(cv, r),
                 Sec::Net => d.nets(cv, r),
                 Sec::Sys => d.system(cv, r),
+                Sec::Bt => d.bt_card(cv, r),
                 Sec::Procs => d.procs(cv, r),
             }
             let whole = match sec {
+                Sec::Bt => Some(Dev::Bluetooth),
                 Sec::Cpu => Some(Dev::Cpu),
                 Sec::Mem => Some(Dev::Mem),
                 Sec::Gpu => Some(Dev::Gpu),

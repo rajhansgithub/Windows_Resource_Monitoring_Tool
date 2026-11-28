@@ -81,6 +81,8 @@ pub(super) struct DevPage {
     hist: HashMap<String, VecDeque<f32>>,
     tops: VecDeque<Tops>,
     tabs: Vec<(Dev, Rect)>,
+    /// Bluetooth page pieces.
+    pub(super) bt: btpage::BtLayout,
     verdict: Rect,
     chart: Rect,
     cards: Vec<(Card, Rect)>,
@@ -187,6 +189,7 @@ fn dev_label(m: &Monitor, d: Dev) -> String {
         Dev::Display(i) => format!("Display {}", i + 1),
         Dev::Net => "Network".into(),
         Dev::Battery => "Battery".into(),
+        Dev::Bluetooth => "Bluetooth".into(),
     }
 }
 
@@ -371,7 +374,7 @@ impl Monitor {
                 let hz = if lv.measured_hz > 0.0 { lv.measured_hz } else { f32::NAN };
                 self.dp.push("hz", hz);
             }
-            Dev::Net => {}
+            Dev::Net | Dev::Bluetooth => {}
             Dev::Battery => {
                 let b = lv.batteries.first();
                 let w = b.and_then(|b| b.rate_mw).map_or(f32::NAN, |r| r as f32 / 1000.0);
@@ -401,6 +404,9 @@ impl Monitor {
         if self.snap.battery.is_some() {
             v.push(Dev::Battery);
         }
+        if self.has_bt() || self.view == Some(Dev::Bluetooth) {
+            v.push(Dev::Bluetooth);
+        }
         v
     }
 
@@ -426,6 +432,7 @@ impl Monitor {
             Dev::Display(_) => vec![Card::Signal, Card::Link, Card::Hdr, Card::Panel],
             Dev::Net => vec![Card::Path, Card::Outages, Card::AdapterFacts, Card::Wifi, Card::AppTraffic, Card::Conns, Card::Traffic],
             Dev::Battery => vec![Card::Capacity, Card::BatLive],
+            Dev::Bluetooth => Vec::new(),
         }
     }
 
@@ -487,11 +494,15 @@ impl Monitor {
         let mut y = y0;
         // Tabs row: Overview, then every device; the range control on the right.
         let th = self.sc(30);
-        let segw = self.sc(40);
-        let rx = r - segw * RANGES.len() as i32 - self.sc(4);
+        let bt = dev == Dev::Bluetooth;
+        // The Bluetooth page has no chart: its layout switch takes the range control's place.
+        let segw = self.sc(if bt { 54 } else { 40 });
+        let nseg = if bt { btpage::BT_LAYOUTS.len() } else { RANGES.len() } as i32;
+        let rx = r - segw * nseg - self.sc(4);
         let mut x = rx;
-        for (_, secs) in RANGES {
-            self.hits.push((Rect { l: x, t: y + self.sc(3), r: x + segw, b: y + th - self.sc(3) }, Hit::Range(secs)));
+        let segs: Vec<Hit> = if bt { (0..nseg as u8).map(Hit::BtLayout).collect() } else { RANGES.iter().map(|x| Hit::Range(x.1)).collect() };
+        for h in segs {
+            self.hits.push((Rect { l: x, t: y + self.sc(3), r: x + segw, b: y + th - self.sc(3) }, h));
             x += segw;
         }
         // Not elevated: a standing way to unlock the admin-only details, left of the range control.
@@ -527,6 +538,15 @@ impl Monitor {
         // Verdict.
         self.dp.verdict = Rect { l, t: y, r, b: y + self.sc(78) };
         y += self.dp.verdict.h() + gap;
+        self.dp.bt = btpage::BtLayout::default();
+        if bt {
+            self.dp.chart = Rect::default();
+            self.dp.cards.clear();
+            let v = self.dp.verdict;
+            let bw = self.sc(150);
+            self.hits.push((Rect { l: v.r - self.sc(16) - bw, t: v.t + self.sc(24), r: v.r - self.sc(16), b: v.t + self.sc(54) }, Hit::BtSettings));
+            return self.layout_bt(l, r, y);
+        }
         // Chart.
         let ch = if w < self.sc(560) { self.sc(200) } else { self.sc(CHART_H) };
         self.dp.chart = Rect { l, t: y, r, b: y + ch };
@@ -1103,6 +1123,7 @@ impl Monitor {
         let s = &self.snap;
         let d = &self.det;
         match self.view {
+            Some(Dev::Bluetooth) => self.bt_verdict(),
             Some(Dev::Cpu) => {
                 let mhz = cur_mhz(s, d);
                 let parked = self.live().parked.len();
@@ -1345,7 +1366,7 @@ impl Monitor {
                 let peak = w.iter().copied().filter(|v| v.is_finite()).fold(10.0, f32::max);
                 (vec![ser("Power", Rgba::rgb(108, 203, 95), w, true)], nice_max(peak), Axis::Watts, "Battery power")
             }
-            None => (Vec::new(), 1.0, Axis::Pct, ""),
+            None | Some(Dev::Bluetooth) => (Vec::new(), 1.0, Axis::Pct, ""),
         }
     }
 
@@ -1359,6 +1380,10 @@ impl Monitor {
         d.dev_tabs(cv);
         if vis(self.dp.verdict) {
             d.verdict_card(cv, sh(self.dp.verdict));
+        }
+        if self.view == Some(Dev::Bluetooth) {
+            d.draw_bt(cv, &vis);
+            return;
         }
         if vis(self.dp.chart) {
             d.hero_chart(cv, sh(self.dp.chart));
@@ -1399,6 +1424,22 @@ impl Draw<'_> {
         if let Some(b) = self.hit_rect(Hit::RunAdmin(0)) {
             self.admin_button(cv, b, Hit::RunAdmin(0));
         }
+        // Bluetooth layout switch (in the range control's place).
+        if let (Some(first), Some(last)) = (self.hit_rect(Hit::BtLayout(0)), self.hit_rect(Hit::BtLayout(2))) {
+            let r = Rect { l: first.l - self.s(2), t: first.t - self.s(2), r: last.r + self.s(2), b: last.b + self.s(2) };
+            cv.fill_round(r, r.h() as f32 / 2.0, self.col.card);
+            cv.stroke_round(r, r.h() as f32 / 2.0, self.col.card_border);
+            for (i, label) in btpage::BT_LAYOUTS.iter().enumerate() {
+                let h = Hit::BtLayout(i as u8);
+                let Some(seg) = self.hit_rect(h) else { continue };
+                let on = m.bt_layout as usize == i;
+                if on {
+                    cv.fill_round(seg, seg.h() as f32 / 2.0, self.col.fg.with_a(if self.dark() { 40 } else { 30 }));
+                }
+                let c = if on || self.is_hot(h) { self.col.fg } else { self.col.dim };
+                self.text_c(cv, self.f.small, label, (seg.l + seg.r) / 2, (seg.t + seg.b) / 2, c);
+            }
+        }
         // Range control.
         if let (Some(first), Some(last)) = (self.hit_rect(Hit::Range(RANGES[0].1)), self.hit_rect(Hit::Range(RANGES[2].1))) {
             let r = Rect { l: first.l - self.s(2), t: first.t - self.s(2), r: last.r + self.s(2), b: last.b + self.s(2) };
@@ -1426,6 +1467,15 @@ impl Draw<'_> {
         let cy = r.t + self.s(26);
         cv.fill_round(Rect { l: x, t: cy - dot / 2, r: x + dot, b: cy - dot / 2 + dot }, dot as f32 / 2.0, c);
         let tx = x + dot + self.s(12);
+        // Bluetooth page: a button to Windows' own Bluetooth settings on the right.
+        let mut r = r;
+        if let Some(b) = self.hit_rect(Hit::BtSettings) {
+            let hot = self.is_hot(Hit::BtSettings);
+            cv.fill_round(b, b.h() as f32 / 2.0, if hot { self.col.fg.with_a(if self.dark() { 40 } else { 30 }) } else { self.col.card });
+            cv.stroke_round(b, b.h() as f32 / 2.0, self.col.card_border);
+            self.text_c(cv, self.f.small, "Bluetooth settings", (b.l + b.r) / 2, (b.t + b.b) / 2, self.col.fg);
+            r.r = b.l - self.s(4);
+        }
         let h = cv.ellipsize(self.f.head, &head, r.r - tx - self.s(16));
         let hh = cv.measure(self.f.head, &h).1;
         cv.text(self.f.head, &h, tx, cy - hh / 2, self.col.fg);

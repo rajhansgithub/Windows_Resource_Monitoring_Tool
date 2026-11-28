@@ -4,6 +4,7 @@
 //! (`live`).
 
 pub mod battery;
+pub mod bluetooth;
 pub mod cpu;
 pub mod disk;
 pub mod display;
@@ -25,6 +26,7 @@ mod tests {
         assert_eq!(Dev::from_key("Display0"), Some(Dev::Display(0)));
         assert_eq!(Dev::from_key("cpu"), Some(Dev::Cpu));
         assert_eq!(Dev::from_key("diskx"), None);
+        assert_eq!(Dev::from_key("bt"), Some(Dev::Bluetooth));
     }
 }
 
@@ -54,10 +56,12 @@ pub enum Dev {
     Display(u32),
     Net,
     Battery,
+    /// Paired Bluetooth devices (the Bluetooth module).
+    Bluetooth,
 }
 
 impl Dev {
-    /// From a short key ("cpu", "mem", "gpu", "disk0", "display1", "net", "battery"): CI runs
+    /// From a short key ("cpu", "mem", "gpu", "disk0", "display1", "net", "battery", "bt"): CI runs
     /// open a page with `RESMON_DEV`.
     pub fn from_key(k: &str) -> Option<Dev> {
         let k = k.trim().to_ascii_lowercase();
@@ -67,6 +71,7 @@ impl Dev {
             "gpu" => Dev::Gpu,
             "net" | "network" => Dev::Net,
             "battery" => Dev::Battery,
+            "bluetooth" | "bt" => Dev::Bluetooth,
             _ => {
                 if let Some(n) = k.strip_prefix("disk") {
                     Dev::Disk(n.parse().ok()?)
@@ -139,4 +144,7 @@ pub struct DeepLive {
     pub app_net_state: AppNet,
     // ---- battery
     pub batteries: Vec<battery::Battery>,
+    // ---- Bluetooth (read while the Monitor page is on screen and the module is on)
+    /// Paired Bluetooth devices, connected first. Shared: the page copies it every tick.
+    pub bt: Arc<Vec<bluetooth::BtDevice>>,
 }

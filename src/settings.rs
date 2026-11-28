@@ -198,6 +198,12 @@ pub struct Settings {
     pub window_page: String,
     /// Monitor page: processes grouped by app (chrome.exe ×56 → one "Google Chrome" row).
     pub proc_groups: bool,
+    /// Bluetooth module (built in): paired devices and their batteries on the Monitor page.
+    pub mod_bluetooth: bool,
+    /// Bluetooth page layout: 0 list, 1 rack, 2 hero.
+    pub bt_layout: u8,
+    /// The user picked `bt_layout`; until then the look's own layout is used.
+    pub bt_layout_set: bool,
 }
 
 impl Default for Settings {
@@ -255,6 +261,9 @@ impl Default for Settings {
             window: None,
             window_page: String::new(),
             proc_groups: true,
+            mod_bluetooth: true,
+            bt_layout: 1,
+            bt_layout_set: false,
         }
     }
 }
@@ -437,6 +446,13 @@ impl Settings {
                 "window" => self.window = crate::nav::Placement::parse(v).or(self.window),
                 "window_page" => self.window_page = v.to_string(),
                 "proc_groups" => self.proc_groups = parse_bool(v).unwrap_or(self.proc_groups),
+                "mod_bluetooth" => self.mod_bluetooth = parse_bool(v).unwrap_or(self.mod_bluetooth),
+                "bt_layout" => {
+                    if let Ok(x) = v.parse::<u8>() {
+                        self.bt_layout = x.min(2);
+                        self.bt_layout_set = true;
+                    }
+                }
                 "max_width_pct" => {
                     self.max_width_pct = v.parse().map(|x: u32| x.min(90)).unwrap_or(self.max_width_pct)
                 }
@@ -628,6 +644,14 @@ impl Settings {
         if let Some(l) = self.look {
             o.push_str(&format!("\n# Look of every window: lime | tactile | bento\nlook = {}\n", l.key()));
         }
+        o.push_str(&format!(
+            "\n# Modules: 1 = Bluetooth devices on the Monitor page\nmod_bluetooth = {}\n",
+            b(self.mod_bluetooth)
+        ));
+        // Written only once picked; otherwise each look opens its own layout.
+        if self.bt_layout_set {
+            o.push_str(&format!("# Bluetooth page layout: 0 list, 1 rack, 2 hero\nbt_layout = {}\n", self.bt_layout));
+        }
         if self.window.is_some() || !self.window_page.is_empty() {
             o.push_str("\n# Main window: x,y,width,height,maximized (screen pixels) and the last page\n");
             if let Some(w) = &self.window {
@@ -638,6 +662,16 @@ impl Settings {
             }
         }
         let _ = crate::util::write_atomic(&Self::path(), o.as_bytes());
+    }
+
+    /// The Bluetooth layout to show: the user's pick, else the look's own
+    /// (Lime list, Tactile rack, Bento hero).
+    pub fn bt_layout_now(&self) -> u8 {
+        if self.bt_layout_set {
+            self.bt_layout.min(2)
+        } else {
+            self.look.unwrap_or(crate::look::Look::Lime).bt_layout()
+        }
     }
 
     pub fn mtime() -> Option<SystemTime> {
@@ -673,6 +707,11 @@ mod tests {
         assert!(s.proc_groups, "grouped by default");
         s.apply("proc_groups = 0\n");
         assert!(!s.proc_groups);
+        assert!(s.mod_bluetooth, "Bluetooth module on by default");
+        s.apply("mod_bluetooth = 0\nbt_layout = 9\n");
+        assert!(!s.mod_bluetooth);
+        assert_eq!(s.bt_layout, 2, "clamped");
+        assert!(s.bt_layout_set, "picked once it is in the file");
         // Garbage keeps the last good value.
         s.apply("window = nonsense\n");
         assert!(s.window.is_some());
