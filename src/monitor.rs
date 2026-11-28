@@ -78,6 +78,8 @@ pub enum Hit {
     BtLayout(u8),
     /// Bluetooth page: open Windows Bluetooth settings.
     BtSettings,
+    /// Bluetooth page: save a debug report and open it.
+    BtDebug,
     /// Full speed page: check again.
     SpScan,
     /// Full speed page: get the missing drivers.

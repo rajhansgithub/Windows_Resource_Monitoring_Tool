@@ -55,6 +55,11 @@ fn main() {
             std::process::exit(driver::run_install(&driver::decode_ids(ids)));
         }
 
+        // Write the Bluetooth debug report and exit (also run by CI).
+        if args.iter().any(|a| a.eq_ignore_ascii_case("--bt-debug")) {
+            std::process::exit(if sensors::deep::bluetooth::write_debug_report().is_some() { 0 } else { 1 });
+        }
+
         let report = std::env::args().any(|a| a.eq_ignore_ascii_case("--report"));
         let after_update = std::env::args().any(|a| a.eq_ignore_ascii_case("--after-update"));
         let achievements = std::env::args().any(|a| a.eq_ignore_ascii_case("--achievements"));
