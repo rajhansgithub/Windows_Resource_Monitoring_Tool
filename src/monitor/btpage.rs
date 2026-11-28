@@ -414,7 +414,8 @@ impl Draw<'_> {
         let m = self.m;
         // Inverted tile: the text colour as the fill, so it stands apart in both themes.
         let fill = self.col.fg;
-        let ink = self.col.card;
+        // Opaque: `card` is translucent white under Mica in dark mode, which vanished on this fill.
+        let ink = self.col.bubble;
         let dim = ink.mix(fill, 0.45);
         cv.fill_round(r, self.sf(16.0), fill);
         let (l, rr) = (r.l + self.s(20), r.r - self.s(20));
