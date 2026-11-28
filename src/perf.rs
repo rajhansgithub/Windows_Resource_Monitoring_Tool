@@ -67,3 +67,65 @@ impl Drop for Span {
 pub fn span(name: &'static str) -> Option<Span> {
     on().then(|| Span(name, Instant::now()))
 }
+
+// ---- startup timing guard -------------------------------------------------------------------
+
+/// First data later than this after launch is a regression: logged to diagnostics.log
+/// even with the probe off. CI fails the build on it (startup timing step).
+pub const STARTUP_BUDGET_MS: u128 = 2500;
+/// One sensor sample slower than this holds every number on screen: logged (once a minute).
+pub const SLOW_SAMPLE_MS: u128 = 400;
+
+/// Process start; `mark_start` sets it first thing in `main`.
+pub fn started() -> Instant {
+    static T: OnceLock<Instant> = OnceLock::new();
+    *T.get_or_init(Instant::now)
+}
+
+pub fn mark_start() {
+    let _ = started();
+}
+
+/// Record one startup milestone ("first sample", "first Monitor detail"). Logged once
+/// per name: always when over budget, else only with the probe on.
+pub fn milestone(name: &'static str) {
+    use std::sync::Mutex;
+    static SEEN: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+    {
+        let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+        if seen.contains(&name) {
+            return;
+        }
+        seen.push(name);
+    }
+    let ms = started().elapsed().as_millis();
+    if ms > STARTUP_BUDGET_MS {
+        crate::util::diag(&format!("startup {name}: {ms} ms (slow, budget {STARTUP_BUDGET_MS} ms)"));
+    } else if on() {
+        crate::util::diag(&format!("startup {name}: {ms} ms"));
+    }
+}
+
+/// Log a slow sensor sample, at most once a minute.
+pub fn slow_sample(ms: u128, detail: bool) {
+    use std::sync::Mutex;
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    if ms < SLOW_SAMPLE_MS {
+        return;
+    }
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if last.is_some_and(|t| t.elapsed().as_secs() < 60) {
+        return;
+    }
+    *last = Some(Instant::now());
+    crate::util::diag(&format!("slow: sensor sample {ms} ms (detail {detail})"));
+}
+
+/// Time from a page opening to its first data. Over budget is always logged.
+pub fn page_data(page: &str, ms: u128) {
+    if ms > STARTUP_BUDGET_MS {
+        crate::util::diag(&format!("open {page}: first data {ms} ms (slow, budget {STARTUP_BUDGET_MS} ms)"));
+    } else if on() {
+        crate::util::diag(&format!("open {page}: first data {ms} ms"));
+    }
+}

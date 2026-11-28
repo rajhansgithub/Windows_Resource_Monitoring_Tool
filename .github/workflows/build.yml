@@ -652,6 +652,52 @@ jobs:
           name: bt-shots
           path: target/bt-shots/
           if-no-files-found: warn
+      - name: Startup timing guard (real sensors, Bluetooth module on)
+        shell: pwsh
+        run: |
+          # v2.22.0 regression: the Bluetooth device query ran on the sensor thread and held
+          # the Monitor page on "Collecting..." for up to a minute. Real sensors here (no
+          # RESMON_BT_DEMO): the first Monitor data must land within the budget, cold start
+          # and reopen alike, and no sensor sample may be slow.
+          $dir = "$env:LOCALAPPDATA/ResourceMonitor"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Add-Content "$dir/settings.ini" "`nmod_bluetooth = 1`n"
+          $log = "$dir/diagnostics.log"
+          if (Test-Path $log) { Remove-Item $log }
+          Remove-Item Env:RESMON_BT_DEMO, Env:RESMON_DEV, Env:RESMON_PAGE -ErrorAction SilentlyContinue
+          $env:RESMON_PERF = "1"
+          $p = Start-Process target/release/ResourceMonitor.exe -ArgumentList "--monitor" -PassThru
+          Start-Sleep -Seconds 12
+          # Reopen: close the window (the app stays in the tray), wait past a Bluetooth
+          # re-read (30 s), then a second launch with --monitor opens the page again.
+          Add-Type @"
+          using System; using System.Runtime.InteropServices;
+          public static class SG {
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string c, string t);
+            [DllImport("user32.dll")] public static extern IntPtr SendMessageW(IntPtr h, uint m, IntPtr w, IntPtr l);
+          }
+          "@
+          $h = [SG]::FindWindowW("ResourceMonitor.Window", [NullString]::Value)
+          if ($h -ne [IntPtr]::Zero) { [void][SG]::SendMessageW($h, 0x10, [IntPtr]::Zero, [IntPtr]::Zero) }
+          Start-Sleep -Seconds 35
+          Add-Content $log "guard reopen"
+          Start-Process target/release/ResourceMonitor.exe -ArgumentList "--monitor" | Out-Null
+          Start-Sleep -Seconds 8
+          $exited = $p.HasExited
+          if (-not $exited) { Stop-Process -Id $p.Id }
+          Remove-Item Env:RESMON_PERF
+          $lines = if (Test-Path $log) { Get-Content $log } else { @() }
+          $lines | Where-Object { $_ -match "startup |open |slow|guard " } | ForEach-Object { Write-Output $_ }
+          $fails = @()
+          if ($exited) { $fails += "app exited early" }
+          $first = $lines | Select-String -Pattern "startup first Monitor detail: (\d+) ms" | Select-Object -First 1
+          if (-not $first) { $fails += "no Monitor data logged within 12 s" }
+          elseif ([int]$first.Matches[0].Groups[1].Value -gt 2500) { $fails += "first Monitor data took $($first.Matches[0].Groups[1].Value) ms (budget 2500)" }
+          $opens = @($lines | Select-String -Pattern "open Monitor: first data (\d+) ms")
+          if ($opens.Count -lt 2) { $fails += "reopen: no Monitor data logged within 8 s" }
+          foreach ($o in $opens) { if ([int]$o.Matches[0].Groups[1].Value -gt 2500) { $fails += "Monitor open took $($o.Matches[0].Groups[1].Value) ms (budget 2500)" } }
+          $lines | Select-String -Pattern "slow" | ForEach-Object { $fails += "slow: $($_.Line)" }
+          if ($fails.Count -gt 0) { $fails | ForEach-Object { Write-Error $_ }; exit 1 }
       - name: Frame-time benchmark (scroll + resize on every page)
         shell: pwsh
         run: |

@@ -9,7 +9,8 @@
 //!   headsets keep it on the "Hands-Free AG" child node (`BTHENUM`), BLE devices on the
 //!   `BTHLE\Dev_...` node. Found through the configuration manager and joined by container.
 //!
-//! `read()` is a one-shot read (a few ms, no polling inside): call it from a sensor thread
+//! `read()` is a one-shot read (a few ms, no polling inside). It still waits on Device
+//! Query, so it never runs on the sensor beat: [`BtReader`] runs it on a thread of its own
 //! every ~30 s. It never panics: every failure just leaves a field empty.
 #![allow(dead_code)]
 
@@ -17,6 +18,7 @@ use crate::util::{from_wide, wide};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
+use std::sync::{Arc, Condvar, Mutex};
 use windows_sys::core::GUID;
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
     CM_Get_DevNode_PropertyW, CM_Get_Device_ID_ListW, CM_Get_Device_ID_List_SizeW,
@@ -25,7 +27,7 @@ use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
 };
 use windows_sys::Win32::Devices::DeviceQuery::{
     DevFreeObjects, DevGetObjects, DevObjectTypeAEP, DevQueryFlagNone, DEVPROP_FILTER_EXPRESSION,
-    DEVPROP_OPERATOR_EQUALS, DEV_OBJECT,
+    DEVPROP_OPERATOR_EQUALS, DEVPROP_OPERATOR_OR_CLOSE, DEVPROP_OPERATOR_OR_OPEN, DEV_OBJECT,
 };
 use windows_sys::Win32::Devices::Properties::{
     DEVPKEY_Device_ContainerId, DEVPROPCOMPKEY, DEVPROPERTY, DEVPROPKEY, DEVPROP_STORE_SYSTEM,
@@ -195,32 +197,66 @@ struct Aep {
     last_seen: Option<u64>,
 }
 
-/// Paired Classic and LE endpoints. Asks Windows to filter on `IsPaired`; if it rejects the
-/// filter, asks for everything and filters here.
+/// Paired Classic and LE endpoints.
+///
+/// The query always names the two Bluetooth protocol ids. Without them Device Query asks
+/// every association-endpoint provider, network ones included (WSD, UPnP, DIAL, Wi-Fi
+/// Direct, ...), and the synchronous call waits for their discovery: seconds on a
+/// typical PC, which held the sensor thread in v2.22.0. Asks Windows to filter on
+/// `IsPaired` too; if it rejects that, filters on protocol only and checks pairing here.
 fn endpoints() -> Vec<Aep> {
-    query_aeps(true).or_else(|| query_aeps(false)).unwrap_or_default()
+    query_aeps(Filter::PairedBluetooth)
+        .or_else(|| query_aeps(Filter::Bluetooth))
+        .or_else(|| query_aeps(Filter::None))
+        .unwrap_or_default()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Filter {
+    /// Bluetooth protocols and `IsPaired == true`.
+    PairedBluetooth,
+    /// Bluetooth protocols only.
+    Bluetooth,
+    /// Last resort: every endpoint (slow; only ever runs on the Bluetooth reader thread).
+    None,
 }
 
 /// `DevGetObjects` over the association endpoints. `None` when the call failed.
-fn query_aeps(filtered: bool) -> Option<Vec<Aep>> {
+fn query_aeps(filter: Filter) -> Option<Vec<Aep>> {
     let req: Vec<DEVPROPCOMPKEY> = REQUESTED
         .iter()
         .map(|k| DEVPROPCOMPKEY { Key: *k, Store: DEVPROP_STORE_SYSTEM, LocaleName: null() })
         .collect();
     let mut yes: u8 = DEVPROP_TRUE;
-    let filter = DEVPROP_FILTER_EXPRESSION {
-        Operator: DEVPROP_OPERATOR_EQUALS,
+    let mut classic = GUID::from_u128(PROTO_CLASSIC);
+    let mut le = GUID::from_u128(PROTO_LE);
+    let prop = |op, key: DEVPROPKEY, ty, size: usize, buf: *mut c_void| DEVPROP_FILTER_EXPRESSION {
+        Operator: op,
         Property: DEVPROPERTY {
-            CompKey: DEVPROPCOMPKEY { Key: K_PAIRED, Store: DEVPROP_STORE_SYSTEM, LocaleName: null() },
-            Type: DEVPROP_TYPE_BOOLEAN,
-            BufferSize: 1,
-            Buffer: &mut yes as *mut u8 as *mut c_void,
+            CompKey: DEVPROPCOMPKEY { Key: key, Store: DEVPROP_STORE_SYSTEM, LocaleName: null() },
+            Type: ty,
+            BufferSize: size as u32,
+            Buffer: buf,
         },
     };
-    let (nfilter, pfilter) = if filtered { (1, &filter as *const _) } else { (0, null()) };
+    let marker = |op| prop(op, K_PROTOCOL, 0, 0, null_mut());
+    let gsize = std::mem::size_of::<GUID>();
+    // Top-level terms are ANDed: (protocol == Classic OR protocol == LE) AND paired.
+    let mut filters: Vec<DEVPROP_FILTER_EXPRESSION> = Vec::new();
+    if filter != Filter::None {
+        filters.push(marker(DEVPROP_OPERATOR_OR_OPEN));
+        filters.push(prop(DEVPROP_OPERATOR_EQUALS, K_PROTOCOL, DEVPROP_TYPE_GUID, gsize, &mut classic as *mut GUID as *mut c_void));
+        filters.push(prop(DEVPROP_OPERATOR_EQUALS, K_PROTOCOL, DEVPROP_TYPE_GUID, gsize, &mut le as *mut GUID as *mut c_void));
+        filters.push(marker(DEVPROP_OPERATOR_OR_CLOSE));
+    }
+    if filter == Filter::PairedBluetooth {
+        filters.push(prop(DEVPROP_OPERATOR_EQUALS, K_PAIRED, DEVPROP_TYPE_BOOLEAN, 1, &mut yes as *mut u8 as *mut c_void));
+    }
+    let filtered = filter == Filter::PairedBluetooth;
+    let (nfilter, pfilter) = if filters.is_empty() { (0, null()) } else { (filters.len() as u32, filters.as_ptr()) };
     let mut count: u32 = 0;
     let mut objs: *mut DEV_OBJECT = null_mut();
-    // SAFETY: `req`, `filter` and `yes` outlive the call; the out pointers are valid locals.
+    // SAFETY: `req`, `filters` and the values they point at (`yes`, `classic`, `le`) outlive the call; the out pointers are valid locals.
     let hr = unsafe {
         DevGetObjects(
             DevObjectTypeAEP,
@@ -643,9 +679,116 @@ pub fn kind_from(
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Background reader
+// ---------------------------------------------------------------------------------------------
+
+#[derive(Default)]
+struct ReaderState {
+    /// A read is wanted (true while one is queued, not while one runs).
+    job: bool,
+    done: Option<Arc<Vec<BtDevice>>>,
+}
+
+type Shared = Arc<(Mutex<ReaderState>, Condvar)>;
+
+/// Runs [`read`] on a thread of its own, so a slow Device Query never holds the sensor
+/// thread (and with it every number on screen). Cheap until the first `request`.
+#[derive(Default)]
+pub struct BtReader {
+    s: Option<Shared>,
+    latest: Arc<Vec<BtDevice>>,
+}
+
+impl BtReader {
+    /// Ask for a fresh read. Never blocks; repeated asks while one runs collapse into one.
+    pub fn request(&mut self) {
+        let s = self.s.get_or_insert_with(spawn);
+        let (m, cv) = &**s;
+        m.lock().unwrap_or_else(|e| e.into_inner()).job = true;
+        cv.notify_one();
+    }
+
+    /// The newest finished read (empty until the first one lands).
+    pub fn latest(&mut self) -> Arc<Vec<BtDevice>> {
+        if let Some(s) = &self.s {
+            if let Some(d) = s.0.lock().unwrap_or_else(|e| e.into_inner()).done.take() {
+                self.latest = d;
+            }
+        }
+        self.latest.clone()
+    }
+
+    /// Forget the last read (the module was turned off).
+    pub fn clear(&mut self) {
+        if let Some(s) = &self.s {
+            s.0.lock().unwrap_or_else(|e| e.into_inner()).done = None;
+        }
+        self.latest = Arc::default();
+    }
+}
+
+fn spawn() -> Shared {
+    let s: Shared = Arc::default();
+    let t = s.clone();
+    let _ = std::thread::Builder::new().name("bt-reader".into()).spawn(move || {
+        let (m, cv) = &*t;
+        loop {
+            {
+                let mut st = m.lock().unwrap_or_else(|e| e.into_inner());
+                while !st.job {
+                    st = cv.wait(st).unwrap_or_else(|e| e.into_inner());
+                }
+                st.job = false;
+            }
+            let t0 = std::time::Instant::now();
+            // CI has no Bluetooth radio: RESMON_BT_DEMO fills the page with example devices.
+            let list = if std::env::var_os("RESMON_BT_DEMO").is_some() { demo() } else { read() };
+            let ms = t0.elapsed().as_secs_f32() * 1000.0;
+            crate::perf::record("bluetooth", ms);
+            if ms >= SLOW_READ_MS {
+                crate::util::diag(&format!("slow: bluetooth read {ms:.0} ms ({} devices)", list.len()));
+            }
+            m.lock().unwrap_or_else(|e| e.into_inner()).done = Some(Arc::new(list));
+        }
+    });
+    s
+}
+
+/// A Bluetooth read slower than this is logged to diagnostics.log.
+const SLOW_READ_MS: f32 = 500.0;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Startup guard: the Bluetooth query is narrowed to the two Bluetooth protocols, so it
+    /// must not wait on network discovery. Prints which filter Windows took (CI log).
+    #[test]
+    fn device_query_is_quick() {
+        let t = std::time::Instant::now();
+        let paired = query_aeps(Filter::PairedBluetooth);
+        let ms = t.elapsed().as_millis();
+        println!("bluetooth query (paired + protocol filter): {ms} ms, {:?} endpoints", paired.as_ref().map(Vec::len));
+        if paired.is_none() {
+            let t = std::time::Instant::now();
+            let proto = query_aeps(Filter::Bluetooth);
+            println!("bluetooth query (protocol filter): {} ms, {:?} endpoints", t.elapsed().as_millis(), proto.as_ref().map(Vec::len));
+        }
+        assert!(ms < 1500, "Bluetooth device query took {ms} ms");
+    }
+
+    /// Asking for a read never waits for it.
+    #[test]
+    fn reader_never_blocks() {
+        let mut r = BtReader::default();
+        let t = std::time::Instant::now();
+        for _ in 0..5 {
+            r.request();
+            let _ = r.latest();
+        }
+        assert!(t.elapsed().as_millis() < 50, "BtReader blocked for {} ms", t.elapsed().as_millis());
+    }
 
     #[test]
     fn cod_headphones() {
