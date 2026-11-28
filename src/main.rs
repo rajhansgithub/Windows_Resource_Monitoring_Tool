@@ -6,6 +6,7 @@ mod app;
 mod autostart;
 mod driver;
 mod fmt;
+mod fonts;
 mod grid;
 mod icons;
 mod insights;

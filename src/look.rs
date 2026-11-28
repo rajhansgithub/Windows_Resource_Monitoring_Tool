@@ -437,15 +437,34 @@ pub fn faces_for(look: Look) -> Faces {
     static MONO: OnceLock<&'static str> = OnceLock::new();
     static DIN: OnceLock<&'static str> = OnceLock::new();
     static DISPLAY: OnceLock<&'static str> = OnceLock::new();
-    let mono = *MONO.get_or_init(|| has_face("Cascadia Mono").unwrap_or("Consolas"));
-    let din = *DIN.get_or_init(|| has_face("Bahnschrift").unwrap_or_else(crate::render::ui_face));
-    let display = *DISPLAY.get_or_init(|| has_face("Segoe UI Variable Display").unwrap_or_else(crate::render::ui_face));
+    // Bundled first (src/fonts.rs); the system faces are only a fallback.
+    let bundled = crate::fonts::ready();
+    let mono = *MONO.get_or_init(|| {
+        if bundled {
+            crate::fonts::MONO
+        } else {
+            has_face("Cascadia Mono").unwrap_or("Consolas")
+        }
+    });
+    let din = *DIN.get_or_init(|| {
+        if bundled {
+            crate::fonts::DIN
+        } else {
+            has_face("Bahnschrift").unwrap_or_else(crate::render::ui_face)
+        }
+    });
+    let sans = *DISPLAY.get_or_init(|| {
+        if bundled {
+            crate::fonts::SANS
+        } else {
+            has_face("Segoe UI Variable Display").unwrap_or_else(crate::render::ui_face)
+        }
+    });
+    let ui = if bundled { sans } else { crate::render::ui_face() };
     match look {
         Look::Lime => Faces { ui: mono, display: mono, mono, num: mono, title_weight: 600, num_weight: 300 },
         Look::Tactile => Faces { ui: din, display: din, mono, num: mono, title_weight: 600, num_weight: 400 },
-        Look::Bento => {
-            Faces { ui: crate::render::ui_face(), display, mono, num: display, title_weight: 700, num_weight: 600 }
-        }
+        Look::Bento => Faces { ui, display: sans, mono, num: sans, title_weight: 700, num_weight: 600 },
     }
 }
 

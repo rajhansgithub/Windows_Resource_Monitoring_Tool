@@ -587,8 +587,9 @@ impl Fonts {
     /// Grayscale anti-aliased fonts (the canvas needs a coverage mask).
     fn new(dpi: u32) -> Fonts {
         let sc = |v: i32| ((v * dpi as i32 + 48) / 96).max(1);
-        // The look's typefaces: mono for Lime, Bahnschrift for Tactile, Segoe
-        // UI Variable for Bento. Mono runs wide, so Lime's body is a size smaller.
+        // The look's typefaces (bundled, src/fonts.rs): JetBrains Mono for Lime,
+        // Barlow Semi Condensed for Tactile, Inter for Bento. Mono runs wide, so
+        // Lime's body is a size smaller.
         let fc = crate::look::faces();
         let text = fc.ui;
         let display = fc.display;

@@ -27,6 +27,8 @@ impl Rgba {
 }
 
 pub fn create_font(px: i32, weight: i32, face: &str, aa_gray: bool) -> HFONT {
+    // Bundled families map to the face that has this weight (src/fonts.rs).
+    let (face, weight) = crate::fonts::pick(face, weight);
     let f = wide(face);
     let q = if aa_gray { ANTIALIASED_QUALITY } else { CLEARTYPE_QUALITY };
     unsafe {
@@ -1008,6 +1010,7 @@ pub fn measure_dc(dc: HDC, font: HFONT, s: &str) -> (i32, i32) {
     if dc.is_null() {
         return (0, 0);
     }
+    let font = glyph_font(dc, font, s);
     let ws: Vec<u16> = s.encode_utf16().collect();
     let mut sz = SIZE { cx: 0, cy: 0 };
     unsafe {
@@ -1016,6 +1019,58 @@ pub fn measure_dc(dc: HDC, font: HFONT, s: &str) -> (i32, i32) {
         SelectObject(dc, old);
     }
     (sz.cx, sz.cy)
+}
+
+/// `font`, or a Segoe UI twin of it when `font` is a bundled face that lacks
+/// a character of `s` (arrows, symbols, other scripts in process names).
+/// System fonts are left alone: GDI's font linking covers those.
+pub fn glyph_font(dc: HDC, font: HFONT, s: &str) -> HFONT {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    thread_local! {
+        static TWINS: RefCell<HashMap<Vec<u16>, HFONT>> = RefCell::new(HashMap::new());
+    }
+    if s.is_ascii() || dc.is_null() {
+        return font;
+    }
+    let mut lf: LOGFONTW = unsafe { std::mem::zeroed() };
+    if unsafe { GetObjectW(font, std::mem::size_of::<LOGFONTW>() as i32, &mut lf as *mut _ as *mut core::ffi::c_void) } <= 0 {
+        return font;
+    }
+    let n = lf.lfFaceName.iter().position(|&c| c == 0).unwrap_or(lf.lfFaceName.len());
+    if !crate::fonts::is_bundled(&String::from_utf16_lossy(&lf.lfFaceName[..n])) {
+        return font;
+    }
+    let ws: Vec<u16> = s.encode_utf16().collect();
+    let mut gi = vec![0u16; ws.len()];
+    let missing = unsafe {
+        let old = SelectObject(dc, font);
+        let r = GetGlyphIndicesW(dc, ws.as_ptr(), ws.len() as i32, gi.as_mut_ptr(), GGI_MARK_NONEXISTING_GLYPHS);
+        SelectObject(dc, old);
+        r == GDI_ERROR as u32 || gi.contains(&0xFFFF)
+    };
+    if !missing {
+        return font;
+    }
+    // Same size, weight and quality; only the face changes.
+    let key: Vec<u16> = unsafe {
+        std::slice::from_raw_parts(&lf as *const LOGFONTW as *const u16, std::mem::size_of::<LOGFONTW>() / 2).to_vec()
+    };
+    TWINS.with(|t| {
+        *t.borrow_mut().entry(key).or_insert_with(|| {
+            let mut sub = lf;
+            sub.lfFaceName = [0; 32];
+            for (d, c) in sub.lfFaceName.iter_mut().zip(ui_face().encode_utf16()) {
+                *d = c;
+            }
+            let f = unsafe { CreateFontIndirectW(&sub) };
+            if f.is_null() {
+                font
+            } else {
+                f
+            }
+        })
+    })
 }
 
 /// Double-buffered opaque painting for normal windows (popup, report).
@@ -1071,6 +1126,7 @@ impl Painter {
 
     pub fn text(&self, font: HFONT, s: &str, x: i32, y: i32, c: Rgba) -> i32 {
         let ws: Vec<u16> = s.encode_utf16().collect();
+        let font = glyph_font(self.dc, font, s);
         unsafe {
             let old = SelectObject(self.dc, font);
             SetTextColor(self.dc, c.colorref());
@@ -1083,6 +1139,7 @@ impl Painter {
     /// Word-wrapped text inside `r`.
     pub fn text_wrap(&self, font: HFONT, s: &str, r: Rect, c: Rgba) {
         let mut ws: Vec<u16> = s.encode_utf16().collect();
+        let font = glyph_font(self.dc, font, s);
         unsafe {
             let old = SelectObject(self.dc, font);
             SetTextColor(self.dc, c.colorref());
@@ -1265,6 +1322,7 @@ mod text_cache {
             let stride = *sw as usize;
             let dc = d.dc;
             let bits = d.bits;
+            let font = super::glyph_font(dc, font, s);
             let ws: Vec<u16> = s.encode_utf16().collect();
             // White on black into the scratch; `px` turns one pixel into coverage.
             let draw = |f: HFONT, px: fn(u32) -> u8| -> Vec<u8> {
@@ -1705,5 +1763,21 @@ mod tests {
             assert!(!aliased, "'{w}' is still jagged");
         }
         unsafe { DeleteObject(hard) };
+    }
+
+    /// A bundled face that lacks a character hands the string to Segoe UI;
+    /// one that has them all keeps it.
+    #[test]
+    fn missing_glyphs_fall_back_to_segoe() {
+        assert!(crate::fonts::ready());
+        let f = create_font(14, 400, crate::fonts::DIN, true);
+        let dc = unsafe { CreateCompatibleDC(std::ptr::null_mut()) };
+        assert_eq!(glyph_font(dc, f, "Fine · 2.5G"), f);
+        assert_ne!(glyph_font(dc, f, "\u{2191} 2.1 MB/s"), f);
+        assert_ne!(glyph_font(dc, f, "\u{5fae}\u{4fe1}"), f);
+        unsafe {
+            DeleteDC(dc);
+            DeleteObject(f);
+        }
     }
 }
