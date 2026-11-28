@@ -88,7 +88,9 @@ pub struct LiveSensors {
     /// The Bluetooth module is on (set before each sample).
     pub bt_on: bool,
     bt: std::sync::Arc<Vec<bluetooth::BtDevice>>,
-    /// Seconds since the last Bluetooth read (None = never, or the module was off).
+    /// Reads the paired devices off the sensor thread (Device Query can take seconds).
+    bt_reader: bluetooth::BtReader,
+    /// Seconds since the last Bluetooth read was asked for (None = never, or the module was off).
     bt_age: Option<f64>,
 }
 
@@ -218,13 +220,15 @@ impl LiveSensors {
         }
     }
 
-    /// Re-read the paired Bluetooth devices when due (only while the Monitor page is on
-    /// screen, since `sample` runs only then). One device-query call plus a short devnode
-    /// walk: a few ms, every 10-30 s.
+    /// Ask for a fresh paired-device list when due and pick up the newest finished one
+    /// (only while the Monitor page is on screen, since `sample` runs only then). The read
+    /// itself runs on the Bluetooth reader thread: this never waits on Device Query, so
+    /// the first numbers on the Monitor page are not held up by Bluetooth.
     fn bluetooth(&mut self, elapsed: f64) {
         if !self.bt_on {
             if self.bt_age.is_some() {
                 self.bt_age = None;
+                self.bt_reader.clear();
                 self.bt = std::sync::Arc::default();
             }
             return;
@@ -233,13 +237,11 @@ impl LiveSensors {
         match &mut self.bt_age {
             Some(a) if *a + elapsed < every => *a += elapsed,
             _ => {
-                let _p = crate::perf::span("bluetooth");
                 self.bt_age = Some(0.0);
-                // CI has no Bluetooth radio: RESMON_BT_DEMO fills the page with example devices.
-                let list = if std::env::var_os("RESMON_BT_DEMO").is_some() { bluetooth::demo() } else { bluetooth::read() };
-                self.bt = std::sync::Arc::new(list);
+                self.bt_reader.request();
             }
         }
+        self.bt = self.bt_reader.latest();
     }
 
     /// Read the Bluetooth devices on the next sample (the page just opened).
@@ -347,5 +349,25 @@ impl LiveSensors {
         out.gpu_mem = mem;
         out.gpu_3d = e3d.into_iter().filter(|e| e.0 != 0 && e.2 > 0.0).map(|e| (e.0, e.1, e.2.clamp(0.0, 100.0) as f32)).collect();
         out.gpu_perf = out.st.gpus.iter().filter_map(|a| gpu::perf(a.luid).map(|p| (a.luid, p))).collect();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Startup guard (v2.22.0 regression): with the Bluetooth module on, the Monitor page's
+    /// deep sample must not wait for the Bluetooth read, or the first numbers on the page
+    /// wait for it too.
+    #[test]
+    fn bluetooth_never_holds_the_sample() {
+        let mut live = LiveSensors { bt_on: true, ..Default::default() };
+        let mut out = DeepLive::default();
+        let t = std::time::Instant::now();
+        for _ in 0..3 {
+            live.sample(1.0, &[], &mut out);
+        }
+        let ms = t.elapsed().as_millis();
+        assert!(ms < 100, "deep sample with Bluetooth on took {ms} ms");
     }
 }

@@ -349,6 +349,10 @@ pub struct App {
     /// Monitor page detail from the last sample (empty unless the page is on screen).
     detail: crate::sensors::detail::Detail,
     last_save: Instant,
+    /// The Monitor page was opened (detail asked for) and its first data has not landed yet.
+    detail_wait: Option<Instant>,
+    /// The last sample asked for the Monitor page's detail.
+    detail_on: bool,
     adapters: Vec<AdapterInfo>,
     pub overlays: Vec<Overlay>,
     /// All taskbars found on the last refresh (for the Displays menu).
@@ -502,6 +506,8 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
             sensors: crate::sensors::worker::Worker::new(hwnd),
             detail: Default::default(),
             last_save: Instant::now(),
+            detail_wait: None,
+            detail_on: false,
             adapters: Vec::new(),
             overlays: Vec::new(),
             taskbars: Vec::new(),
@@ -804,6 +810,13 @@ impl App {
     /// The sample timer: the sensor thread reads, `sampled` takes the result.
     pub fn request_sample(&mut self) {
         let opts = self.opts();
+        // Startup / reopen timing guard: from the Monitor page opening to its first data.
+        if opts.detail && !self.detail_on {
+            self.detail_wait = Some(Instant::now());
+        } else if !opts.detail {
+            self.detail_wait = None;
+        }
+        self.detail_on = opts.detail;
         self.sensors.request(opts, false);
     }
 
@@ -814,7 +827,12 @@ impl App {
             return false;
         }
         let _p = crate::perf::span("sample_ui");
+        crate::perf::milestone("first sample");
         if let Some(d) = r.detail {
+            crate::perf::milestone("first Monitor detail");
+            if let Some(t) = self.detail_wait.take() {
+                crate::perf::page_data("Monitor", t.elapsed().as_millis());
+            }
             self.detail = d;
         }
         let opts = r.opts;

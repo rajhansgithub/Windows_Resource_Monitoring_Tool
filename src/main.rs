@@ -39,6 +39,7 @@ use windows_sys::Win32::UI::HiDpi::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 fn main() {
+    perf::mark_start();
     // Crash log: a panic aborts the process, but first record where and why.
     std::panic::set_hook(Box::new(|info| {
         util::diag(&format!("CRASH v{}: {}", env!("CARGO_PKG_VERSION"), info));

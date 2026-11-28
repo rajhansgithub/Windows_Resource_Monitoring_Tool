@@ -54,9 +54,11 @@ impl Worker {
                     }
                 };
                 let p = crate::perf::span("sample");
+                let t0 = std::time::Instant::now();
                 let snap = sensors.sample(&opts).clone();
                 let detail = opts.detail.then(|| sensors.detail().clone());
                 drop(p);
+                crate::perf::slow_sample(t0.elapsed().as_millis(), opts.detail);
                 {
                     let mut st = m.lock().unwrap_or_else(|e| e.into_inner());
                     st.busy = false;
