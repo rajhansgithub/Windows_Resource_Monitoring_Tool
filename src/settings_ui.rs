@@ -3785,6 +3785,14 @@ fn activate(hwnd: HWND, id: i32) {
                 }
             }
             Some(MonHit::BtSettings) => shell_open("ms-settings:bluetooth", None),
+            // Slow (all device properties): off the UI thread, then open it in the text editor.
+            Some(MonHit::BtDebug) => {
+                std::thread::spawn(|| {
+                    if let Some(p) = crate::sensors::deep::bluetooth::write_debug_report() {
+                        shell_open(&p.to_string_lossy(), None);
+                    }
+                });
+            }
             Some(MonHit::SpScan) => {
                 u.mon.speed_scan();
                 u.layout();

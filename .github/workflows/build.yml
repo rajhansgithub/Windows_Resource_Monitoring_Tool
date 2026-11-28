@@ -584,6 +584,14 @@ jobs:
           name: device-shots
           path: target/device-shots/
           if-no-files-found: warn
+      - name: Bluetooth debug report runs and writes its file
+        shell: pwsh
+        run: |
+          $f = "$env:LOCALAPPDATA/ResourceMonitor/bluetooth-debug.txt"
+          Remove-Item $f -ErrorAction SilentlyContinue
+          $p = Start-Process target/release/ResourceMonitor.exe -ArgumentList "--bt-debug" -PassThru -Wait
+          if ($p.ExitCode -ne 0 -or -not (Test-Path $f)) { Write-Error "bt-debug failed (exit $($p.ExitCode))"; exit 1 }
+          Get-Content $f | Select-Object -First 80
       - name: Run app, screenshot the Bluetooth page in each layout (example devices)
         shell: pwsh
         run: |

@@ -544,7 +544,13 @@ impl Monitor {
             self.dp.cards.clear();
             let v = self.dp.verdict;
             let bw = self.sc(150);
-            self.hits.push((Rect { l: v.r - self.sc(16) - bw, t: v.t + self.sc(24), r: v.r - self.sc(16), b: v.t + self.sc(54) }, Hit::BtSettings));
+            let bs = Rect { l: v.r - self.sc(16) - bw, t: v.t + self.sc(24), r: v.r - self.sc(16), b: v.t + self.sc(54) };
+            self.hits.push((bs, Hit::BtSettings));
+            // Debug report button left of it, when the card is wide enough for both.
+            let dw = self.sc(120);
+            if bs.l - self.sc(8) - dw > v.l + self.sc(260) {
+                self.hits.push((Rect { l: bs.l - self.sc(8) - dw, r: bs.l - self.sc(8), ..bs }, Hit::BtDebug));
+            }
             return self.layout_bt(l, r, y);
         }
         // Chart.
@@ -1469,12 +1475,13 @@ impl Draw<'_> {
         let tx = x + dot + self.s(12);
         // Bluetooth page: a button to Windows' own Bluetooth settings on the right.
         let mut r = r;
-        if let Some(b) = self.hit_rect(Hit::BtSettings) {
-            let hot = self.is_hot(Hit::BtSettings);
+        for (hit, label) in [(Hit::BtSettings, "Bluetooth settings"), (Hit::BtDebug, "Debug report")] {
+            let Some(b) = self.hit_rect(hit) else { continue };
+            let hot = self.is_hot(hit);
             cv.fill_round(b, b.h() as f32 / 2.0, if hot { self.col.fg.with_a(if self.dark() { 40 } else { 30 }) } else { self.col.card });
             cv.stroke_round(b, b.h() as f32 / 2.0, self.col.card_border);
-            self.text_c(cv, self.f.small, "Bluetooth settings", (b.l + b.r) / 2, (b.t + b.b) / 2, self.col.fg);
-            r.r = b.l - self.s(4);
+            self.text_c(cv, self.f.small, label, (b.l + b.r) / 2, (b.t + b.b) / 2, self.col.fg);
+            r.r = r.r.min(b.l - self.s(4));
         }
         let h = cv.ellipsize(self.f.head, &head, r.r - tx - self.s(16));
         let hh = cv.measure(self.f.head, &h).1;

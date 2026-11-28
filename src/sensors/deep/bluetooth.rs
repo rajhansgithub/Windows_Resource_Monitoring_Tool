@@ -7,7 +7,10 @@
 //!   container id and are merged into one [`BtDevice`].
 //! * Battery: the `{104EA319-...} 2` device property Windows Settings shows. Classic
 //!   headsets keep it on the "Hands-Free AG" child node (`BTHENUM`), BLE devices on the
-//!   `BTHLE\Dev_...` node. Found through the configuration manager and joined by container.
+//!   `BTHLE\Dev_...` node. Found with one Device Query over every device node that has the
+//!   property (the enumerator scan is a fallback), joined by container id, else by the
+//!   Bluetooth address in the instance id.
+//! * [`debug_report`] dumps everything the reader sees, for finding why a level is missing.
 //!
 //! `read()` is a one-shot read (a few ms, no polling inside): call it from a sensor thread
 //! every ~30 s. It never panics: every failure just leaves a field empty.
@@ -19,19 +22,22 @@ use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use windows_sys::core::GUID;
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
-    CM_Get_DevNode_PropertyW, CM_Get_Device_ID_ListW, CM_Get_Device_ID_List_SizeW,
+    CM_Get_DevNode_PropertyW, CM_Get_DevNode_Property_Keys, CM_Get_Device_ID_ListW,
+    CM_Get_Device_ID_List_SizeW,
     CM_Locate_DevNodeW, CM_GETIDLIST_FILTER_ENUMERATOR, CM_GETIDLIST_FILTER_PRESENT,
     CM_LOCATE_DEVNODE_NORMAL, CR_BUFFER_SMALL, CR_SUCCESS,
 };
 use windows_sys::Win32::Devices::DeviceQuery::{
-    DevFreeObjects, DevGetObjects, DevObjectTypeAEP, DevQueryFlagNone, DEVPROP_FILTER_EXPRESSION,
-    DEVPROP_OPERATOR_EQUALS, DEV_OBJECT,
+    DevFreeObjects, DevGetObjects, DevObjectTypeAEP, DevObjectTypeAEPContainer,
+    DevObjectTypeDevice, DevQueryFlagAllProperties, DevQueryFlagNone, DEVPROP_FILTER_EXPRESSION,
+    DEVPROP_OPERATOR_EQUALS, DEVPROP_OPERATOR_EXISTS, DEV_OBJECT, DEV_OBJECT_TYPE,
 };
 use windows_sys::Win32::Devices::Properties::{
     DEVPKEY_Device_ContainerId, DEVPROPCOMPKEY, DEVPROPERTY, DEVPROPKEY, DEVPROP_STORE_SYSTEM,
     DEVPROP_TRUE, DEVPROP_TYPE_BOOLEAN, DEVPROP_TYPE_BYTE, DEVPROP_TYPE_FILETIME,
-    DEVPROP_TYPE_GUID, DEVPROP_TYPE_INT16, DEVPROP_TYPE_INT32, DEVPROP_TYPE_STRING,
-    DEVPROP_TYPE_UINT16, DEVPROP_TYPE_UINT32,
+    DEVPROP_TYPEMOD_LIST, DEVPROP_TYPE_EMPTY, DEVPROP_TYPE_GUID, DEVPROP_TYPE_INT16,
+    DEVPROP_TYPE_INT32, DEVPROP_TYPE_INT64, DEVPROP_TYPE_SBYTE, DEVPROP_TYPE_STRING,
+    DEVPROP_TYPE_UINT16, DEVPROP_TYPE_UINT32, DEVPROP_TYPE_UINT64,
 };
 
 /// What a device is, for choosing its icon. Declaration order is the list order.
@@ -132,7 +138,7 @@ pub fn read() -> Vec<BtDevice> {
     if aeps.is_empty() {
         return Vec::new();
     }
-    let bat = batteries();
+    let bat = Batteries::from_nodes(&battery_nodes());
     let mut out = merge(aeps, &bat);
     out.sort_by(|a, b| {
         b.connected
@@ -193,6 +199,8 @@ struct Aep {
     minor: Option<u32>,
     appearance: Option<u16>,
     last_seen: Option<u64>,
+    /// Remote Bluetooth address, from the endpoint id.
+    addr: Option<u64>,
 }
 
 /// Paired Classic and LE endpoints. Asks Windows to filter on `IsPaired`; if it rejects the
@@ -250,7 +258,8 @@ fn query_aeps(filtered: bool) -> Option<Vec<Aep>> {
             // SAFETY: pProperties holds cPropertyCount entries, valid until DevFreeObjects.
             unsafe { std::slice::from_raw_parts(o.pProperties, o.cPropertyCount as usize) }
         };
-        let a = parse_aep(props);
+        let mut a = parse_aep(props);
+        a.addr = addr_from_aep_id(&pcwstr(o.pszObjectId));
         let bluetooth = a.protocol == PROTO_CLASSIC || a.protocol == PROTO_LE;
         let paired = match a.paired {
             Some(p) => p,
@@ -388,10 +397,12 @@ struct Acc {
     appearance: Option<u16>,
     /// `dev.name` came from the Classic endpoint.
     classic_name: bool,
+    /// Bluetooth addresses of its endpoints.
+    addrs: Vec<u64>,
 }
 
 /// One `BtDevice` per container; adds batteries and the kind.
-fn merge(aeps: Vec<Aep>, bat: &HashMap<u128, u8>) -> Vec<BtDevice> {
+fn merge(aeps: Vec<Aep>, bat: &Batteries) -> Vec<BtDevice> {
     let mut map: HashMap<u128, Acc> = HashMap::new();
     for a in aeps {
         let Some(cid) = a.container else { continue };
@@ -401,7 +412,11 @@ fn merge(aeps: Vec<Aep>, bat: &HashMap<u128, u8>) -> Vec<BtDevice> {
             minor: None,
             appearance: None,
             classic_name: false,
+            addrs: Vec::new(),
         });
+        if let Some(x) = a.addr {
+            acc.addrs.push(x);
+        }
         let classic = a.protocol == PROTO_CLASSIC;
         acc.dev.classic |= classic;
         acc.dev.le |= !classic;
@@ -417,7 +432,7 @@ fn merge(aeps: Vec<Aep>, bat: &HashMap<u128, u8>) -> Vec<BtDevice> {
     }
     let mut out = Vec::with_capacity(map.len());
     for (cid, mut acc) in map {
-        acc.dev.battery = bat.get(&cid).copied();
+        acc.dev.battery = bat.find(cid, &acc.addrs);
         if acc.dev.name.is_empty() && acc.dev.battery.is_none() {
             continue;
         }
@@ -431,37 +446,117 @@ fn merge(aeps: Vec<Aep>, bat: &HashMap<u128, u8>) -> Vec<BtDevice> {
 // Battery (configuration manager)
 // ---------------------------------------------------------------------------------------------
 
-/// Battery percent per container id, over the present `BTHENUM` and `BTHLE` device nodes.
-/// A container can have the value on several nodes (copies); the highest wins.
-fn batteries() -> HashMap<u128, u8> {
-    let mut map: HashMap<u128, u8> = HashMap::new();
-    for filter in ["BTHENUM", "BTHLE"] {
-        let list = id_list(filter);
-        let mut start = 0;
-        while start < list.len() && list[start] != 0 {
-            let Some(len) = list[start..].iter().position(|&c| c == 0) else { break };
-            let end = start + len;
-            // The id with its terminating NUL, as CM_Locate_DevNodeW wants it.
-            let id = &list[start..=end];
-            start = end + 1;
-            let Some(node) = locate(id) else { continue };
-            let Some(pct) = node_battery(node) else { continue };
-            let Some(cid) = node_container(node) else { continue };
-            let e = map.entry(cid).or_insert(pct);
-            *e = (*e).max(pct);
+/// One device node that carries the battery property.
+struct BatNode {
+    id: String,
+    container: Option<u128>,
+    pct: u8,
+}
+
+/// Battery percent by container id and by Bluetooth address. A device can have the value on
+/// several nodes (copies); the highest wins.
+#[derive(Default)]
+struct Batteries {
+    by_cid: HashMap<u128, u8>,
+    by_addr: HashMap<u64, u8>,
+}
+
+impl Batteries {
+    fn from_nodes(nodes: &[BatNode]) -> Self {
+        let mut b = Batteries::default();
+        for n in nodes {
+            if let Some(c) = n.container {
+                let e = b.by_cid.entry(c).or_insert(n.pct);
+                *e = (*e).max(n.pct);
+            }
+            if let Some(x) = addr_from_instance(&n.id) {
+                let e = b.by_addr.entry(x).or_insert(n.pct);
+                *e = (*e).max(n.pct);
+            }
+        }
+        b
+    }
+
+    fn find(&self, cid: u128, addrs: &[u64]) -> Option<u8> {
+        self.by_cid.get(&cid).copied().or_else(|| addrs.iter().filter_map(|x| self.by_addr.get(x).copied()).max())
+    }
+}
+
+/// Bluetooth enumerators scanned when Device Query can't filter on the battery property.
+const BT_ENUMS: [&str; 4] = ["BTHENUM", "BTHLE", "BTHLEDEVICE", "BTHHFENUM"];
+
+/// Every present device node with a battery level: one Device Query filtered on the property
+/// existing, or a scan of the Bluetooth enumerators when that query fails.
+fn battery_nodes() -> Vec<BatNode> {
+    query_battery_nodes().unwrap_or_else(scan_battery_nodes)
+}
+
+fn query_battery_nodes() -> Option<Vec<BatNode>> {
+    let filter = DEVPROP_FILTER_EXPRESSION {
+        Operator: DEVPROP_OPERATOR_EXISTS,
+        Property: DEVPROPERTY {
+            CompKey: compkey(K_BATTERY),
+            Type: DEVPROP_TYPE_EMPTY,
+            BufferSize: 0,
+            Buffer: null_mut(),
+        },
+    };
+    let req = [compkey(K_BATTERY), compkey(DEVPKEY_Device_ContainerId)];
+    let objs = Objects::get(DevObjectTypeDevice, DevQueryFlagNone as u32, &req, Some(&filter))?;
+    let mut out = Vec::new();
+    for (id, props) in objs.iter() {
+        let mut pct = None;
+        let mut container = None;
+        for p in props {
+            let Some(b) = value_bytes(p) else { continue };
+            if same_key(&p.CompKey.Key, &K_BATTERY) {
+                pct = as_uint(p.Type, b).filter(|&v| v <= MAX_PCT as u32).map(|v| v as u8);
+            } else if same_key(&p.CompKey.Key, &DEVPKEY_Device_ContainerId) {
+                container = as_guid(p.Type, b);
+            }
+        }
+        if let Some(pct) = pct {
+            out.push(BatNode { id, container, pct });
         }
     }
-    map
+    Some(out)
+}
+
+fn scan_battery_nodes() -> Vec<BatNode> {
+    let mut out = Vec::new();
+    for e in BT_ENUMS {
+        for id in ids(Some(e)) {
+            let Some(node) = locate(&id) else { continue };
+            let Some(pct) = node_battery(node) else { continue };
+            out.push(BatNode { id: from_wide(&id), container: node_container(node), pct });
+        }
+    }
+    out
+}
+
+/// Present device instance ids (NUL-terminated each), under one enumerator or all of them.
+fn ids(enumerator: Option<&str>) -> Vec<Vec<u16>> {
+    let list = id_list(enumerator);
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start < list.len() && list[start] != 0 {
+        let Some(len) = list[start..].iter().position(|&c| c == 0) else { break };
+        let end = start + len;
+        out.push(list[start..=end].to_vec());
+        start = end + 1;
+    }
+    out
 }
 
 /// Multi-string of present device ids under one enumerator (empty on failure).
-fn id_list(enumerator: &str) -> Vec<u16> {
-    let f = wide(enumerator);
-    let flags = CM_GETIDLIST_FILTER_ENUMERATOR | CM_GETIDLIST_FILTER_PRESENT;
+fn id_list(enumerator: Option<&str>) -> Vec<u16> {
+    let f = enumerator.map(wide);
+    let fp = f.as_ref().map_or(null(), |f| f.as_ptr());
+    let flags = if f.is_some() { CM_GETIDLIST_FILTER_ENUMERATOR | CM_GETIDLIST_FILTER_PRESENT } else { CM_GETIDLIST_FILTER_PRESENT };
     for _ in 0..2 {
         let mut len: u32 = 0;
-        // SAFETY: `f` is NUL-terminated; `len` is a valid out pointer.
-        if unsafe { CM_Get_Device_ID_List_SizeW(&mut len, f.as_ptr(), flags) } != CR_SUCCESS
+        // SAFETY: `fp` is null or NUL-terminated; `len` is a valid out pointer.
+        if unsafe { CM_Get_Device_ID_List_SizeW(&mut len, fp, flags) } != CR_SUCCESS
             || len == 0
             || len > MAX_ID_LIST
         {
@@ -469,7 +564,7 @@ fn id_list(enumerator: &str) -> Vec<u16> {
         }
         let mut buf = vec![0u16; len as usize];
         // SAFETY: `buf` holds `len` UTF-16 units.
-        let cr = unsafe { CM_Get_Device_ID_ListW(f.as_ptr(), buf.as_mut_ptr(), len, flags) };
+        let cr = unsafe { CM_Get_Device_ID_ListW(fp, buf.as_mut_ptr(), len, flags) };
         if cr == CR_SUCCESS {
             return buf;
         }
@@ -500,12 +595,350 @@ fn node_prop(node: u32, k: &DEVPROPKEY) -> Option<(u32, [u8; 16], usize)> {
 
 fn node_battery(node: u32) -> Option<u8> {
     let (ty, buf, size) = node_prop(node, &K_BATTERY)?;
-    (ty == DEVPROP_TYPE_BYTE && size >= 1 && buf[0] <= MAX_PCT).then_some(buf[0])
+    as_uint(ty, &buf[..size]).filter(|&v| v <= MAX_PCT as u32).map(|v| v as u8)
 }
 
 fn node_container(node: u32) -> Option<u128> {
     let (ty, buf, size) = node_prop(node, &DEVPKEY_Device_ContainerId)?;
     as_guid(ty, &buf[..size])
+}
+
+// ---------------------------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------------------------
+
+fn compkey(k: DEVPROPKEY) -> DEVPROPCOMPKEY {
+    DEVPROPCOMPKEY { Key: k, Store: DEVPROP_STORE_SYSTEM, LocaleName: null() }
+}
+
+/// The objects of one `DevGetObjects` call, freed on drop.
+struct Objects {
+    count: u32,
+    ptr: *mut DEV_OBJECT,
+}
+
+impl Objects {
+    /// `None` when the call failed.
+    fn get(ty: DEV_OBJECT_TYPE, flags: u32, req: &[DEVPROPCOMPKEY], filter: Option<&DEVPROP_FILTER_EXPRESSION>) -> Option<Self> {
+        Self::get_hr(ty, flags, req, filter).ok()
+    }
+
+    /// The HRESULT on failure (for the debug report).
+    fn get_hr(ty: DEV_OBJECT_TYPE, flags: u32, req: &[DEVPROPCOMPKEY], filter: Option<&DEVPROP_FILTER_EXPRESSION>) -> Result<Self, i32> {
+        let mut count: u32 = 0;
+        let mut ptr: *mut DEV_OBJECT = null_mut();
+        let (nf, pf) = filter.map_or((0, null()), |f| (1, f as *const _));
+        let preq = if req.is_empty() { null() } else { req.as_ptr() };
+        // SAFETY: `req` and `filter` outlive the call; the out pointers are valid locals.
+        let hr = unsafe { DevGetObjects(ty, flags, req.len() as u32, preq, nf, pf, &mut count, &mut ptr) };
+        if hr < 0 {
+            return Err(hr);
+        }
+        Ok(Objects { count: if ptr.is_null() { 0 } else { count }, ptr })
+    }
+
+    /// (object id, properties) per object.
+    fn iter(&self) -> impl Iterator<Item = (String, &[DEVPROPERTY])> {
+        let list: &[DEV_OBJECT] = if self.ptr.is_null() || self.count == 0 {
+            &[]
+        } else {
+            // SAFETY: `ptr` holds `count` objects until drop.
+            unsafe { std::slice::from_raw_parts(self.ptr, self.count as usize) }
+        };
+        list.iter().map(|o| {
+            let props: &[DEVPROPERTY] = if o.pProperties.is_null() || o.cPropertyCount == 0 {
+                &[]
+            } else {
+                // SAFETY: pProperties holds cPropertyCount entries until drop.
+                unsafe { std::slice::from_raw_parts(o.pProperties, o.cPropertyCount as usize) }
+            };
+            (pcwstr(o.pszObjectId), props)
+        })
+    }
+}
+
+impl Drop for Objects {
+    fn drop(&mut self) {
+        if !self.ptr.is_null() {
+            // SAFETY: frees exactly what DevGetObjects returned, once.
+            unsafe { DevFreeObjects(self.count, self.ptr) };
+        }
+    }
+}
+
+/// A NUL-terminated wide string from the system (capped; empty for null).
+fn pcwstr(p: *const u16) -> String {
+    if p.is_null() {
+        return String::new();
+    }
+    let mut n = 0usize;
+    // SAFETY: the system string is NUL-terminated; the cap guards against a bad pointer run.
+    while n < 4096 && unsafe { *p.add(n) } != 0 {
+        n += 1;
+    }
+    // SAFETY: `n` units were just read.
+    String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(p, n) })
+}
+
+/// Remote address from an endpoint id such as
+/// `Bluetooth#Bluetooth00:1a:7d:da:71:13-a4:c3:f0:11:22:33` (the part after the last `-`).
+fn addr_from_aep_id(id: &str) -> Option<u64> {
+    let tail = id.rsplit('-').next()?;
+    if tail.len() != 17 {
+        return None;
+    }
+    let hex: String = tail.split(':').collect();
+    (hex.len() == 12).then(|| u64::from_str_radix(&hex, 16).ok()).flatten().filter(|&v| v != 0)
+}
+
+/// Bluetooth address inside a device instance id: the first 12-hex-digit token outside braces,
+/// e.g. `BTHLE\DEV_A4C3F0112233\...` or `BTHENUM\{...}_VID&...\7&2d8a&0&A4C3F0112233_C00000000`.
+fn addr_from_instance(id: &str) -> Option<u64> {
+    let mut plain = String::with_capacity(id.len());
+    let mut depth = 0;
+    for c in id.chars() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth = (depth - 1).max(0),
+            _ if depth == 0 => plain.push(c),
+            _ => plain.push(' '),
+        }
+    }
+    plain
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| t.len() == 12 && t.chars().all(|c| c.is_ascii_hexdigit()))
+        .filter_map(|t| u64::from_str_radix(t, 16).ok())
+        .find(|&v| v != 0)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Debug report
+// ---------------------------------------------------------------------------------------------
+
+/// Writes [`debug_report`] to `%LOCALAPPDATA%\ResourceMonitor\bluetooth-debug.txt`.
+pub fn write_debug_report() -> Option<std::path::PathBuf> {
+    let path = crate::util::data_dir().join("bluetooth-debug.txt");
+    std::fs::write(&path, debug_report().replace('\n', "\r\n")).ok()?;
+    Some(path)
+}
+
+/// Everything the reader sees, as plain text: the final list, each battery source, and every
+/// property of the paired endpoints, their containers and their device nodes. Slow (100s of
+/// ms): run it off the UI thread.
+pub fn debug_report() -> String {
+    use std::fmt::Write;
+    let mut o = String::new();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let _ = writeln!(o, "Resource Monitor {} - Bluetooth debug report (unix time {now})", env!("CARGO_PKG_VERSION"));
+    let _ = writeln!(o, "Contains device names and Bluetooth addresses. Battery key: {{104ea319-6ee2-4701-bd47-8ddbf425bbe5}} 2");
+
+    let _ = writeln!(o, "\n== 1. What the Bluetooth page shows ==");
+    for d in read() {
+        let _ = writeln!(
+            o,
+            "{} | kind {:?} | connected {} | battery {:?} | classic {} le {} | container {}",
+            d.name, d.kind, d.connected, d.battery, d.classic, d.le, d.id
+        );
+    }
+
+    let _ = writeln!(o, "\n== 2. Device nodes with a battery level ==");
+    let filter = DEVPROP_FILTER_EXPRESSION {
+        Operator: DEVPROP_OPERATOR_EXISTS,
+        Property: DEVPROPERTY { CompKey: compkey(K_BATTERY), Type: DEVPROP_TYPE_EMPTY, BufferSize: 0, Buffer: null_mut() },
+    };
+    match Objects::get_hr(DevObjectTypeDevice, DevQueryFlagAllProperties as u32, &[], Some(&filter)) {
+        Err(hr) => {
+            let _ = writeln!(o, "Device Query failed: hr 0x{:08x}", hr as u32);
+        }
+        Ok(objs) => {
+            let mut n = 0;
+            for (id, props) in objs.iter() {
+                n += 1;
+                let _ = writeln!(o, "{id}");
+                for p in props {
+                    let lab = key_label(&p.CompKey.Key);
+                    if !lab.is_empty() {
+                        let _ = writeln!(o, "    {lab} = {}", prop_text(p));
+                    }
+                }
+            }
+            let _ = writeln!(o, "Device Query: {n} node(s)");
+        }
+    }
+    let scan = scan_battery_nodes();
+    let _ = writeln!(o, "Enumerator scan ({}): {} node(s)", BT_ENUMS.join(", "), scan.len());
+    for b in &scan {
+        let _ = writeln!(o, "    {} | {}% | container {}", b.id, b.pct, b.container.map(guid_string).unwrap_or_default());
+    }
+
+    let _ = writeln!(o, "\n== 3. Bluetooth endpoints, all properties ==");
+    let mut containers: Vec<u128> = Vec::new();
+    let mut addrs: Vec<u64> = Vec::new();
+    match Objects::get_hr(DevObjectTypeAEP, DevQueryFlagAllProperties as u32, &[], None) {
+        Err(hr) => {
+            let _ = writeln!(o, "Device Query failed: hr 0x{:08x}", hr as u32);
+        }
+        Ok(objs) => {
+            for (id, props) in objs.iter() {
+                let a = parse_aep(props);
+                if (a.protocol != PROTO_CLASSIC && a.protocol != PROTO_LE) || a.paired != Some(true) {
+                    continue;
+                }
+                containers.extend(a.container);
+                addrs.extend(addr_from_aep_id(&id));
+                dump_props(&mut o, &id, props);
+            }
+        }
+    }
+    containers.sort_unstable();
+    containers.dedup();
+
+    let _ = writeln!(o, "\n== 4. Their containers, all properties ==");
+    if let Some(objs) = Objects::get(DevObjectTypeAEPContainer, DevQueryFlagAllProperties as u32, &[], None) {
+        for (id, props) in objs.iter() {
+            let cid = props
+                .iter()
+                .find(|p| same_key(&p.CompKey.Key, &K_CONTAINER))
+                .and_then(|p| value_bytes(p).and_then(|b| as_guid(p.Type, b)));
+            if cid.is_some_and(|c| containers.contains(&c)) {
+                dump_props(&mut o, &id, props);
+            }
+        }
+    }
+
+    let _ = writeln!(o, "\n== 5. Their device nodes, all properties ==");
+    for id in ids(None) {
+        let Some(node) = locate(&id) else { continue };
+        let text = from_wide(&id);
+        let mine = node_container(node).is_some_and(|c| containers.contains(&c))
+            || addr_from_instance(&text).is_some_and(|x| addrs.contains(&x));
+        if !mine {
+            continue;
+        }
+        let _ = writeln!(o, "{text}");
+        for (k, ty, buf) in node_all_props(node) {
+            let lab = key_label(&k);
+            let _ = writeln!(o, "    {} {}{} = {}", guid_string(guid_u128(&k.fmtid)), k.pid, if lab.is_empty() { String::new() } else { format!(" ({lab})") }, value_text(ty, &buf));
+        }
+    }
+    o
+}
+
+fn dump_props(o: &mut String, id: &str, props: &[DEVPROPERTY]) {
+    use std::fmt::Write;
+    let _ = writeln!(o, "{id}");
+    for p in props {
+        if p.Type == DEVPROP_TYPE_EMPTY {
+            continue;
+        }
+        let k = &p.CompKey.Key;
+        let lab = key_label(k);
+        let _ = writeln!(o, "    {} {}{} = {}", guid_string(guid_u128(&k.fmtid)), k.pid, if lab.is_empty() { String::new() } else { format!(" ({lab})") }, prop_text(p));
+    }
+}
+
+fn prop_text(p: &DEVPROPERTY) -> String {
+    value_text(p.Type, value_bytes(p).unwrap_or(&[]))
+}
+
+/// Every property of a device node: key, type and bytes.
+fn node_all_props(node: u32) -> Vec<(DEVPROPKEY, u32, Vec<u8>)> {
+    let mut n: u32 = 0;
+    // SAFETY: a null array with count 0 asks for the needed count.
+    unsafe { CM_Get_DevNode_Property_Keys(node, null_mut(), &mut n, 0) };
+    if n == 0 || n > 4096 {
+        return Vec::new();
+    }
+    let mut keys = vec![DEVPROPKEY { fmtid: GUID::from_u128(0), pid: 0 }; n as usize];
+    // SAFETY: `keys` holds `n` entries.
+    if unsafe { CM_Get_DevNode_Property_Keys(node, keys.as_mut_ptr(), &mut n, 0) } != CR_SUCCESS {
+        return Vec::new();
+    }
+    keys.truncate(n as usize);
+    let mut out = Vec::with_capacity(keys.len());
+    for k in keys {
+        let mut ty: u32 = 0;
+        let mut size: u32 = 0;
+        // SAFETY: null buffer with size 0 asks for the needed size.
+        unsafe { CM_Get_DevNode_PropertyW(node, &k, &mut ty, null_mut(), &mut size, 0) };
+        let mut buf = vec![0u8; size.min(1 << 16) as usize];
+        let mut size2 = buf.len() as u32;
+        // SAFETY: `buf` holds `size2` bytes.
+        let cr = unsafe { CM_Get_DevNode_PropertyW(node, &k, &mut ty, buf.as_mut_ptr(), &mut size2, 0) };
+        if cr == CR_SUCCESS {
+            buf.truncate(size2 as usize);
+            out.push((k, ty, buf));
+        } else {
+            out.push((k, u32::MAX, Vec::new()));
+        }
+    }
+    out
+}
+
+/// Names for the keys that matter when reading a report.
+fn key_label(k: &DEVPROPKEY) -> &'static str {
+    const FRIENDLY: DEVPROPKEY = key(0xA45C254E_DF1C_4EFD_8020_67D146A850E0, 14);
+    const DESC: DEVPROPKEY = key(0xA45C254E_DF1C_4EFD_8020_67D146A850E0, 2);
+    if same_key(k, &K_BATTERY) {
+        "BATTERY"
+    } else if same_key(k, &DEVPKEY_Device_ContainerId) || same_key(k, &K_CONTAINER) {
+        "ContainerId"
+    } else if same_key(k, &K_NAME) {
+        "Name"
+    } else if same_key(k, &FRIENDLY) {
+        "FriendlyName"
+    } else if same_key(k, &DESC) {
+        "DeviceDesc"
+    } else if same_key(k, &K_CONNECTED) {
+        "IsConnected"
+    } else if same_key(k, &K_PAIRED) {
+        "IsPaired"
+    } else if same_key(k, &K_PROTOCOL) {
+        "ProtocolId"
+    } else {
+        ""
+    }
+}
+
+/// A property value as short text.
+fn value_text(ty: u32, b: &[u8]) -> String {
+    const MAX: usize = 160;
+    if ty == u32::MAX {
+        return "(read failed)".into();
+    }
+    let s = match ty {
+        DEVPROP_TYPE_STRING => utf16_string(b),
+        t if t == DEVPROP_TYPE_STRING | DEVPROP_TYPEMOD_LIST => {
+            let w: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+            w.split(|&c| c == 0).filter(|p| !p.is_empty()).map(String::from_utf16_lossy).collect::<Vec<_>>().join(" | ")
+        }
+        DEVPROP_TYPE_BOOLEAN => format!("{}", b.first().is_some_and(|&v| v != 0)),
+        DEVPROP_TYPE_BYTE | DEVPROP_TYPE_UINT16 | DEVPROP_TYPE_UINT32 | DEVPROP_TYPE_INT16 | DEVPROP_TYPE_INT32 => {
+            as_uint(ty, b).map_or_else(|| hex(b), |v| format!("{v} (type {ty})"))
+        }
+        DEVPROP_TYPE_SBYTE => b.first().map_or_else(String::new, |&v| format!("{}", v as i8)),
+        DEVPROP_TYPE_INT64 | DEVPROP_TYPE_UINT64 | DEVPROP_TYPE_FILETIME if b.len() >= 8 => {
+            let mut raw = [0u8; 8];
+            raw.copy_from_slice(&b[..8]);
+            let v = u64::from_le_bytes(raw);
+            if ty == DEVPROP_TYPE_FILETIME {
+                format!("filetime, unix {:?}", filetime_to_unix(v))
+            } else {
+                format!("{v}")
+            }
+        }
+        DEVPROP_TYPE_GUID => as_guid(ty, b).map(guid_string).unwrap_or_default(),
+        _ => format!("type 0x{ty:x}, {} bytes: {}", b.len(), hex(b)),
+    };
+    if s.chars().count() > MAX {
+        s.chars().take(MAX).collect::<String>() + "..."
+    } else {
+        s
+    }
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().take(48).map(|v| format!("{v:02x}")).collect::<Vec<_>>().join(" ")
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -734,8 +1167,8 @@ mod tests {
             last_seen: Some(20),
             ..Default::default()
         };
-        let mut bat = HashMap::new();
-        bat.insert(cid, 55u8);
+        let mut bat = Batteries::default();
+        bat.by_cid.insert(cid, 55u8);
         let v = merge(vec![le, classic], &bat);
         assert_eq!(v.len(), 1);
         let d = &v[0];
@@ -744,5 +1177,27 @@ mod tests {
         assert_eq!(d.battery, Some(55));
         assert_eq!(d.last_seen, Some(20));
         assert_eq!(d.kind, Kind::Earbuds);
+    }
+
+    #[test]
+    fn addresses() {
+        assert_eq!(addr_from_aep_id("Bluetooth#Bluetooth00:1a:7d:da:71:13-a4:c3:f0:11:22:33"), Some(0xA4C3F0112233));
+        assert_eq!(addr_from_aep_id("BluetoothLE#BluetoothLE00:1a:7d:da:71:13-d1:e2:f3:a4:b5:c6"), Some(0xD1E2F3A4B5C6));
+        assert_eq!(addr_from_aep_id("SWD\\MMDEVAPI\\x"), None);
+        assert_eq!(addr_from_instance("BTHLE\\DEV_A4C3F0112233\\8&1A2B3C&0&A4C3F0112233"), Some(0xA4C3F0112233));
+        assert_eq!(
+            addr_from_instance("BTHENUM\\{0000111E-0000-1000-8000-00805F9B34FB}_VID&0002054C_PID&0E2F\\7&2D8A1A3F&0&ACBF71F1A2B3_C00000000"),
+            Some(0xACBF71F1A2B3)
+        );
+        assert_eq!(addr_from_instance("HID\\{00001124-0000-1000-8000-00805F9B34FB}_VID&0002046D\\8&1&0&0000"), None);
+    }
+
+    #[test]
+    fn battery_by_address() {
+        let nodes = [BatNode { id: "BTHLE\\DEV_A4C3F0112233\\x".into(), container: Some(9), pct: 70 }];
+        let b = Batteries::from_nodes(&nodes);
+        assert_eq!(b.find(9, &[]), Some(70));
+        assert_eq!(b.find(1, &[0xA4C3F0112233]), Some(70));
+        assert_eq!(b.find(1, &[0x1]), None);
     }
 }
