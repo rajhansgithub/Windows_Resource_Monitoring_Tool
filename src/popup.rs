@@ -2,7 +2,7 @@
 
 use crate::app::{accent, App, HIST};
 use crate::fmt;
-use crate::render::{create_font, ui_face, Canvas, Rgba};
+use crate::render::{create_font, Canvas, Rgba};
 use crate::settings::Metric;
 use crate::taskbar::Edge;
 use crate::usage;
@@ -33,38 +33,18 @@ pub struct Pal {
     pub line: Rgba,
 }
 
-/// Light theme base colours (eggshell), shared by every window and the widget.
-pub const EGG_BG: Rgba = Rgba::rgb(0xEF, 0xEA, 0xDF);
-pub const EGG_CARD: Rgba = Rgba::rgb(0xF8, 0xF4, 0xEA);
-pub const EGG_FG: Rgba = Rgba::rgb(0x2A, 0x26, 0x20);
-pub const EGG_DIM: Rgba = Rgba::rgb(0x67, 0x5F, 0x53);
-
-/// See docs/ui-reference: near-black base, raised cards, hairline borders.
-/// Light is eggshell rather than white: easier on the eyes.
+/// Colours of the current look (`look::tokens`), light or dark.
 pub fn palette(dark: bool) -> Pal {
-    if dark {
-        Pal {
-            bg: Rgba::rgb(28, 28, 28),
-            card: Rgba::rgb(38, 38, 38),
-            chip: Rgba::rgb(50, 50, 50),
-            border: Rgba::rgb(52, 52, 52),
-            track: Rgba::rgb(58, 58, 58),
-            fg: Rgba::rgb(242, 242, 242),
-            dim: Rgba::rgb(150, 150, 150),
-            line: Rgba::rgb(58, 58, 58),
-        }
-    } else {
-        Pal {
-            // Eggshell: warm and soft instead of bright white.
-            bg: EGG_BG,
-            card: EGG_CARD,
-            chip: Rgba::rgb(0xE6, 0xE0, 0xD2),
-            border: Rgba::rgb(0xDC, 0xD5, 0xC6),
-            track: Rgba::rgb(0xE0, 0xD9, 0xCA),
-            fg: EGG_FG,
-            dim: EGG_DIM,
-            line: Rgba::rgb(0xDC, 0xD5, 0xC6),
-        }
+    let t = crate::look::tokens(dark);
+    Pal {
+        bg: t.bg,
+        card: t.panel,
+        chip: t.raised,
+        border: t.border,
+        track: t.track,
+        fg: t.fg,
+        dim: t.dim,
+        line: t.border,
     }
 }
 
@@ -114,12 +94,13 @@ pub fn style_popup(hwnd: HWND, dark: bool) -> bool {
     // window; this panel never takes focus (so you keep yours), which made it
     // fall back to flat grey. The accent-policy acrylic blur — what the
     // taskbar and Start use — stays frosted while inactive. Win10 1803+.
-    if build_number() < 17134 {
-        return false;
-    }
-    unsafe { acrylic_accent(hwnd, dark) }
+    // The looks paint their own solid base (charcoal, cream, greige): no
+    // acrylic blur behind the panel.
+    let _ = (hwnd, build_number);
+    false
 }
 
+#[allow(dead_code)]
 /// Acrylic blur behind the whole window via SetWindowCompositionAttribute
 /// (user32, resolved at run time). Pixels with alpha 0 show the blur.
 unsafe fn acrylic_accent(hwnd: HWND, dark: bool) -> bool {
@@ -167,6 +148,8 @@ pub struct Fonts {
     pub big: HFONT,
     pub caps: HFONT,
     pub scale: f32,
+    /// The look the faces were picked for (rebuilt when it changes).
+    pub look: crate::look::Look,
 }
 
 impl Fonts {
@@ -180,15 +163,18 @@ impl Fonts {
     }
     fn make(scale: f32, gray: bool) -> Fonts {
         let px = |v: f32| (v * scale).round() as i32;
-        let f = ui_face();
+        let look = crate::look::current();
+        let fc = crate::look::faces_for(look);
+        let f = fc.ui;
         Fonts {
             small: create_font(px(11.0), 400, f, gray),
             normal: create_font(px(12.5), 400, f, gray),
             bold: create_font(px(12.5), 600, f, gray),
-            mid: create_font(px(15.0), 600, f, gray),
-            big: create_font(px(20.0), 600, f, gray),
-            caps: create_font(px(10.0), 600, f, gray),
+            mid: create_font(px(15.0), 600, fc.num, gray),
+            big: create_font(px(20.0), fc.num_weight.max(500), fc.num, gray),
+            caps: create_font(px(10.0), 600, fc.mono, gray),
             scale,
+            look,
         }
     }
 }
@@ -599,7 +585,7 @@ fn paint(a: &mut App, hwnd: HWND) {
     let (cw, ch) = (rc.right.max(1), rc.bottom.max(1));
 
     // Fonts and canvas are cached across the once-per-second repaints.
-    let mut cache = a.popup_cache.take().filter(|(f, _)| f.scale == scale);
+    let mut cache = a.popup_cache.take().filter(|(f, _)| f.scale == scale && f.look == crate::look::current());
     let (f, mut c) = cache.take().unwrap_or_else(|| (Fonts::gray(scale), Canvas::new()));
     c.resize(cw, ch);
     let mut out = Out { hits: std::mem::take(&mut a.popup_hits), tip: None };

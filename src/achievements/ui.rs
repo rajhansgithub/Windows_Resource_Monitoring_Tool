@@ -15,12 +15,12 @@
 //!   adds one animation timer that exists only while it is open.
 //! * `ResourceMonitor.AchPop`: layered, topmost, no-activate pop-up in the tray corner, one moment at a time.
 
-use crate::popup::{palette, style_window, Fonts};
+use crate::popup::{style_window, Fonts};
 use crate::render::{create_font, measure_dc, ui_face, Canvas, Rgba};
 use crate::util::*;
 use std::collections::{HashMap, VecDeque};
 use windows_sys::Win32::Foundation::*;
-use windows_sys::Win32::Graphics::Dwm::{DwmExtendFrameIntoClientArea, DwmGetColorizationColor, DwmSetWindowAttribute};
+use windows_sys::Win32::Graphics::Dwm::{DwmExtendFrameIntoClientArea, DwmSetWindowAttribute};
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
@@ -139,6 +139,7 @@ fn build_number() -> u32 {
 }
 
 /// Windows 11: Mica behind the whole window (frame extended into the client area, painted with alpha 0).
+#[allow(dead_code)]
 fn enable_mica(hwnd: HWND) -> bool {
     if build_number() < 22000 {
         return false;
@@ -207,43 +208,19 @@ struct Colors {
 }
 
 fn make_colors(dark: bool, mica: bool) -> Colors {
-    let p = palette(dark);
-    let accent = {
-        let (mut c, mut opaque) = (0u32, 0i32);
-        if unsafe { DwmGetColorizationColor(&mut c, &mut opaque) } == 0 {
-            let a = hx(c & 0xFF_FFFF);
-            if dark {
-                a.mix(WHITE, 0.28)
-            } else {
-                a
-            }
-        } else if dark {
-            hx(0x60CDFF)
-        } else {
-            hx(0x0078D4)
-        }
-    };
-    let (card, card_border, hover) = if mica {
-        if dark {
-            (Rgba(255, 255, 255, 0x0D), Rgba(255, 255, 255, 0x0F), Rgba(255, 255, 255, 0x0F))
-        } else {
-            (p.card, Rgba(0, 0, 0, 0x12), Rgba(0, 0, 0, 0x09))
-        }
-    } else {
-        (p.card, p.border, p.chip)
-    };
+    let _ = mica;
+    let t = crate::look::tokens(dark);
     Colors {
-        // Light stays eggshell even over Mica (whose light tint is white).
-        bg: if mica && dark { Rgba(0, 0, 0, 0) } else { p.bg },
-        card,
-        card_border,
-        hover,
-        fg: p.fg,
-        dim: p.dim,
-        line: if dark { Rgba(255, 255, 255, 0x18) } else { Rgba(0, 0, 0, 0x16) },
-        track: if dark { Rgba(255, 255, 255, 0x22) } else { Rgba(0, 0, 0, 0x1A) },
-        accent,
-        ok: if dark { hx(0x59d98e) } else { hx(0x1a8f50) },
+        bg: t.bg,
+        card: t.panel,
+        card_border: t.border,
+        hover: t.raised,
+        fg: t.fg,
+        dim: t.dim,
+        line: t.border,
+        track: t.track,
+        accent: t.accent,
+        ok: t.good,
         dark,
     }
 }
@@ -3236,7 +3213,7 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             if dpi != 0 && dpi != u.dpi {
                 u.set_dpi(dpi);
             }
-            u.mica = enable_mica(hwnd);
+            u.mica = false;
             apply_theme(hwnd);
             if let Some(u) = ui() {
                 let mut rc: RECT = std::mem::zeroed();
@@ -3444,9 +3421,11 @@ pub fn refresh(state: &State) {
 /// Follow a theme change (dark / light) of the app.
 pub fn set_dark(dark: bool) {
     if let Some(u) = ui() {
-        if u.col.dark != dark {
+        let col = make_colors(dark, u.mica);
+        // Dark/light flipped, or a new look (its own base and accent).
+        if u.col.dark != dark || u.col.bg != col.bg || u.col.accent != col.accent {
             let hwnd = u.hwnd;
-            u.col = make_colors(dark, u.mica);
+            u.col = col;
             u.snap_ok = false;
             style_window(hwnd, dark);
             invalidate(hwnd);

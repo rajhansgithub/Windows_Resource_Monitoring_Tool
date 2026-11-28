@@ -9,6 +9,7 @@ mod grid;
 mod icons;
 mod insights;
 mod logo;
+mod look;
 mod monitor;
 mod nav;
 mod overlay;

@@ -601,7 +601,7 @@ impl Room {
     pub fn draw(&self, cv: &mut Canvas, f: &Fonts, col: &Colors, dy: i32, vt: i32, vb: i32, hover: Option<usize>) {
         let sh = |r: Rect| Rect { l: r.l, t: r.t + dy, r: r.r, b: r.b + dy };
         let vis = |r: Rect| r.b + dy >= vt && r.t + dy <= vb;
-        let rad = self.sc(6) as f32;
+        let rad = self.sc(crate::look::current_card_radius()) as f32;
         if self.big {
             // the large view: the room's floor, one medal under a cold light
             let fl = sh(self.floor);
@@ -874,7 +874,7 @@ pub fn goal_card_h(dpi: u32) -> i32 {
 #[allow(clippy::too_many_arguments)]
 pub fn draw_goal_card(cv: &mut Canvas, f: &Fonts, col: &Colors, dpi: u32, r: Rect, s: &State, g: &Goal, hover: bool) {
     let sc = |v: i32| (v * dpi as i32 + 48) / 96;
-    let rad = sc(6) as f32;
+    let rad = sc(crate::look::current_card_radius()) as f32;
     cv.fill_round(r, rad, if hover { col.card.mix(col.fg, 0.04) } else { col.card });
     cv.stroke_round(r, rad, col.card_border);
     let rr = sc(26) as f32;

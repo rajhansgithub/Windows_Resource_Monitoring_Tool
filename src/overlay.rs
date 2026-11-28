@@ -1,7 +1,7 @@
 //! One widget window per taskbar: layout, drawing, placement.
 
 use crate::app::{accent, short_label, Model, C_CRIT, C_WARN};
-use crate::render::{create_font, ui_face, Canvas, Rgba};
+use crate::render::{create_font, Canvas, Rgba};
 use crate::settings::{LabelStyle, Metric, Mode};
 use crate::taskbar::{self, Edge, Taskbar};
 use crate::util::*;
@@ -266,7 +266,8 @@ impl Overlay {
     /// Create/resize face `i` and refresh its metrics.
     fn ensure_face(&mut self, i: usize, px: u32, scale: f32, face_name: &str) {
         let f = &mut self.faces[i];
-        let name = if face_name.is_empty() { ui_face() } else { face_name };
+        // No font of its own: the look's number face (mono for Lime and Tactile).
+        let name = if face_name.is_empty() { crate::look::faces().num } else { face_name };
         if px != f.px || f.font.is_null() || f.name != name {
             unsafe {
                 if !f.font.is_null() {
@@ -594,14 +595,16 @@ impl Overlay {
 
         // ---- draw
         self.canvas.resize(w, h);
-        let fg = if m.dark { Rgba::rgb(245, 245, 245) } else { crate::popup::EGG_FG };
+        let tk = crate::look::tokens(m.dark);
+        let fg = tk.fg;
         let opacity = if dock { m.s.bg_opacity } else { m.s.bg_opacity.max(200) };
         // alpha 1 keeps the whole strip hoverable while staying invisible.
         self.canvas.clear(Rgba(0, 0, 0, 1));
         if opacity > 1 {
-            let bg = if m.dark { Rgba(28, 28, 28, opacity) } else { crate::popup::EGG_BG.with_a(opacity) };
+            let bg = tk.bg.with_a(opacity);
             let inset = if dock && horiz { sc(4.0) } else { 0 };
-            self.canvas.fill_round(Rect { l: 0, t: inset, r: w, b: h - inset }, sc(6.0) as f32, bg);
+            let rad = (sc(tk.r_widget as f32) as f32).min((h - 2 * inset) as f32 / 2.0);
+            self.canvas.fill_round(Rect { l: 0, t: inset, r: w, b: h - inset }, rad, bg);
         }
         // Crisp 1px shadow behind text when there's no solid background behind it.
         self.canvas.halo = (opacity < 120).then(|| if m.dark { Rgba(0, 0, 0, 150) } else { Rgba(255, 255, 255, 170) });

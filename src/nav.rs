@@ -22,6 +22,8 @@ pub enum Page {
     HeldBack,
     Baseline,
     Ghost,
+    /// Pick the look (Lime / Tactile / Bento) and light or dark.
+    Appearance,
     General,
     Metrics,
     Colours,
@@ -39,7 +41,7 @@ pub enum Entry {
 }
 
 /// The scrolling part of the pane (the footer is `FOOTER`).
-pub const MENU: [Entry; 16] = [
+pub const MENU: [Entry; 17] = [
     Entry::Item(Page::Overview),
     Entry::Item(Page::Monitor),
     Entry::Item(Page::Achievements),
@@ -51,6 +53,7 @@ pub const MENU: [Entry; 16] = [
     Entry::Item(Page::Ghost),
     Entry::Separator,
     Entry::Header("SETTINGS"),
+    Entry::Item(Page::Appearance),
     Entry::Item(Page::General),
     Entry::Item(Page::Metrics),
     Entry::Item(Page::Colours),
@@ -63,7 +66,7 @@ pub const FOOTER: [Page; 1] = [Page::About];
 
 impl Page {
     /// Every page in navigation order (menu, then footer). Ctrl+Tab walks this.
-    pub const ALL: [Page; 14] = [
+    pub const ALL: [Page; 15] = [
         Page::Overview,
         Page::Monitor,
         Page::Achievements,
@@ -72,6 +75,7 @@ impl Page {
         Page::HeldBack,
         Page::Baseline,
         Page::Ghost,
+        Page::Appearance,
         Page::General,
         Page::Metrics,
         Page::Colours,
@@ -94,6 +98,7 @@ impl Page {
             Page::HeldBack => "Held Back",
             Page::Baseline => "Before / After",
             Page::Ghost => "Ghost Memory",
+            Page::Appearance => "Appearance",
             Page::General => "General",
             Page::Metrics => "Metrics",
             Page::Colours => "Colours",
@@ -114,6 +119,7 @@ impl Page {
             Page::HeldBack => '\u{EC4A}',     // speedometer
             Page::Baseline => '\u{E81C}',     // history
             Page::Ghost => '\u{E950}',        // chip
+            Page::Appearance => '\u{E771}',   // personalize
             Page::General => '\u{E713}',      // gear
             Page::Metrics => '\u{E9D9}',      // chart
             Page::Colours => '\u{E790}',      // palette
@@ -134,6 +140,7 @@ impl Page {
             Page::HeldBack => "heldback",
             Page::Baseline => "baseline",
             Page::Ghost => "ghost",
+            Page::Appearance => "appearance",
             Page::General => "general",
             Page::Metrics => "metrics",
             Page::Colours => "colours",
@@ -187,7 +194,7 @@ impl Page {
 
     /// A settings page (General .. Data).
     pub fn is_settings(self) -> bool {
-        matches!(self, Page::General | Page::Metrics | Page::Colours | Page::Alerts | Page::Data)
+        matches!(self, Page::Appearance | Page::General | Page::Metrics | Page::Colours | Page::Alerts | Page::Data)
     }
 
     /// The next (`dir` > 0) or previous page in navigation order, wrapping.

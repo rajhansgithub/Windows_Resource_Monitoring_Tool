@@ -153,6 +153,8 @@ pub struct Settings {
     pub click_through: bool,
     pub text_scale: u32,
     pub theme: Theme,
+    /// Lime / Tactile / Bento; None until the user picked one (first run shows the picker).
+    pub look: Option<crate::look::Look>,
     /// 0 = invisible, 255 = solid.
     pub bg_opacity: u8,
     pub warn_pct: f32,
@@ -228,6 +230,7 @@ impl Default for Settings {
             click_through: false,
             text_scale: 100,
             theme: Theme::Dark,
+            look: None,
             bg_opacity: 0,
             warn_pct: 75.0,
             crit_pct: 90.0,
@@ -454,6 +457,7 @@ impl Settings {
                 "text_scale" => {
                     self.text_scale = v.parse().map(|x: u32| x.clamp(70, 200)).unwrap_or(self.text_scale)
                 }
+                "look" => self.look = crate::look::Look::parse(v),
                 "theme" => {
                     self.theme = match v.to_ascii_lowercase().as_str() {
                         "dark" => Theme::Dark,
@@ -621,6 +625,9 @@ impl Settings {
             o.push_str(&format!("dock_offset.{} = {}\n", k, v));
         }
         o.push_str(&format!("\n# Monitor page: 1 = processes grouped by app\nproc_groups = {}\n", b(self.proc_groups)));
+        if let Some(l) = self.look {
+            o.push_str(&format!("\n# Look of every window: lime | tactile | bento\nlook = {}\n", l.key()));
+        }
         if self.window.is_some() || !self.window_page.is_empty() {
             o.push_str("\n# Main window: x,y,width,height,maximized (screen pixels) and the last page\n");
             if let Some(w) = &self.window {

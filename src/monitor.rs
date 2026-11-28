@@ -1117,7 +1117,7 @@ impl Draw<'_> {
     }
 
     fn card(&self, cv: &mut Canvas, r: Rect) {
-        let rad = self.sf(8.0);
+        let rad = self.sf(crate::look::current_card_radius() as f32);
         cv.fill_round(r, rad, self.col.card);
         cv.stroke_round(r, rad, self.col.card_border);
     }
