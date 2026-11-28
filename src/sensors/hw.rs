@@ -167,7 +167,7 @@ impl HwReader {
     }
 }
 
-fn read_all() -> Hw {
+pub(crate) fn read_all() -> Hw {
     let mut h = Hw::default();
     os(&mut h);
     smbios(&mut h);

@@ -204,6 +204,7 @@ impl Canvas {
     /// Fade the pixels of `r` toward `to` (straight alpha): `keep` = 1 leaves
     /// them, 0 replaces them with `to`. Used for page transitions; with a
     /// transparent `to` (Mica) it fades to the backdrop.
+    #[allow(dead_code)]
     pub fn fade_rect(&mut self, r: Rect, keep: f32, to: Rgba) {
         let k = (keep.clamp(0.0, 1.0) * 256.0) as u32;
         if k >= 256 {
@@ -469,6 +470,10 @@ impl Canvas {
         if data.is_empty() || r.is_empty() {
             return;
         }
+        // Lime Terminal draws history as dot-matrix columns.
+        if crate::look::current() == crate::look::Look::Lime {
+            return self.spark_dots(r, data, c, down);
+        }
         let n = data.len();
         let (w, h) = (self.w, self.h);
         let rw = r.w();
@@ -510,9 +515,111 @@ impl Canvas {
         }
     }
 
+    /// A big number the look's way: Lime and Tactile light it over dim "8"
+    /// ghosts (LED / LCD segments that are off), Bento draws it plain.
+    /// Returns the width like `text`.
+    pub fn numeral(&mut self, font: HFONT, s: &str, x: i32, y: i32, c: Rgba) -> i32 {
+        if crate::look::current() != crate::look::Look::Bento && s.chars().any(|ch| ch.is_ascii_digit()) {
+            let ghost: String = s.chars().map(|ch| if ch.is_ascii_digit() { '8' } else { ch }).collect();
+            // No outline around the ghosts (the widget outlines text on a clear taskbar).
+            let halo = self.halo.take();
+            self.text(font, &ghost, x, y, c.with_a((c.3 as u32 * 34 / 255) as u8));
+            self.halo = halo;
+        }
+        self.text(font, s, x, y, c)
+    }
+
+    /// `numeral` centred on `cx`.
+    pub fn numeral_center(&mut self, font: HFONT, s: &str, cx: i32, y: i32, c: Rgba) {
+        let w = self.measure(font, s).0;
+        self.numeral(font, s, cx - w / 2, y, c);
+    }
+
+    /// A horizontal level bar, drawn the look's way: Lime a row of square dots,
+    /// Tactile an LED ladder, Bento a rounded pill. `frac` 0..1.
+    pub fn meter(&mut self, r: Rect, frac: f32, c: Rgba, track: Rgba) {
+        if r.is_empty() {
+            return;
+        }
+        let frac = frac.clamp(0.0, 1.0);
+        match crate::look::current() {
+            crate::look::Look::Lime => {
+                // One row of dots for thin bars, two for tall ones.
+                let rows = if r.h() >= 10 { 2 } else { 1 };
+                let gap = (r.h() / 6).max(1);
+                let dot = ((r.h() - gap * (rows - 1)) / rows).max(2);
+                let step = dot + gap;
+                let n = ((r.w() + gap) / step).max(1);
+                let lit = (frac * n as f32).round() as i32;
+                for k in 0..n {
+                    let x = r.l + k * step;
+                    for row in 0..rows {
+                        let y = r.t + row * step;
+                        self.fill_rect(Rect { l: x, t: y, r: x + dot, b: y + dot }, if k < lit { c } else { track });
+                    }
+                }
+            }
+            crate::look::Look::Tactile => {
+                let gap = (r.h() / 4).clamp(1, 3);
+                let seg = (r.h() * 3 / 2).max(4);
+                let n = ((r.w() + gap) / (seg + gap)).max(1);
+                let sw = (r.w() - gap * (n - 1)) as f32 / n as f32;
+                let lit = (frac * n as f32).round() as i32;
+                for k in 0..n {
+                    let x0 = r.l + (k as f32 * (sw + gap as f32)).round() as i32;
+                    let x1 = r.l + (k as f32 * (sw + gap as f32) + sw).round() as i32;
+                    self.fill_round(Rect { l: x0, r: x1.max(x0 + 1), ..r }, 1.0, if k < lit { c } else { track });
+                }
+            }
+            crate::look::Look::Bento => {
+                let rad = r.h() as f32 / 2.0;
+                self.fill_round(r, rad, track);
+                let w = (r.w() as f32 * frac).round() as i32;
+                if w > 0 {
+                    self.fill_round(Rect { r: r.l + w.max(r.h()), ..r }, rad, c);
+                }
+            }
+        }
+    }
+
+    /// Dot-matrix history (Lime): square dots in columns, lit from the base up
+    /// to the value, unlit dots faint. Same mapping as `spark_dir`.
+    fn spark_dots(&mut self, r: Rect, data: &[f32], c: Rgba, down: bool) {
+        let n = data.len();
+        let dot = (r.h() / 12).clamp(2, 4);
+        let gap = (dot / 2).max(1);
+        let step = dot + gap;
+        let rows = ((r.h() + gap) / step).max(1);
+        let cols = ((r.w() + gap) / step).max(1);
+        let off = c.with_a((c.3 as u32 * 40 / 255) as u8);
+        // Right-aligned grid.
+        let x0 = r.r - cols * step + gap;
+        for i in 0..cols {
+            let pos = (n as f32 - 1.0) * (i as f32 / (cols - 1).max(1) as f32);
+            let a = data[pos.floor() as usize];
+            let b = data[(pos.ceil() as usize).min(n - 1)];
+            let v = (a + (b - a) * pos.fract()).clamp(0.0, 1.0);
+            let lit = (v * rows as f32).round() as i32;
+            let x = x0 + i * step;
+            for k in 0..rows {
+                // k = 0 is the base row (bottom, or top when hanging down).
+                let y = if down { r.t + k * step } else { r.b - (k + 1) * step + gap };
+                let col = if k < lit { c } else { off };
+                self.fill_rect(Rect { l: x, t: y, r: x + dot, b: y + dot }, col);
+            }
+        }
+    }
+
     /// Anti-aliased ring arc from 12 o'clock, clockwise, `frac` 0..1, round caps.
+    /// Lime draws it as a ring of dots, Tactile as LED segments, Bento smooth.
     /// Only pixels in the ring's annulus are visited.
     pub fn ring(&mut self, cx: f32, cy: f32, r: f32, thick: f32, frac: f32, c: Rgba) {
+        self.ring_in(cx, cy, r, thick, frac, c, crate::look::current());
+    }
+
+    /// `ring` in a given look (`Bento` = the plain smooth ring).
+    #[allow(clippy::too_many_arguments)]
+    pub fn ring_in(&mut self, cx: f32, cy: f32, r: f32, thick: f32, frac: f32, c: Rgba, look: crate::look::Look) {
         let frac = frac.clamp(0.0, 1.0);
         if frac <= 0.0 {
             return;
@@ -521,6 +628,19 @@ impl Canvas {
         let half = thick / 2.0;
         let mid = r - half;
         let tau = std::f32::consts::TAU;
+        // Segments (count, lit share of each) of the look; values snap to whole segments.
+        let seg = match look {
+            crate::look::Look::Lime => Some(((mid * tau / (thick * 1.9).max(3.0)).round().clamp(12.0, 60.0), 0.55f32)),
+            crate::look::Look::Tactile => Some((24.0f32, 0.74f32)),
+            crate::look::Look::Bento => None,
+        };
+        let frac = match seg {
+            Some((n, _)) if frac < 1.0 => (frac * n).round() / n,
+            _ => frac,
+        };
+        if frac <= 0.0 {
+            return;
+        }
         let end = frac * tau;
         let caps = [(cx, cy - mid), (cx + mid * end.sin(), cy - mid * end.cos())];
         let (x0, y0, x1, y1) = self.bounds(
@@ -543,7 +663,20 @@ impl Canvas {
                         continue;
                     }
                     let mut cov = 0.0f32;
-                    if frac >= 1.0 {
+                    if let Some((n, duty)) = seg {
+                        let mut a = dx.atan2(-dy);
+                        if a < 0.0 {
+                            a += tau;
+                        }
+                        if a <= end + 1e-4 {
+                            // Distance (px along the arc) to the nearer edge of this segment.
+                            let u = (a / (tau / n)).fract();
+                            if u < duty {
+                                let edge = (u.min(duty - u)) * (tau / n) * d;
+                                cov = radial * (edge + 0.5).clamp(0.0, 1.0);
+                            }
+                        }
+                    } else if frac >= 1.0 {
                         cov = radial;
                     } else {
                         let mut a = dx.atan2(-dy);
@@ -1399,7 +1532,7 @@ mod tests {
                     let (mut a, mut b) = pair(200, 160);
                     a.set_clip(clip);
                     b.set_clip(clip);
-                    a.ring(cx, cy, r, th, frac, c);
+                    a.ring_in(cx, cy, r, th, frac, c, crate::look::Look::Bento);
                     b.ref_ring(cx, cy, r, th, frac, c);
                     same(&mut a, &mut b, &format!("ring {cx} {cy} {r} {th} {frac}"));
                     let (a0, a1) = (frac * 2.0 - 1.0, frac * 6.0 + 0.3);

@@ -2,7 +2,7 @@
 
 use crate::app::{accent, App, HIST};
 use crate::fmt;
-use crate::render::{create_font, ui_face, Canvas, Rgba};
+use crate::render::{create_font, Canvas, Rgba};
 use crate::settings::Metric;
 use crate::taskbar::Edge;
 use crate::usage;
@@ -33,38 +33,18 @@ pub struct Pal {
     pub line: Rgba,
 }
 
-/// Light theme base colours (eggshell), shared by every window and the widget.
-pub const EGG_BG: Rgba = Rgba::rgb(0xEF, 0xEA, 0xDF);
-pub const EGG_CARD: Rgba = Rgba::rgb(0xF8, 0xF4, 0xEA);
-pub const EGG_FG: Rgba = Rgba::rgb(0x2A, 0x26, 0x20);
-pub const EGG_DIM: Rgba = Rgba::rgb(0x67, 0x5F, 0x53);
-
-/// See docs/ui-reference: near-black base, raised cards, hairline borders.
-/// Light is eggshell rather than white: easier on the eyes.
+/// Colours of the current look (`look::tokens`), light or dark.
 pub fn palette(dark: bool) -> Pal {
-    if dark {
-        Pal {
-            bg: Rgba::rgb(28, 28, 28),
-            card: Rgba::rgb(38, 38, 38),
-            chip: Rgba::rgb(50, 50, 50),
-            border: Rgba::rgb(52, 52, 52),
-            track: Rgba::rgb(58, 58, 58),
-            fg: Rgba::rgb(242, 242, 242),
-            dim: Rgba::rgb(150, 150, 150),
-            line: Rgba::rgb(58, 58, 58),
-        }
-    } else {
-        Pal {
-            // Eggshell: warm and soft instead of bright white.
-            bg: EGG_BG,
-            card: EGG_CARD,
-            chip: Rgba::rgb(0xE6, 0xE0, 0xD2),
-            border: Rgba::rgb(0xDC, 0xD5, 0xC6),
-            track: Rgba::rgb(0xE0, 0xD9, 0xCA),
-            fg: EGG_FG,
-            dim: EGG_DIM,
-            line: Rgba::rgb(0xDC, 0xD5, 0xC6),
-        }
+    let t = crate::look::tokens(dark);
+    Pal {
+        bg: t.bg,
+        card: t.panel,
+        chip: t.raised,
+        border: t.border,
+        track: t.track,
+        fg: t.fg,
+        dim: t.dim,
+        line: t.border,
     }
 }
 
@@ -82,6 +62,12 @@ pub fn style_window(hwnd: HWND, dark: bool) {
         DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE as u32, &d as *const i32 as _, 4);
         let round: i32 = DWMWCP_ROUND;
         DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE as u32, &round as *const i32 as _, 4);
+        // Title bar and border in the look's base colours (Windows 11; ignored before).
+        let t = crate::look::tokens(dark);
+        for (attr, c) in [(DWMWA_CAPTION_COLOR, t.bg), (DWMWA_TEXT_COLOR, t.fg), (DWMWA_BORDER_COLOR, t.border)] {
+            let v: u32 = c.colorref();
+            DwmSetWindowAttribute(hwnd, attr as u32, &v as *const u32 as _, 4);
+        }
     }
 }
 
@@ -114,12 +100,13 @@ pub fn style_popup(hwnd: HWND, dark: bool) -> bool {
     // window; this panel never takes focus (so you keep yours), which made it
     // fall back to flat grey. The accent-policy acrylic blur — what the
     // taskbar and Start use — stays frosted while inactive. Win10 1803+.
-    if build_number() < 17134 {
-        return false;
-    }
-    unsafe { acrylic_accent(hwnd, dark) }
+    // The looks paint their own solid base (charcoal, cream, greige): no
+    // acrylic blur behind the panel.
+    let _ = (hwnd, build_number);
+    false
 }
 
+#[allow(dead_code)]
 /// Acrylic blur behind the whole window via SetWindowCompositionAttribute
 /// (user32, resolved at run time). Pixels with alpha 0 show the blur.
 unsafe fn acrylic_accent(hwnd: HWND, dark: bool) -> bool {
@@ -167,6 +154,8 @@ pub struct Fonts {
     pub big: HFONT,
     pub caps: HFONT,
     pub scale: f32,
+    /// The look the faces were picked for (rebuilt when it changes).
+    pub look: crate::look::Look,
 }
 
 impl Fonts {
@@ -180,15 +169,18 @@ impl Fonts {
     }
     fn make(scale: f32, gray: bool) -> Fonts {
         let px = |v: f32| (v * scale).round() as i32;
-        let f = ui_face();
+        let look = crate::look::current();
+        let fc = crate::look::faces_for(look);
+        let f = fc.ui;
         Fonts {
             small: create_font(px(11.0), 400, f, gray),
             normal: create_font(px(12.5), 400, f, gray),
             bold: create_font(px(12.5), 600, f, gray),
-            mid: create_font(px(15.0), 600, f, gray),
-            big: create_font(px(20.0), 600, f, gray),
-            caps: create_font(px(10.0), 600, f, gray),
+            mid: create_font(px(15.0), 600, fc.num, gray),
+            big: create_font(px(20.0), fc.num_weight.max(500), fc.num, gray),
+            caps: create_font(px(10.0), 600, fc.mono, gray),
             scale,
+            look,
         }
     }
 }
@@ -599,7 +591,7 @@ fn paint(a: &mut App, hwnd: HWND) {
     let (cw, ch) = (rc.right.max(1), rc.bottom.max(1));
 
     // Fonts and canvas are cached across the once-per-second repaints.
-    let mut cache = a.popup_cache.take().filter(|(f, _)| f.scale == scale);
+    let mut cache = a.popup_cache.take().filter(|(f, _)| f.scale == scale && f.look == crate::look::current());
     let (f, mut c) = cache.take().unwrap_or_else(|| (Fonts::gray(scale), Canvas::new()));
     c.resize(cw, ch);
     let mut out = Out { hits: std::mem::take(&mut a.popup_hits), tip: None };
@@ -820,7 +812,7 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
         c.ring(cx, cy, rr, th, g.pct / 100.0, col);
         let v = format!("{:.0}%", g.pct);
         let (_, vh) = c.measure(f.mid, &v);
-        c.text_center(f.mid, &v, cx as i32, cy as i32 - vh / 2, a.heat_text(pal.fg, g.pct));
+        c.numeral_center(f.mid, &v, cx as i32, cy as i32 - vh / 2, a.heat_text(pal.fg, g.pct));
         c.text_center(f.caps, g.label, cx as i32, y + sc(85.0), pal.dim);
         let sub = c.ellipsize(f.small, &g.sub, gw - sc(16.0));
         c.text_center(f.small, &sub, cx as i32, y + sc(99.0), g.sub_col);
@@ -940,7 +932,7 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
     let today = a.usage.get(now);
     let month = a.usage.month(yy, mm);
     c.text(f.caps, "TODAY", ix, y + sc(12.0), pal.dim);
-    c.text(f.big, &fmt::bytes(today.total()), ix, y + sc(24.0), pal.fg);
+    c.numeral(f.big, &fmt::bytes(today.total()), ix, y + sc(24.0), pal.fg);
     let mlw = c.measure(f.caps, "MONTH").0;
     let (_, bh) = c.measure(f.bold, "0");
     let (_, chh) = c.measure(f.caps, "M");
@@ -1021,12 +1013,8 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
         let label = format!("{} of {:.0} GB  ({:.0}%)", fmt::bytes(used), a.s.data_cap_gb, pct);
         let lw = c.measure(f.small, &label).0;
         let bar = Rect { l: ix, t: by, r: right - sc(14.0) - lw - sc(10.0), b: by + sc(8.0) };
-        c.fill_round(bar, 4.0 * scale, pal.track);
-        let fw = (bar.w() as f64 * (pct / 100.0).min(1.0)) as i32;
         let col = a.heat(accent(Metric::Down, a.dark), pct as f32);
-        if fw > 0 {
-            c.fill_round(Rect { r: bar.l + fw.max(bar.h()), ..bar }, 4.0 * scale, col);
-        }
+        c.meter(bar, (pct / 100.0).min(1.0) as f32, col, pal.track);
         c.text(f.small, &label, right - sc(14.0) - lw, by - sc(4.0), pal.dim);
     }
     y += uh + gap;
@@ -1101,10 +1089,9 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
             c.text(f.small, &nm, name_x, mid - nh / 2, pal.fg);
             let bh = sc(6.0);
             let track = Rect { l: bar_l, t: mid - bh / 2, r: bar_r, b: mid - bh / 2 + bh };
-            c.fill_round(track, bh as f32 / 2.0, pal.track);
-            if max > 0.0 && track.w() > 0 {
-                let fw = ((v / max).clamp(0.0, 1.0) * track.w() as f64).round() as i32;
-                c.fill_round(Rect { r: track.l + fw.max(bh), ..track }, bh as f32 / 2.0, bar_c);
+            if track.w() > 0 {
+                let frac = if max > 0.0 { (v / max).clamp(0.0, 1.0) as f32 } else { 0.0 };
+                c.meter(track, frac, bar_c, pal.track);
             }
             c.text_right(f.small, text, inner_r, mid - nh / 2, pal.dim);
         }

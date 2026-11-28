@@ -44,7 +44,7 @@
 //! * The layout (controls and cards of the current page) is rebuilt from the
 //!   draft after every change; it is a few dozen rectangles.
 
-use crate::app::{app, default_accent, effective_dark, Cmd, C_CRIT, C_WARN};
+use crate::app::{app, effective_dark, Cmd};
 use crate::fmt::SpeedUnit;
 use crate::grid;
 use crate::achievements::room::{self, Room};
@@ -54,7 +54,7 @@ use crate::insights::{unix_ms, Panel};
 use crate::monitor::{Hit as MonHit, Monitor};
 use crate::nav::{self, Entry, History, Page, Placement};
 use crate::popup::style_window;
-use crate::render::{create_font, measure_dc, ui_face, Canvas, Rgba};
+use crate::render::{create_font, measure_dc, Canvas, Rgba};
 use crate::settings::{LabelStyle, Metric, Mode, Settings, Theme};
 use crate::util::*;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
@@ -132,11 +132,8 @@ const T_REPEAT: usize = 2;
 /// Debounced live apply: changes take effect ~150 ms after the last edit.
 const T_LIVE: usize = 3;
 /// Durations of the transitions (Fluent "fast" ~150 ms, pane ~200 ms).
-const PAGE_ANIM_S: f32 = 0.15;
 const IND_ANIM_S: f32 = 0.15;
 const PANE_ANIM_S: f32 = 0.2;
-/// Page content slides up this far while it fades in.
-const PAGE_SLIDE: i32 = 8;
 /// Rebuild the Insights panels at most this often while they are showing.
 const REBUILD_MS: u64 = 2000;
 
@@ -213,6 +210,8 @@ const ID_BIG_CLOSE: i32 = 910;
 const ID_BIG_PREV: i32 = 911;
 const ID_BIG_NEXT: i32 = 912;
 const ID_BIG_HEAD: i32 = 913;
+/// + `Look::idx` (Appearance look cards).
+const ID_LOOK: i32 = 870;
 const ID_ROOM: i32 = 1000;
 const ID_SINGLE: i32 = 1100;
 /// Monitor page hit regions, + index in `Monitor::hits`.
@@ -285,6 +284,7 @@ const fn hx(v: u32) -> Rgba {
 }
 
 /// White at alpha `a`.
+#[allow(dead_code)]
 const fn wa(a: u8) -> Rgba {
     Rgba(255, 255, 255, a)
 }
@@ -305,7 +305,6 @@ struct Pal {
     /// Opaque fills: chart value bubble, tooltip, the overlay pane.
     bubble: Rgba,
     pane: Rgba,
-    nav_sel: Rgba,
     nav_hover: Rgba,
     nav_press: Rgba,
     /// Standard control (button, drop-down, number box) fills and outline.
@@ -343,97 +342,60 @@ struct Pal {
 }
 
 impl Pal {
+    /// The colours of the current look (`look::tokens`). `mica` and `accent`
+    /// are kept for the call sites; the looks paint their own solid base and
+    /// use their own accent, so neither changes anything now.
     fn new(dark: bool, mica: bool, accent: Rgba) -> Pal {
+        let _ = (mica, accent);
+        let t = crate::look::tokens(dark);
+        let accent = t.accent_fill;
         let lum = (accent.0 as u32 * 299 + accent.1 as u32 * 587 + accent.2 as u32 * 114) / 1000;
         let on_accent = if lum > 150 { hx(0x000000) } else { hx(0xFFFFFF) };
+        let _ = on_accent;
         let shade = if dark { hx(0x000000) } else { hx(0xFFFFFF) };
         let (accent_hover, accent_press) = (accent.mix(shade, 0.1), accent.mix(shade, 0.2));
-        if dark {
-            Pal {
-                dark,
-                bg: if mica { Rgba(0, 0, 0, 0) } else { hx(0x202020) },
-                card: if mica { wa(0x0D) } else { hx(0x2B2B2B) },
-                card_border: if mica { wa(0x0F) } else { ka(0x33) },
-                bubble: hx(0x2C2C2C),
-                pane: hx(0x2C2C2C),
-                nav_sel: wa(0x0F),
-                nav_hover: wa(0x0A),
-                nav_press: wa(0x07),
-                ctl: wa(0x0F),
-                ctl_hover: wa(0x15),
-                ctl_press: wa(0x08),
-                ctl_dis: wa(0x0B),
-                ctl_border: wa(0x12),
-                subtle_hover: wa(0x0F),
-                subtle_press: wa(0x08),
-                fg: hx(0xFFFFFF),
-                dim: hx(0xC5C5C5),
-                off: hx(0x787878),
-                line: wa(0x0F),
-                chart_line: wa(0x17),
-                tog_stroke: wa(0x9A),
-                tog_fill: ka(0x19),
-                tog_fill_hover: wa(0x0B),
-                knob_off: wa(0xC8),
-                tog_dis: wa(0x28),
-                knob_dis: wa(0x5D),
-                rail: wa(0x8B),
-                thumb: hx(0x454545),
-                thumb_rim: wa(0x14),
-                swatch_rim: wa(0x40),
-                sb: wa(0x8B),
-                sb_track: wa(0x0B),
-                good: hx(0x6CCB5F),
-                learning: hx(0x9D9D9D),
-                accent,
-                accent_hover,
-                accent_press,
-                on_accent,
-            }
-        } else {
-            let f9 = |a: u8| Rgba(0xF9, 0xF9, 0xF9, a);
-            Pal {
-                dark,
-                // Eggshell, opaque even with Mica (its light tint is bright white).
-                bg: crate::popup::EGG_BG,
-                card: crate::popup::EGG_CARD,
-                card_border: ka(0x12),
-                bubble: hx(0xFBF8F1),
-                pane: hx(0xF4EFE4),
-                nav_sel: ka(0x0A),
-                nav_hover: ka(0x06),
-                nav_press: ka(0x04),
-                ctl: Rgba(0xFB, 0xF8, 0xF1, 0xC0),
-                ctl_hover: f9(0x80),
-                ctl_press: f9(0x4D),
-                ctl_dis: f9(0x4D),
-                ctl_border: ka(0x17),
-                subtle_hover: ka(0x09),
-                subtle_press: ka(0x06),
-                fg: crate::popup::EGG_FG,
-                dim: crate::popup::EGG_DIM,
-                off: hx(0xA39B8E),
-                line: ka(0x0F),
-                chart_line: ka(0x14),
-                tog_stroke: ka(0x72),
-                tog_fill: ka(0x06),
-                tog_fill_hover: ka(0x0F),
-                knob_off: ka(0x9B),
-                tog_dis: ka(0x37),
-                knob_dis: wa(0xFF),
-                rail: ka(0x72),
-                thumb: hx(0xFBF8F1),
-                thumb_rim: ka(0x0F),
-                swatch_rim: ka(0x30),
-                sb: ka(0x72),
-                sb_track: ka(0x06),
-                good: hx(0x0F7B0F),
-                learning: hx(0x8A8A8A),
-                accent,
-                accent_hover,
-                accent_press,
-                on_accent,
-            }
+        // Hover / press fills: the look's text colour at low alpha, so they read
+        // on its panels in either mode.
+        let ink = |a: u8| t.fg.with_a(a);
+        Pal {
+            dark,
+            bg: t.bg,
+            card: t.panel,
+            card_border: t.border,
+            bubble: t.raised2,
+            pane: t.panel,
+            nav_hover: ink(0x0B),
+            nav_press: ink(0x07),
+            ctl: t.raised,
+            ctl_hover: t.raised2,
+            ctl_press: t.raised.mix(t.bg, 0.5),
+            ctl_dis: t.raised.with_a(0x80),
+            ctl_border: t.border2,
+            subtle_hover: ink(0x0F),
+            subtle_press: ink(0x08),
+            fg: t.fg,
+            dim: t.dim,
+            off: t.off,
+            line: t.border,
+            chart_line: ink(0x1A),
+            tog_stroke: t.dim,
+            tog_fill: t.well,
+            tog_fill_hover: t.raised2,
+            knob_off: t.dim,
+            tog_dis: t.off.with_a(0x60),
+            knob_dis: t.off,
+            rail: t.track.with_a(0xFF.min(t.track.3.saturating_mul(3))),
+            thumb: t.panel,
+            thumb_rim: t.border2,
+            swatch_rim: ink(0x40),
+            sb: t.dim,
+            sb_track: ink(0x0B),
+            good: t.good,
+            learning: t.off,
+            accent,
+            accent_hover,
+            accent_press,
+            on_accent: t.on_accent,
         }
     }
 
@@ -451,8 +413,8 @@ impl Pal {
             good: self.good,
             learning: self.learning,
             accent: self.accent,
-            warn: C_WARN,
-            crit: C_CRIT,
+            warn: crate::look::tokens(self.dark).warn,
+            crit: crate::look::tokens(self.dark).crit,
         }
     }
 }
@@ -592,6 +554,8 @@ struct Fonts {
     title: HFONT,
     icon: HFONT,
     icon_sm: HFONT,
+    /// Look card previews: (label, big number, name) faces of each look.
+    looks: [(HFONT, HFONT); 3],
     /// Big light numerals (Bluetooth levels).
     num: HFONT,
     num_sm: HFONT,
@@ -623,19 +587,28 @@ impl Fonts {
     /// Grayscale anti-aliased fonts (the canvas needs a coverage mask).
     fn new(dpi: u32) -> Fonts {
         let sc = |v: i32| ((v * dpi as i32 + 48) / 96).max(1);
-        let text = ui_face();
-        let display = pick_face("Segoe UI Variable Display", text);
+        // The look's typefaces: mono for Lime, Bahnschrift for Tactile, Segoe
+        // UI Variable for Bento. Mono runs wide, so Lime's body is a size smaller.
+        let fc = crate::look::faces();
+        let text = fc.ui;
+        let display = fc.display;
+        let mono = matches!(crate::look::current(), crate::look::Look::Lime);
+        let (b, s, t) = if mono { (13, 11, 10) } else { (14, 12, 11) };
         let icons = pick_face("Segoe Fluent Icons", "Segoe MDL2 Assets");
         Fonts {
-            body: create_font(sc(14), 400, text, true),
-            small: create_font(sc(12), 400, text, true),
-            tiny: create_font(sc(11), 400, text, true),
-            semi: create_font(sc(14), 600, text, true),
-            cap: create_font(sc(12), 600, text, true),
-            head: create_font(sc(20), 600, display, true),
-            title: create_font(sc(28), 600, display, true),
+            body: create_font(sc(b), 400, text, true),
+            small: create_font(sc(s), 400, text, true),
+            tiny: create_font(sc(t), 400, text, true),
+            semi: create_font(sc(b), 600, text, true),
+            cap: create_font(sc(s), 600, fc.mono, true),
+            head: create_font(sc(20), fc.title_weight, display, true),
+            title: create_font(sc(28), fc.title_weight, display, true),
             icon: create_font(sc(16), 400, icons, true),
             icon_sm: create_font(sc(12), 400, icons, true),
+            looks: crate::look::Look::ALL.map(|l| {
+                let fc = crate::look::faces_for(l);
+                (create_font(sc(10), 600, fc.mono, true), create_font(sc(30), fc.num_weight, fc.num, true))
+            }),
             num: create_font(sc(32), 300, display, true),
             num_sm: create_font(sc(24), 300, display, true),
         }
@@ -648,6 +621,12 @@ impl Fonts {
     fn free(&self) {
         for f in [self.body, self.small, self.tiny, self.semi, self.cap, self.head, self.title, self.icon, self.icon_sm, self.num, self.num_sm] {
             unsafe { DeleteObject(f) };
+        }
+        for (a, b) in self.looks {
+            unsafe {
+                DeleteObject(a);
+                DeleteObject(b);
+            }
         }
     }
 }
@@ -680,6 +659,8 @@ enum Kind {
     Goal,
     /// The nav pane's level chip.
     Chip,
+    /// An Appearance look card (`Look::idx`): live preview, name, a click picks it.
+    Look(u8),
     /// The Server Room tray's live coin: drag turns it, a click (Space, Enter) turns it over.
     Coin,
     /// An earned single in the Server Room tray (index into `Room::single_rects`): shows its coin.
@@ -751,6 +732,8 @@ enum Def {
     Brand,
     /// The Monitor page (all of it).
     Monitor,
+    /// Appearance: the three look cards side by side.
+    Looks,
 }
 
 /// Laid-out non-interactive parts of a page (content coordinates).
@@ -914,6 +897,12 @@ struct Drawn {
     chart_hover: Option<i32>,
 }
 
+/// Position of a page in the navigation pane (top to bottom, footer last):
+/// a transition runs forward to a lower page and mirrored to a higher one.
+fn nav_rank(p: Page) -> usize {
+    nav::nav_order().position(|x| x == p).unwrap_or(0)
+}
+
 /// Make sure the order lists every metric exactly once.
 fn full_order(order: &[Metric]) -> Vec<Metric> {
     let mut v: Vec<Metric> = Vec::new();
@@ -929,8 +918,6 @@ fn full_order(order: &[Metric]) -> Vec<Metric> {
 
 /// Running transitions (start times); None = not running.
 struct Anim {
-    /// Page content fading / sliding in.
-    page: Option<Instant>,
     /// Selection indicator sliding from this centre y (menu coordinates).
     ind: Option<(i32, Instant)>,
     /// Overlay pane width animating from .0 to .1.
@@ -945,6 +932,8 @@ struct Ui {
     dark: bool,
     /// The live theme setting (drives the process-wide app mode).
     theme: Theme,
+    /// The look the palette and fonts were built for.
+    look: crate::look::Look,
     /// The Mica backdrop is on: the background is painted transparent.
     mica: bool,
     pal: Pal,
@@ -995,6 +984,10 @@ struct Ui {
     open_dd: Option<i32>,
     cv: Canvas,
     anim: Anim,
+    /// The look's page transition, while it runs; `trans_spare` keeps the
+    /// buffers of the last one for reuse.
+    trans: Option<crate::pagetrans::PageTrans>,
+    trans_spare: Option<crate::pagetrans::PageTrans>,
     animate: bool,
     /// Last normal (not minimized / maximized) window rectangle, and maximized.
     normal: Rect,
@@ -1062,6 +1055,7 @@ impl Ui {
             theme,
             mica: false,
             pal: Pal::new(dark, false, accent_color(dark)),
+            look: crate::look::current(),
             fonts: Fonts::new(dpi),
             mdc: unsafe { CreateCompatibleDC(std::ptr::null_mut()) },
             cw: 0,
@@ -1094,7 +1088,9 @@ impl Ui {
             repeat_n: 0,
             open_dd: None,
             cv: Canvas::new(),
-            anim: Anim { page: None, ind: None, pane: None, timer: false },
+            anim: Anim { ind: None, pane: None, timer: false },
+            trans: None,
+            trans_spare: None,
             animate: animations_on(),
             normal: Rect { l: 0, t: 0, r: 0, b: 0 },
             maximized: false,
@@ -1495,7 +1491,8 @@ impl Ui {
                 return c & 0xFF_FFFF;
             }
         }
-        let c = default_accent(m);
+        let _ = m;
+        let c = crate::look::tokens(self.dark).accent;
         (c.0 as u32) << 16 | (c.1 as u32) << 8 | c.2 as u32
     }
 
@@ -1512,6 +1509,18 @@ impl Ui {
     fn settings_defs(&self, page: Page) -> Vec<Def> {
         let d = &self.draft;
         match page {
+            Page::Appearance => {
+                let mut v = Vec::new();
+                if d.look.is_none() {
+                    v.push(Def::Heading("Pick your look"));
+                    v.push(Def::Note("Each look restyles every window. You can change it here or from the tray menu at any time."));
+                }
+                v.push(Def::Looks);
+                v.push(Def::Heading("Mode"));
+                v.push(card("Light or dark", "Every look has a light and a dark version", vec![cell(ID_THEME, Kind::Dropdown, 200)]));
+                v.push(Def::Note("Switching looks keeps your history, settings, widget position and shortcuts."));
+                v
+            }
             Page::General => {
                 let multi = self.displays.len() > 1;
                 let mut v = vec![
@@ -1522,7 +1531,6 @@ impl Ui {
                         "Scale of the text on the widget",
                         vec![cell(ID_SCALE, Kind::Slider, 180), Cell::Value(ID_SCALE)],
                     ),
-                    card("Theme", "Colours of the widget and this window", vec![cell(ID_THEME, Kind::Dropdown, 200)]),
                     card(
                         "Background opacity",
                         "How solid the widget background is",
@@ -1675,7 +1683,7 @@ impl Ui {
         match page {
             Page::Overview => self.overview_defs(),
             Page::Achievements => self.achievements_defs(),
-            Page::Monitor => vec![Def::Monitor],
+            Page::Monitor | Page::FullSpeed => vec![Def::Monitor],
             p if p.panel().is_some() => self.insight_defs(p),
             p => self.settings_defs(p),
         }
@@ -1772,7 +1780,7 @@ impl Ui {
         match self.page {
             Page::Overview => grid::Class::Overview,
             // the Server Room fills the window
-            Page::Achievements | Page::Monitor => grid::Class::Fill,
+            Page::Achievements | Page::Monitor | Page::FullSpeed => grid::Class::Fill,
             // an ordered list: one column, never gridded
             Page::Metrics => grid::Class::List,
             p if p.panel().is_some() => grid::Class::Insights,
@@ -2004,6 +2012,7 @@ impl Ui {
                     }
                 }
                 Def::Monitor => {
+                    self.mon.speed = self.page == Page::FullSpeed;
                     self.mon.motion = self.animate;
                     self.mon.tab_font = self.fonts.view().small;
                     self.mon.num_font = self.fonts.num;
@@ -2016,6 +2025,22 @@ impl Ui {
                     for (i, (rect, _)) in self.mon.hits.iter().enumerate() {
                         controls.push(Control { id: ID_MON + i as i32, kind: Kind::Mon(i as u16), rect: *rect, layer: Layer::Page, enabled: true });
                     }
+                }
+                Def::Looks => {
+                    // Three cards in a row; stacked when the column is narrow.
+                    let gap = self.sc(ROW_GAP + 4);
+                    let n = if r - l >= self.sc(600) { 3 } else { 1 };
+                    let cw = (r - l - gap * (n - 1)) / n;
+                    let ch = self.sc(if n == 3 { 236 } else { 200 });
+                    for (i, _) in crate::look::Look::ALL.iter().enumerate() {
+                        let (col, row) = ((i as i32) % n, (i as i32) / n);
+                        let x = l + col * (cw + gap);
+                        let t = y + row * (ch + gap);
+                        let rect = Rect { l: x, t, r: x + cw, b: t + ch };
+                        controls.push(Control { id: ID_LOOK + i as i32, kind: Kind::Look(i as u8), rect, layer: Layer::Page, enabled: true });
+                    }
+                    let rows = 3 / n;
+                    y += rows * ch + (rows - 1) * gap + self.sc(ROW_GAP);
                 }
                 Def::Goal => {
                     let rect = Rect { l, t: y, r, b: y + room::goal_card_h(self.dpi) };
@@ -2281,9 +2306,12 @@ impl Ui {
         // Anything besides the scroll offset moving this frame.
         let mut other = false;
         let done = |t: Option<Instant>, dur: f32| t.is_none_or(|t| t.elapsed().as_secs_f32() >= dur);
-        if done(self.anim.page, PAGE_ANIM_S) {
-            self.anim.page = None;
-        } else {
+        if self.trans.as_ref().is_some_and(|t| t.done()) {
+            self.trans_spare = self.trans.take();
+            // The last frame is the plain new page.
+            self.drawn = None;
+            other = true;
+        } else if self.trans.is_some() {
             other = true;
         }
         if done(self.anim.ind.map(|x| x.1), IND_ANIM_S) {
@@ -2301,6 +2329,10 @@ impl Ui {
         }
         if self.mon_on && self.mon.animating() {
             other = true;
+            // Full speed: pick up a finished scan or driver step without waiting for the tick.
+            if self.mon.speed && self.mon.speed_tick() {
+                self.layout();
+            }
         }
         if self.room_on {
             if let Some(st) = &self.ach {
@@ -2410,6 +2442,21 @@ impl Ui {
             return false;
         }
         let from = self.indicator_y(self.page);
+        // The old page, fully drawn (a running transition is finished first),
+        // for the look's transition into the new one.
+        let old = (!self.hwnd.is_null() && self.cw > 0 && self.ch > 0).then(|| {
+            if let Some(t) = self.trans.take() {
+                self.trans_spare = Some(t);
+            }
+            let mut cv = std::mem::replace(&mut self.cv, Canvas::new());
+            cv.resize(self.cw, self.ch);
+            cv.set_clip(None);
+            self.draw(&mut cv);
+            cv.set_clip(None);
+            self.drawn = None;
+            cv
+        });
+        let dir = if nav_rank(p) >= nav_rank(self.page) { 1 } else { -1 };
         if record {
             self.history.push(self.page);
         }
@@ -2424,14 +2471,63 @@ impl Ui {
         }
         self.layout();
         self.refresh_hover();
-        if self.animate && !self.hwnd.is_null() {
-            let now = Instant::now();
-            self.anim.page = Some(now);
-            self.anim.ind = from.map(|y| (y, now));
+        if let Some(mut cv) = old {
+            let (kind, dur) = crate::pagetrans::pick(self.animate);
+            let region = Rect { l: self.content_x(), t: 0, r: self.cw, b: self.ch };
+            let panels = self.panel_rects();
+            let scale = self.dpi as f32 / 96.0;
+            let stride = cv.w;
+            let tr = crate::pagetrans::PageTrans::new(kind, dur, dir, region, cv.pixels(), stride, panels, scale, self.trans_spare.take());
+            self.cv = cv;
+            self.trans = Some(tr);
+            if self.animate {
+                self.anim.ind = from.map(|y| (y, Instant::now()));
+            }
             self.kick();
         }
         invalidate(self.hwnd);
         true
+    }
+
+    /// Panels of the current page in client pixels (cards, summaries, look
+    /// cards, the goal card): what the Boot transition powers on one by one.
+    /// Pages drawn by their own renderers (Monitor, Insights) get bands.
+    fn panel_rects(&self) -> Vec<Rect> {
+        let (vt, vb) = self.view();
+        let dy = vt - self.scroll_px();
+        let mut v: Vec<Rect> = Vec::new();
+        for b in &self.blocks {
+            match b {
+                Block::Card { rect, .. } | Block::Brand(rect) => v.push(shift(*rect, dy)),
+                _ => {}
+            }
+        }
+        for c in self.controls.iter().filter(|c| c.layer == Layer::Page) {
+            if matches!(c.kind, Kind::Summary(_) | Kind::Look(_) | Kind::Goal) {
+                v.push(shift(c.rect, dy));
+            }
+        }
+        v.retain(|r| r.b > vt && r.t < vb);
+        if v.len() < 2 {
+            v.clear();
+            let (l, r) = (self.content_x() + self.sc(24), self.cw - self.sc(24));
+            let two = r - l > self.sc(720);
+            let bh = self.sc(150);
+            let mut t = vt + self.sc(8);
+            while t < vb && v.len() < 16 {
+                let b = (t + bh - self.sc(12)).min(vb);
+                if two {
+                    let m = (l + r) / 2;
+                    v.push(Rect { l, t, r: m - self.sc(6), b });
+                    v.push(Rect { l: m + self.sc(6), t, r, b });
+                } else {
+                    v.push(Rect { l, t, r, b });
+                }
+                t += bh;
+            }
+        }
+        v.truncate(24);
+        v
     }
 
     fn back(&mut self) -> bool {
@@ -2572,6 +2668,13 @@ impl Ui {
                 self.draw(&mut cv);
             }
         }
+        if let Some(tr) = self.trans.as_mut() {
+            let _t = crate::perf::span("transition");
+            let tk = crate::look::tokens(self.dark);
+            let stride = cv.w;
+            cv.set_clip(None);
+            tr.compose(cv.pixels_mut(), stride, &tk);
+        }
         self.drawn = Some(now);
         cv.set_clip(None);
         let _b = crate::perf::span("blit");
@@ -2599,7 +2702,7 @@ impl Ui {
     /// scroll may shift its pixels: no transition, overlay pane, tooltip, or
     /// live scene (the Server Room draws its coin straight into the pixels).
     fn can_shift(&self) -> bool {
-        self.anim.page.is_none() && self.anim.pane.is_none() && !self.overlay && self.tip.is_none() && !self.room_on
+        self.trans.is_none() && self.anim.pane.is_none() && !self.overlay && self.tip.is_none() && !self.room_on
     }
 
     fn state(&self, id: i32, part: Part) -> (bool, bool) {
@@ -2615,11 +2718,10 @@ impl Ui {
         let (vt, vb) = self.view();
         let cx0 = self.content_x();
         let (_, col_r) = self.col();
-        let rad = self.sc(6) as f32;
-        // Page transition: content slides up `PAGE_SLIDE` while it fades in.
-        let fade = self.anim.page.map(|t| Self::progress(t, PAGE_ANIM_S));
-        let slide = fade.map_or(0, |e| ((1.0 - e) * self.sc(PAGE_SLIDE) as f32).round() as i32);
-        let dy = vt - self.scroll_px() + slide;
+        let rad = self.sc(crate::look::tokens(self.dark).r_card) as f32;
+        // Bento's new page settles in a few px as the splash lifts off.
+        let settle = self.trans.as_ref().map_or(0, |t| t.page_dy());
+        let dy = vt - self.scroll_px() + settle;
 
         // Page content, clipped to the band under the header.
         cv.set_clip(Some(Rect { l: cx0, t: vt, r: self.cw, b: vb }));
@@ -2630,8 +2732,9 @@ impl Ui {
                     if r.b < vt || r.t > vb {
                         continue;
                     }
-                    let th = cv.measure(f.semi, t).1;
-                    cv.text(f.semi, t, r.l + self.sc(2), r.b - th - self.sc(6), p.fg);
+                    let t = crate::look::label(t);
+                    let th = cv.measure(f.semi, &t).1;
+                    cv.text(f.semi, &t, r.l + self.sc(2), r.b - th - self.sc(6), p.fg);
                 }
                 Block::Brand(rect) => {
                     let r = shift(*rect, dy);
@@ -2718,9 +2821,9 @@ impl Ui {
         // Page header: back button and title.
         cv.set_clip(Some(Rect { l: cx0, t: 0, r: self.cw, b: vt }));
         let mut tx = self.col().0;
-        let mut tcy = vt / 2 + slide;
+        let mut tcy = vt / 2 + settle;
         if let Some(c) = self.control(ID_BACK) {
-            let r = shift(c.rect, slide);
+            let r = shift(c.rect, settle);
             self.draw_control(cv, c, r);
             tx = r.r + self.sc(12);
             tcy = (r.t + r.b) / 2;
@@ -2728,9 +2831,6 @@ impl Ui {
         let title = cv.ellipsize(f.title, self.page.title(), col_r - tx);
         text_mid(cv, f.title, &title, tx, tcy - self.sc(2), p.fg);
         cv.set_clip(None);
-        if let Some(e) = fade {
-            cv.fade_rect(Rect { l: cx0, t: 0, r: self.cw, b: self.ch }, e, p.bg);
-        }
 
         // Overlay scroll bar.
         if let Some((track, thumb)) = self.scrollbar() {
@@ -2822,9 +2922,26 @@ impl Ui {
                 return;
             }
         }
-        let (pw, ph) = (self.sc(3), self.sc(16));
-        let t = cy - ph / 2;
-        cv.fill_round(Rect { l: r.l, t, r: r.l + pw, b: t + ph }, pw as f32 / 2.0, self.pal.accent);
+        let tk = crate::look::tokens(self.dark);
+        match tk.look {
+            // Tactile: a lit orange LED in the key instead of a bar.
+            crate::look::Look::Tactile => {
+                let d = self.sc(6) as f32;
+                cv.fill_disc((r.l + self.sc(8)) as f32, cy as f32, d / 2.0 + 2.0, tk.accent.with_a(0x40));
+                cv.fill_disc((r.l + self.sc(8)) as f32, cy as f32, d / 2.0, tk.accent);
+            }
+            // Bento: the pill itself is the marker; a small yellow dot rides on it.
+            crate::look::Look::Bento => {
+                let d = self.sc(6) as f32;
+                cv.fill_disc((r.r - self.sc(14)) as f32, cy as f32, d / 2.0, tk.accent_fill);
+            }
+            // Lime: a square block cursor.
+            crate::look::Look::Lime => {
+                let (pw, ph) = (self.sc(4), self.sc(14));
+                let t = cy - ph / 2;
+                cv.fill_rect(Rect { l: r.l, t, r: r.l + pw, b: t + ph }, tk.accent);
+            }
+        }
     }
 
     /// Tone of an Insights page (for its dot), when Insights is on.
@@ -2837,12 +2954,20 @@ impl Ui {
         let p = self.pal;
         let f = &self.fonts;
         let cy = (r.t + r.b) / 2;
-        let rad4 = self.sc(4) as f32;
+        let rad4 = self.sc(crate::look::tokens(self.dark).r_ctl.min(99)) as f32;
         let sel = pg == self.page;
+        let tk = crate::look::tokens(self.dark);
+        // The selected row, each look its own way: Lime a dim raised strip with
+        // accent text, Tactile a recessed key, Bento the inverted pill.
+        let (sel_fill, sel_ink) = match tk.look {
+            crate::look::Look::Lime => (tk.raised, tk.accent),
+            crate::look::Look::Tactile => (tk.well, tk.fg),
+            crate::look::Look::Bento => (tk.alt, tk.alt_fg),
+        };
         let fill = if pressed {
             Some(p.nav_press)
         } else if sel {
-            Some(p.nav_sel)
+            Some(sel_fill)
         } else if hover {
             Some(p.nav_hover)
         } else {
@@ -2851,15 +2976,20 @@ impl Ui {
         if let Some(fl) = fill {
             cv.fill_round(r, rad4, fl);
         }
+        if sel && tk.look == crate::look::Look::Tactile {
+            cv.stroke_round(r, rad4, tk.border2);
+        }
+        let ink = if sel && !pressed { sel_ink } else { p.fg };
         let gx = r.l + self.sc(20);
-        glyph(cv, f.icon, pg.glyph(), gx, cy, p.fg);
+        glyph(cv, f.icon, pg.glyph(), gx, cy, ink);
         let tone = self.page_tone(pg).map(|t| p.view().tone(t));
         if self.labels() {
             let dot = self.sc(8);
             let dx = r.r - self.sc(14);
             let right = if tone.is_some() { dx - dot - self.sc(8) } else { r.r - self.sc(8) };
-            let label = cv.ellipsize(f.body, pg.title(), right - (r.l + self.sc(44)));
-            text_mid(cv, f.body, &label, r.l + self.sc(44), cy, p.fg);
+            let title = crate::look::label(pg.title());
+            let label = cv.ellipsize(f.body, &title, right - (r.l + self.sc(44)));
+            text_mid(cv, f.body, &label, r.l + self.sc(44), cy, ink);
             if let Some(tc) = tone {
                 pill(cv, dx, cy, dot, dot, tc);
             }
@@ -2874,11 +3004,129 @@ impl Ui {
         }
     }
 
+    /// One Appearance look card: a small live-style preview of that look (its
+    /// base, a panel with a label, a big number and its kind of bar), then the
+    /// name and one line. The picked look gets an accent ring and a check.
+    fn draw_look_card(&self, cv: &mut Canvas, r: Rect, look: crate::look::Look, hover: bool, pressed: bool) {
+        use crate::look::{Bars, Numerals};
+        let p = self.pal;
+        let f = &self.fonts;
+        let t = crate::look::tokens_for(look, self.dark);
+        let own = crate::look::tokens(self.dark);
+        let picked = self.draft.look.unwrap_or(crate::look::current()) == look && self.draft.look.is_some();
+        let rad = self.sc(own.r_card) as f32;
+        let fill = if pressed { p.ctl_press } else if hover { p.ctl_hover } else { p.card };
+        cv.fill_round(r, rad, fill);
+        cv.stroke_round(r, rad, if picked { p.accent } else { p.card_border });
+        if picked {
+            cv.stroke_round(inflate(r, -1), (rad - 1.0).max(0.0), p.accent);
+        }
+        let pad = self.sc(12);
+        // Preview: the look's own base.
+        let pv = Rect { l: r.l + pad, t: r.t + pad, r: r.r - pad, b: r.t + pad + (r.h() * 58 / 100) };
+        let prad = self.sc(t.r_card.min(14)) as f32;
+        cv.fill_round(pv, prad, t.bg);
+        cv.stroke_round(pv, prad, t.border);
+        // A panel inside it.
+        let ip = self.sc(10);
+        let pn = Rect { l: pv.l + ip, t: pv.t + ip, r: pv.r - ip, b: pv.b - ip };
+        let (panel, ink, dim) = if look == crate::look::Look::Bento && self.dark {
+            (t.alt, t.alt_fg, t.alt_dim)
+        } else if look == crate::look::Look::Bento {
+            (t.panel, t.fg, t.dim)
+        } else {
+            (t.panel, t.fg, t.dim)
+        };
+        cv.fill_round(pn, self.sc(t.r_card.min(12)) as f32, panel);
+        if look != crate::look::Look::Bento {
+            cv.stroke_round(pn, self.sc(t.r_card.min(12)) as f32, t.border);
+        }
+        let (lab_f, num_f) = f.looks[look.idx()];
+        let lx = pn.l + self.sc(10);
+        let lab = if t.caps { "CPU  \u{00B7}  LIVE" } else { "Processor" };
+        cv.text(lab_f, lab, lx, pn.t + self.sc(8), dim);
+        // Big number, drawn the look's way.
+        let num = "42";
+        let ny = pn.t + self.sc(20);
+        let nh = cv.measure(num_f, "88").1;
+        match t.numerals {
+            Numerals::Led => {
+                // Dim "88" ghosts behind lit digits.
+                cv.text(num_f, "88", lx, ny, t.accent.with_a(0x22));
+                let w = cv.text(num_f, num, lx, ny, t.accent);
+                cv.text(lab_f, "%", lx + w + self.sc(3), ny + nh - self.sc(16), dim);
+            }
+            Numerals::Lcd => {
+                let wr = Rect { l: lx - self.sc(4), t: ny - self.sc(1), r: lx + cv.measure(num_f, "888").0 + self.sc(6), b: ny + nh + self.sc(1) };
+                cv.fill_round(wr, self.sc(3) as f32, t.lcd);
+                cv.text(num_f, "888", lx, ny, t.lcd_ghost);
+                let w = cv.measure(num_f, "8").0;
+                cv.text(num_f, num, lx + w, ny, t.lcd_ink);
+            }
+            Numerals::Display => {
+                let w = cv.text(num_f, num, lx, ny, ink);
+                cv.text(f.small, "%", lx + w + self.sc(2), ny + nh - self.sc(20), dim);
+            }
+        }
+        // The look's bar, filled to 62 %.
+        let frac = 0.62f32;
+        let bar = Rect { l: lx, t: pn.b - self.sc(18), r: pn.r - self.sc(10), b: pn.b - self.sc(10) };
+        match t.bars {
+            Bars::Dots => {
+                let d = self.sc(4).max(2);
+                let step = d + self.sc(2).max(1);
+                let n = (bar.w() / step).max(1);
+                let lit = (n as f32 * frac).round() as i32;
+                for k in 0..n {
+                    for row in 0..2 {
+                        let x = bar.l + k * step;
+                        let y = bar.t + row * step - self.sc(2);
+                        let c = if k < lit { t.accent } else { t.track };
+                        cv.fill_rect(Rect { l: x, t: y, r: x + d, b: y + d }, c);
+                    }
+                }
+            }
+            Bars::Ladder => {
+                let well = inflate(bar, self.sc(2));
+                cv.fill_round(well, self.sc(3) as f32, t.well);
+                let n = 14;
+                let gap = self.sc(2).max(1);
+                let sw = ((bar.w() - gap * (n - 1)) / n).max(1);
+                let lit = (n as f32 * frac).round() as i32;
+                for k in 0..n {
+                    let x = bar.l + k * (sw + gap);
+                    let c = if k >= lit { t.track } else if k >= n - 3 { t.crit } else if k >= n - 6 { t.warn } else { t.accent };
+                    cv.fill_rect(Rect { l: x, t: bar.t, r: x + sw, b: bar.b }, c);
+                }
+            }
+            Bars::Pill => {
+                let tr = if look == crate::look::Look::Bento && self.dark { t.alt_dim.with_a(0x40) } else { t.track };
+                cv.fill_round(bar, bar.h() as f32 / 2.0, tr);
+                let fr = Rect { r: bar.l + (bar.w() as f32 * frac) as i32, ..bar };
+                cv.fill_round(fr, bar.h() as f32 / 2.0, t.accent_fill);
+            }
+        }
+        // Name and one line under the preview.
+        let ty = pv.b + self.sc(10);
+        let th = cv.measure(f.semi, look.name()).1;
+        cv.text(f.semi, look.name(), r.l + pad, ty, p.fg);
+        let blurb = cv.ellipsize(f.small, look.blurb(), r.w() - 2 * pad);
+        cv.text(f.small, &blurb, r.l + pad, ty + th + self.sc(2), p.dim);
+        if picked {
+            let d = self.sc(20);
+            let (cx, cy) = (r.r - pad - d / 2, ty + th / 2);
+            cv.fill_disc(cx as f32, cy as f32, d as f32 / 2.0, p.accent);
+            let g = "\u{E73E}";
+            let (gw, gh) = cv.measure(f.icon_sm, g);
+            cv.text(f.icon_sm, g, cx - gw / 2, cy - gh / 2, p.on_accent);
+        }
+    }
+
     /// Overview card for an Insights page: glyph, title, tone pill, headline, one fact.
     fn draw_summary(&self, cv: &mut Canvas, r: Rect, pg: Page, hover: bool, pressed: bool) {
         let p = self.pal;
         let f = &self.fonts;
-        let rad = self.sc(6) as f32;
+        let rad = self.sc(crate::look::tokens(self.dark).r_card) as f32;
         cv.fill_round(r, rad, p.card);
         if pressed {
             cv.fill_round(r, rad, p.subtle_press);
@@ -2941,7 +3189,7 @@ impl Ui {
         let f = &self.fonts;
         let (hover, pressed) = self.state(c.id, Part::Body);
         let en = c.enabled;
-        let rad4 = self.sc(4) as f32;
+        let rad4 = self.sc(crate::look::tokens(self.dark).r_ctl.min(99)) as f32;
         let cy = (r.t + r.b) / 2;
         let focus = self.focus_visible && self.focus == Some(c.id);
         // Standard control fill by state.
@@ -2981,6 +3229,10 @@ impl Ui {
                     }
                 }
                 ring_r = (r, self.sc(6) as f32);
+            }
+            Kind::Look(i) => {
+                self.draw_look_card(cv, r, crate::look::Look::from_idx(i as usize), hover, pressed);
+                ring_r = (inflate(r, self.sc(3)), self.sc(crate::look::tokens(self.dark).r_card + 3) as f32);
             }
             Kind::Chip => {
                 if let Some(st) = &self.ach {
@@ -3205,6 +3457,7 @@ fn merge(dst: &mut Settings, src: &Settings) {
     dst.achievements = src.achievements;
     dst.text_scale = src.text_scale;
     dst.theme = src.theme;
+    dst.look = src.look;
     dst.bg_opacity = src.bg_opacity;
     dst.font = src.font.clone();
     dst.warn_pct = src.warn_pct;
@@ -3468,6 +3721,13 @@ fn activate(hwnd: HWND, id: i32) {
             }
         }
         Kind::Chip => go(Page::Achievements),
+        Kind::Look(i) => {
+            let l = crate::look::Look::from_idx(i as usize);
+            if u.draft.look != Some(l) {
+                u.draft.look = Some(l);
+                changed(hwnd);
+            }
+        }
         Kind::Mon(i) => match u.mon.hits.get(i as usize).map(|h| h.1) {
             Some(MonHit::Range(secs)) => {
                 u.mon.range = secs;
@@ -3525,14 +3785,36 @@ fn activate(hwnd: HWND, id: i32) {
                 }
             }
             Some(MonHit::BtSettings) => shell_open("ms-settings:bluetooth", None),
+            Some(MonHit::SpScan) => {
+                u.mon.speed_scan();
+                u.layout();
+                invalidate(hwnd);
+            }
+            Some(MonHit::SpDriver) => {
+                u.mon.speed_driver();
+                u.layout();
+                invalidate(hwnd);
+            }
+            Some(MonHit::SpPick(i)) => {
+                u.mon.speed_pick(i as usize);
+                u.layout();
+                u.refresh_hover();
+                invalidate(hwnd);
+            }
+            Some(MonHit::SpAct) => {
+                u.mon.speed_act();
+                u.layout();
+                invalidate(hwnd);
+            }
             Some(MonHit::BtLayout(k)) => {
                 u.mon.bt_layout = k;
                 u.layout();
                 u.refresh_hover();
                 invalidate(hwnd);
                 if let Some(a) = app() {
-                    if a.m.s.bt_layout != k {
+                    if a.m.s.bt_layout != k || !a.m.s.bt_layout_set {
                         a.m.s.bt_layout = k;
+                        a.m.s.bt_layout_set = true;
                         a.save_settings();
                     }
                 }
@@ -4102,6 +4384,7 @@ fn on_repeat(hwnd: HWND) {
 
 /// Windows 11: Mica behind the whole window (frame extended into the client
 /// area, painted with alpha 0). Returns false where that is not available.
+#[allow(dead_code)]
 pub(crate) fn enable_mica(hwnd: HWND) -> bool {
     if darkmode::build() < 22000 {
         return false;
@@ -4286,6 +4569,16 @@ pub fn app_changed(dark: bool, a: &crate::app::App) {
         u.draft.mode = a.m.s.mode;
         u.autostart = crate::autostart::enabled();
     }
+    let look = crate::look::current();
+    if u.look != look {
+        // A new look: new faces (text widths change, so the layout below is rebuilt too).
+        u.look = look;
+        let f = std::mem::replace(&mut u.fonts, Fonts::new(u.dpi));
+        f.free();
+        u.drawn = None;
+        apply_theme(u.hwnd);
+    }
+    let Some(u) = ui() else { return };
     if u.dark != dark || u.theme != a.m.s.theme {
         u.dark = dark;
         u.theme = a.m.s.theme;
@@ -4315,6 +4608,14 @@ pub fn insights_tick(a: &crate::app::App) {
             u.layout();
             invalidate(u.hwnd);
         }
+    }
+    if u.page == Page::FullSpeed {
+        if u.mon.speed_tick() {
+            u.layout();
+            u.refresh_hover();
+            invalidate(u.hwnd);
+        }
+        return;
     }
     if u.page == Page::Monitor {
         if monitor_visible() {
@@ -4424,7 +4725,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             if dpi != 0 && dpi != u.dpi {
                 u.set_dpi(dpi);
             }
-            u.mica = enable_mica(hwnd);
+            // The looks paint a solid base of their own: no Mica.
+            u.mica = false;
             apply_theme(hwnd);
             if let Some(u) = ui() {
                 let mut rc: RECT = std::mem::zeroed();

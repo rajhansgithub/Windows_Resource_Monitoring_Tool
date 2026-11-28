@@ -310,7 +310,7 @@ impl Draw<'_> {
             let pt = pct_text(level(d));
             let (pw, ph) = cv.measure(m.num_sm_font, &pt);
             let px = rr - self.s(14) - pw;
-            cv.text(m.num_sm_font, &pt, px, cy - ph / 2, if level(d).is_some() { c } else { self.col.dim });
+            cv.numeral(m.num_sm_font, &pt, px, cy - ph / 2, if level(d).is_some() { c } else { self.col.dim });
             cv.text(self.f.tiny, "%", rr - self.s(12), cy - self.s(1), self.col.dim);
             let bl = l + name_w;
             let br = rr - pct_w - self.s(12);
@@ -370,7 +370,7 @@ impl Draw<'_> {
         for (lab, v) in &cols {
             self.cap(cv, lab, x, well.t + self.s(8));
             let c = if v.is_some_and(|v| v <= LOW_PCT) && d.connected { self.col.crit } else { num_c };
-            cv.text(m.num_font, &pct_text(*v), x, well.t + self.s(22), c);
+            cv.numeral(m.num_font, &pct_text(*v), x, well.t + self.s(22), c);
             x += step;
         }
         // State on the right of the well.
@@ -451,7 +451,7 @@ impl Draw<'_> {
             }
             let t = pct_text(v);
             let (_, th) = cv.measure(m.num_sm_font, &t);
-            cv.text_center(m.num_sm_font, &t, cx as i32, cy as i32 - th / 2 - self.s(5), ink);
+            cv.numeral_center(m.num_sm_font, &t, cx as i32, cy as i32 - th / 2 - self.s(5), ink);
             cv.text_center(self.f.tiny, lab, cx as i32, cy as i32 + self.s(11), dim);
             cx += step;
         }
@@ -467,13 +467,13 @@ impl Draw<'_> {
         cv.fill_disc((rr - self.s(4)) as f32, (r.t + self.s(24)) as f32, self.sf(4.0), dot);
         let c = self.bt_col(d);
         let t = pct_text(level(d));
-        let tw = cv.text(m.num_font, &t, l, r.t + self.s(50), if level(d).is_some() && d.connected { if is_low(d) { self.col.crit } else { self.col.fg } } else { self.col.dim });
+        let tw = cv.numeral(m.num_font, &t, l, r.t + self.s(50), if level(d).is_some() && d.connected { if is_low(d) { self.col.crit } else { self.col.fg } } else { self.col.dim });
         let tw = tw.max(cv.measure(m.num_font, &t).0);
         cv.text(self.f.small, "%", l + tw + self.s(3), r.t + self.s(68), self.col.dim);
         let bar = Rect { l, t: r.t + self.s(100), r: rr, b: r.t + self.s(106) };
         match level(d) {
             Some(v) => self.hbar(cv, bar, f32::from(v) / 100.0, c),
-            None => cv.fill_round(bar, bar.h() as f32 / 2.0, self.track),
+            None => cv.meter(bar, 0.0, self.track, self.track),
         }
         let nm = cv.ellipsize(self.f.small, &d.name, rr - l);
         cv.text(self.f.small, &nm, l, r.t + self.s(116), self.col.dim);
@@ -504,7 +504,7 @@ impl Draw<'_> {
             let bar = Rect { l: bar_r - bar_w, t: cy - self.s(3), r: bar_r, b: cy + self.s(3) };
             match level(d) {
                 Some(v) => self.hbar(cv, bar, f32::from(v) / 100.0, self.bt_col(d)),
-                None => cv.fill_round(bar, bar.h() as f32 / 2.0, self.track),
+                None => cv.meter(bar, 0.0, self.track, self.track),
             }
         }
         if b.len() > CARD_ROWS {

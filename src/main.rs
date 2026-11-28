@@ -4,14 +4,17 @@
 mod achievements;
 mod app;
 mod autostart;
+mod driver;
 mod fmt;
 mod grid;
 mod icons;
 mod insights;
 mod logo;
+mod look;
 mod monitor;
 mod nav;
 mod overlay;
+mod pagetrans;
 mod perf;
 mod popup;
 mod render;
@@ -44,11 +47,20 @@ fn main() {
         // Manifest already declares PerMonitorV2; this covers odd launch paths.
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
+        // Elevated helper of the Full speed page: install missing drivers, then exit.
+        // Runs before the single-instance check: the main copy is still running.
+        let args: Vec<String> = std::env::args().collect();
+        if let Some(i) = args.iter().position(|a| a.eq_ignore_ascii_case("--install-drivers")) {
+            let ids = args.get(i + 1).map(String::as_str).unwrap_or("");
+            std::process::exit(driver::run_install(&driver::decode_ids(ids)));
+        }
+
         let report = std::env::args().any(|a| a.eq_ignore_ascii_case("--report"));
         let after_update = std::env::args().any(|a| a.eq_ignore_ascii_case("--after-update"));
         let achievements = std::env::args().any(|a| a.eq_ignore_ascii_case("--achievements"));
         let insights = std::env::args().any(|a| a.eq_ignore_ascii_case("--insights"));
         let monitor = std::env::args().any(|a| a.eq_ignore_ascii_case("--monitor"));
+        let full_speed = std::env::args().any(|a| a.eq_ignore_ascii_case("--full-speed"));
         // Restarted as administrator from a device page: the old instance is closing.
         let elevated = std::env::args().any(|a| a.eq_ignore_ascii_case("--elevated"));
         let name = wide("Local\\ResourceMonitor.SingleInstance");
@@ -100,6 +112,11 @@ fn main() {
         if monitor {
             if let Some(a) = app::app() {
                 settings_ui::open(a, nav::Page::Monitor);
+            }
+        }
+        if full_speed {
+            if let Some(a) = app::app() {
+                settings_ui::open(a, nav::Page::FullSpeed);
             }
         }
 

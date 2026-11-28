@@ -867,7 +867,7 @@ impl View {
     /// is the visible band. `hover_x` = client x over the chart plot.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(&self, cv: &mut Canvas, p: &Panel, f: &Fonts, c: &Colors, dy: i32, vt: i32, vb: i32, hover_x: Option<i32>) {
-        let rad = self.sc(6) as f32;
+        let rad = self.sc(crate::look::current_card_radius()) as f32;
         let lh = |cv: &Canvas, font: HFONT| cv.measure(font, "Ag").1;
         for b in &self.blocks {
             match b {
@@ -958,7 +958,7 @@ impl View {
     /// Stacked bar (rounded ends, parts clipped out of one rounded shape) and legend.
     #[allow(clippy::too_many_arguments)]
     fn draw_split(&self, cv: &mut Canvas, f: &Fonts, c: &Colors, bar: Rect, legend: &[(i32, i32)], parts: &[(&str, f32, Role)], unit: &str, dy: i32) {
-        let rad = self.sc(6) as f32;
+        let rad = self.sc(crate::look::current_card_radius()) as f32;
         let vals: Vec<f32> = parts.iter().map(|p| p.1).collect();
         // The track first, so a zero total still shows an empty bar.
         cv.fill_round(bar, rad, role(c, Role::Track));
@@ -1020,7 +1020,7 @@ impl View {
 
     #[allow(clippy::too_many_arguments)]
     fn draw_chart(&self, cv: &mut Canvas, f: &Fonts, p: &Colors, card: Rect, pr: Rect, c: &Chart, hover_x: Option<i32>) {
-        let rad = self.sc(6) as f32;
+        let rad = self.sc(crate::look::current_card_radius()) as f32;
         cv.fill_round(card, rad, p.card);
         cv.stroke_round(card, rad, p.card_border);
         let pad = self.sc(CARD_PAD);

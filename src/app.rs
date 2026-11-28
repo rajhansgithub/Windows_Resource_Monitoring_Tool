@@ -69,7 +69,9 @@ pub fn set_accents(s: &Settings) {
     }
 }
 
-/// Built-in colour for a metric (ignores overrides).
+/// Built-in colour for a metric (ignores overrides). Before the looks every
+/// metric had its own colour; kept for reports and tests.
+#[allow(dead_code)]
 pub fn default_accent(m: Metric) -> Rgba {
     match m {
         Metric::Cpu => Rgba::rgb(79, 195, 247),
@@ -90,7 +92,9 @@ pub fn accent(m: Metric, dark: bool) -> Rgba {
     let c = if o != 0 {
         Rgba::rgb((o >> 16) as u8, (o >> 8) as u8, o as u8)
     } else {
-        default_accent(m)
+        // No colour of its own: every metric wears the look's one accent,
+        // already tuned for light and dark.
+        return crate::look::tokens(dark).accent;
     };
     #[allow(unreachable_code)]
     if dark {
@@ -475,7 +479,10 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         }
         let s = Settings::load();
         let first_run = s.first_run;
+        let pick_look = s.look.is_none();
+        crate::look::set(s.look.unwrap_or(crate::look::Look::Lime));
         let dark = effective_dark(s.theme);
+        crate::look::set_dark(dark);
         set_accents(&s);
         let mut a = Box::new(App {
             hwnd,
@@ -592,6 +599,11 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         a.request_sample();
         a.update_timer();
         a.refresh(true);
+        // No look picked yet (new install, or the first start after the looks
+        // arrived): open the main window on Appearance to pick one.
+        if pick_look {
+            crate::settings_ui::open(a, crate::nav::Page::Appearance);
+        }
         if after_update {
             a.ach_event(crate::achievements::Event::UpdateInstalled { now_ms: crate::achievements::observer::unix_ms() });
             crate::update_ui::show(
@@ -1114,10 +1126,12 @@ impl App {
     }
 
     fn apply_settings(&mut self) {
+        crate::look::set(self.m.s.look.unwrap_or(crate::look::Look::Lime));
         set_accents(&self.m.s);
         crate::settings_ui::apply_menu_theme(self.m.s.theme, self.hwnd);
         self.need_locate = true;
         self.m.dark = effective_dark(self.m.s.theme);
+        crate::look::set_dark(self.m.dark);
         crate::achievements::ui::set_dark(self.m.dark);
         self.ins.set_enabled(self.m.s.insights, self.hwnd as isize);
         self.ins.sleep.bag_guard = self.m.s.bag_guard;
@@ -1337,6 +1351,18 @@ impl App {
             SetMenuDefaultItem(hm, ID_WEBSITE as u32, 0);
             sep(hm);
             add(hm, ID_VISIBLE, "Show widget", s.visible);
+            // Look: the three looks, then light / dark. Live, no restart.
+            let lm = CreatePopupMenu();
+            let cur = s.look.unwrap_or(crate::look::Look::Lime);
+            for l in crate::look::Look::ALL {
+                add(lm, ID_LOOK + l.idx(), l.name(), l == cur);
+            }
+            sep(lm);
+            for (i, (t, th)) in [("Light", Theme::Light), ("Dark", Theme::Dark), ("Match Windows", Theme::Auto)].iter().enumerate() {
+                add(lm, ID_MODE + i, t, s.theme == *th);
+            }
+            let lt = wide("Look");
+            AppendMenuW(hm, MF_POPUP, lm as usize, lt.as_ptr());
             add(hm, ID_SETTINGS, "Settings\u{2026}", false);
             if s.achievements {
                 add(hm, ID_ACHIEVE, "Achievements\u{2026}", false);
@@ -1379,6 +1405,16 @@ impl App {
             },
             ID_VISIBLE => {
                 self.m.s.visible = !self.m.s.visible;
+                self.save_settings();
+                self.apply_settings();
+            }
+            id if (ID_LOOK..ID_LOOK + 3).contains(&id) => {
+                self.m.s.look = Some(crate::look::Look::from_idx(id - ID_LOOK));
+                self.save_settings();
+                self.apply_settings();
+            }
+            id if (ID_MODE..ID_MODE + 3).contains(&id) => {
+                self.m.s.theme = [Theme::Light, Theme::Dark, Theme::Auto][id - ID_MODE];
                 self.save_settings();
                 self.apply_settings();
             }
@@ -1628,6 +1664,10 @@ const ID_SETTINGS: usize = 706;
 const ID_WEBSITE: usize = 707;
 const ID_UPDATE_NOW: usize = 708;
 const ID_ACHIEVE: usize = 799;
+/// + `Look::idx`: the tray menu's Look submenu.
+const ID_LOOK: usize = 760;
+/// + 0 Light, 1 Dark, 2 Match Windows.
+const ID_MODE: usize = 770;
 const MAX_DISPLAYS: usize = 16;
 
 const NIN_KEYSELECT_: u32 = NIN_SELECT | 1;

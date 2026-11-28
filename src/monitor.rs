@@ -23,6 +23,7 @@ use windows_sys::Win32::Graphics::Gdi::HFONT;
 
 mod btpage;
 mod devpage;
+mod speedpage;
 pub use crate::sensors::deep::Dev;
 
 /// Process rows shown.
@@ -77,6 +78,14 @@ pub enum Hit {
     BtLayout(u8),
     /// Bluetooth page: open Windows Bluetooth settings.
     BtSettings,
+    /// Full speed page: check again.
+    SpScan,
+    /// Full speed page: get the missing drivers.
+    SpDriver,
+    /// Full speed page: show this check's details.
+    SpPick(u8),
+    /// Full speed page: the detail card's fix button.
+    SpAct,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -261,6 +270,10 @@ pub struct Monitor {
     pub bt_on: bool,
     /// Bluetooth page layout: 0 list, 1 rack, 2 hero.
     pub bt_layout: u8,
+    /// Full speed page.
+    sp: speedpage::SpeedState,
+    /// Laid out and drawn as the Full speed page instead of the Monitor page.
+    pub speed: bool,
 }
 
 impl Monitor {
@@ -316,6 +329,8 @@ impl Monitor {
             num_sm_font: std::ptr::null_mut(),
             bt_on: true,
             bt_layout: 1,
+            sp: speedpage::SpeedState::default(),
+            speed: false,
         }
     }
 
@@ -355,7 +370,7 @@ impl Monitor {
         let shape = self.shape();
         self.ms = a.m.s.interval_ms.max(100) as usize;
         self.bt_on = a.m.s.mod_bluetooth;
-        self.bt_layout = a.m.s.bt_layout.min(2);
+        self.bt_layout = a.m.s.bt_layout_now();
         if !self.bt_on && self.view == Some(Dev::Bluetooth) {
             self.close_dev();
         }
@@ -678,6 +693,9 @@ impl Monitor {
 
     /// Cards still moving after a reflow.
     pub fn animating(&self) -> bool {
+        if self.speed {
+            return self.speed_animating();
+        }
         self.anim.as_ref().is_some_and(|a| a.0.elapsed().as_secs_f32() < MOVE_S)
     }
 
@@ -710,6 +728,10 @@ impl Monitor {
         self.vits.clear();
         self.boxes.clear();
         self.hits.clear();
+        if self.speed {
+            self.anim = None;
+            return self.speed_layout(l, r, y0);
+        }
         if self.view.is_some() {
             self.anim = None;
             return self.layout_dev(l, r, y0);
@@ -1009,6 +1031,10 @@ impl Monitor {
     /// `hot` indexes `hits`.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(&self, cv: &mut Canvas, f: &Fonts, col: &Colors, dy: i32, vt: i32, vb: i32, hot: Option<usize>) {
+        if self.speed {
+            self.speed_draw(cv, f, col, dy, hot);
+            return;
+        }
         if self.view.is_some() {
             self.draw_dev(cv, f, col, dy, vt, vb, hot);
             return;
@@ -1148,7 +1174,7 @@ impl Draw<'_> {
     }
 
     fn card(&self, cv: &mut Canvas, r: Rect) {
-        let rad = self.sf(8.0);
+        let rad = self.sf(crate::look::current_card_radius() as f32);
         cv.fill_round(r, rad, self.col.card);
         cv.stroke_round(r, rad, self.col.card_border);
     }
@@ -1241,7 +1267,7 @@ impl Draw<'_> {
 
     fn text_c(&self, cv: &mut Canvas, font: windows_sys::Win32::Graphics::Gdi::HFONT, s: &str, cx: i32, cy: i32, c: Rgba) {
         let (_, h) = cv.measure(font, s);
-        cv.text_center(font, s, cx, cy - h / 2, c);
+        cv.numeral_center(font, s, cx, cy - h / 2, c);
     }
 
     /// Key/value tile.
@@ -1287,12 +1313,7 @@ impl Draw<'_> {
     }
 
     fn hbar(&self, cv: &mut Canvas, r: Rect, frac: f32, c: Rgba) {
-        let rad = r.h() as f32 / 2.0;
-        cv.fill_round(r, rad, self.track);
-        let w = (r.w() as f32 * frac.clamp(0.0, 1.0)).round() as i32;
-        if w > 0 {
-            cv.fill_round(Rect { r: r.l + w.max(r.h()), ..r }, rad, c);
-        }
+        cv.meter(r, frac, c, self.track);
     }
 
     fn legend(&self, cv: &mut Canvas, x: &mut i32, y: i32, c: Rgba, label: &str, val: &str) {
@@ -1564,7 +1585,7 @@ impl Draw<'_> {
         let (l, rr) = (r.l + self.s(16), r.r - self.s(16));
         // Big figure.
         let big = fmt::bytes(s.ram_used);
-        let bw = cv.text(self.f.head, &big, l, y, self.col.fg).max(cv.measure(self.f.head, &big).0);
+        let bw = cv.numeral(self.f.head, &big, l, y, self.col.fg).max(cv.measure(self.f.head, &big).0);
         let bh = cv.measure(self.f.head, &big).1;
         let rest = format!("/ {} in use \u{00B7} {:.0}%", fmt::bytes(s.ram_total), s.ram_pct);
         let sh = cv.measure(self.f.small, &rest).1;
@@ -2045,9 +2066,9 @@ impl Draw<'_> {
         // Data usage: today + month, 14-day bars.
         let (today_r, today_s) = m.days.last().copied().unwrap_or((0, 0));
         self.cap(cv, "TODAY", l, y);
-        cv.text(self.f.head, &fmt::bytes(today_r + today_s), l, y + self.s(14), self.col.fg);
+        cv.numeral(self.f.head, &fmt::bytes(today_r + today_s), l, y + self.s(14), self.col.fg);
         self.cap(cv, "MONTH", l + self.s(120), y);
-        cv.text(self.f.head, &fmt::bytes(m.month), l + self.s(120), y + self.s(14), self.col.fg);
+        cv.numeral(self.f.head, &fmt::bytes(m.month), l + self.s(120), y + self.s(14), self.col.fg);
         let br = Rect { l: l + self.s(230), t: y, r: rr, b: y + self.s(58) };
         if br.w() > self.s(80) && !m.days.is_empty() {
             let n = m.days.len() as i32;

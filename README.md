@@ -52,7 +52,14 @@ Pick any combination in **Settings → Metrics**. Default: CPU, RAM, GPU, ▲, �
 - **Sensors your PC lacks are hidden** automatically (no GPU counter → no GPU row; no battery → no battery row).
 - **Display off** → samples every 5 s. Data usage stays exact anyway (cumulative counters).
 
-## Data usage
+## Full speed check
+
+Settings → **Full speed** (or `ResourceMonitor.exe --full-speed`): is each part running as fast as it can?
+GPU PCIe link (x8 / x16, Gen), monitor refresh vs what it offers, RAM speed vs its rating and channels,
+SSD link, USB 2 vs 3 ports, Ethernet link, power mode. Each part gets a two-word fix and a short
+"does it matter?" (gaming, AI, files). No driver of its own; a missing GPU driver is found on
+Windows Update and installed after one admin prompt (maker's app as fallback).
+
 
 - Counted from interface byte counters, so totals are exact regardless of the update interval.
 - Physical adapters only — no double counting through VPN/filter/virtual adapters. Or choose one adapter.

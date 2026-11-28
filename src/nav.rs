@@ -14,6 +14,8 @@ pub enum Page {
     Overview,
     /// Detailed live view of the whole machine (opened from the tray System popup).
     Monitor,
+    /// Is each part running at full speed? Plain hints and one-tap fixes.
+    FullSpeed,
     /// Placeholder page that opens the Achievements window. Kept as its own
     /// page so an in-window renderer can replace it without touching the nav.
     Achievements,
@@ -22,6 +24,8 @@ pub enum Page {
     HeldBack,
     Baseline,
     Ghost,
+    /// Pick the look (Lime / Tactile / Bento) and light or dark.
+    Appearance,
     General,
     Metrics,
     Colours,
@@ -39,9 +43,10 @@ pub enum Entry {
 }
 
 /// The scrolling part of the pane (the footer is `FOOTER`).
-pub const MENU: [Entry; 16] = [
+pub const MENU: [Entry; 18] = [
     Entry::Item(Page::Overview),
     Entry::Item(Page::Monitor),
+    Entry::Item(Page::FullSpeed),
     Entry::Item(Page::Achievements),
     Entry::Header("INSIGHTS"),
     Entry::Item(Page::Incidents),
@@ -51,6 +56,7 @@ pub const MENU: [Entry; 16] = [
     Entry::Item(Page::Ghost),
     Entry::Separator,
     Entry::Header("SETTINGS"),
+    Entry::Item(Page::Appearance),
     Entry::Item(Page::General),
     Entry::Item(Page::Metrics),
     Entry::Item(Page::Colours),
@@ -63,15 +69,17 @@ pub const FOOTER: [Page; 1] = [Page::About];
 
 impl Page {
     /// Every page in navigation order (menu, then footer). Ctrl+Tab walks this.
-    pub const ALL: [Page; 14] = [
+    pub const ALL: [Page; 16] = [
         Page::Overview,
         Page::Monitor,
+        Page::FullSpeed,
         Page::Achievements,
         Page::Incidents,
         Page::Sleep,
         Page::HeldBack,
         Page::Baseline,
         Page::Ghost,
+        Page::Appearance,
         Page::General,
         Page::Metrics,
         Page::Colours,
@@ -88,12 +96,14 @@ impl Page {
         match self {
             Page::Overview => "Overview",
             Page::Monitor => "Monitor",
+            Page::FullSpeed => "Full speed",
             Page::Achievements => "Achievements",
             Page::Incidents => "Incident Cards",
             Page::Sleep => "Sleep Verdict",
             Page::HeldBack => "Held Back",
             Page::Baseline => "Before / After",
             Page::Ghost => "Ghost Memory",
+            Page::Appearance => "Appearance",
             Page::General => "General",
             Page::Metrics => "Metrics",
             Page::Colours => "Colours",
@@ -108,12 +118,14 @@ impl Page {
         match self {
             Page::Overview => '\u{E80F}',     // home
             Page::Monitor => '\u{E9D2}',      // area chart
+            Page::FullSpeed => '\u{EA80}',    // light bulb (hints)
             Page::Achievements => '\u{E734}', // star
             Page::Incidents => '\u{E945}',    // lightning bolt
             Page::Sleep => '\u{E708}',        // moon
             Page::HeldBack => '\u{EC4A}',     // speedometer
             Page::Baseline => '\u{E81C}',     // history
             Page::Ghost => '\u{E950}',        // chip
+            Page::Appearance => '\u{E771}',   // personalize
             Page::General => '\u{E713}',      // gear
             Page::Metrics => '\u{E9D9}',      // chart
             Page::Colours => '\u{E790}',      // palette
@@ -128,12 +140,14 @@ impl Page {
         match self {
             Page::Overview => "overview",
             Page::Monitor => "monitor",
+            Page::FullSpeed => "fullspeed",
             Page::Achievements => "achievements",
             Page::Incidents => "incidents",
             Page::Sleep => "sleep",
             Page::HeldBack => "heldback",
             Page::Baseline => "baseline",
             Page::Ghost => "ghost",
+            Page::Appearance => "appearance",
             Page::General => "general",
             Page::Metrics => "metrics",
             Page::Colours => "colours",
@@ -147,7 +161,7 @@ impl Page {
     pub fn perf_key(self) -> &'static str {
         match self {
             Page::Overview => "draw_overview",
-            Page::Monitor => "draw_monitor",
+            Page::Monitor | Page::FullSpeed => "draw_monitor",
             Page::Achievements => "draw_achievements",
             Page::Incidents | Page::Sleep | Page::HeldBack | Page::Baseline | Page::Ghost => "draw_insights",
             _ => "draw_settings",
@@ -187,7 +201,7 @@ impl Page {
 
     /// A settings page (General .. Data).
     pub fn is_settings(self) -> bool {
-        matches!(self, Page::General | Page::Metrics | Page::Colours | Page::Alerts | Page::Data)
+        matches!(self, Page::Appearance | Page::General | Page::Metrics | Page::Colours | Page::Alerts | Page::Data)
     }
 
     /// The next (`dir` > 0) or previous page in navigation order, wrapping.
@@ -326,11 +340,13 @@ mod tests {
         assert_eq!(order, Page::ALL.to_vec(), "Up/Down and Ctrl+Tab agree");
         assert_eq!(MENU[0], Entry::Item(Page::Overview));
         assert_eq!(MENU[1], Entry::Item(Page::Monitor));
-        assert_eq!(MENU[2], Entry::Item(Page::Achievements));
-        assert_eq!(MENU[3], Entry::Header("INSIGHTS"));
+        assert_eq!(MENU[2], Entry::Item(Page::FullSpeed));
+        assert_eq!(MENU[3], Entry::Item(Page::Achievements));
+        assert_eq!(MENU[4], Entry::Header("INSIGHTS"));
         let sep = MENU.iter().position(|e| *e == Entry::Separator).unwrap();
         assert_eq!(MENU[sep + 1], Entry::Header("SETTINGS"));
-        assert_eq!(MENU[sep + 2], Entry::Item(Page::General));
+        assert_eq!(MENU[sep + 2], Entry::Item(Page::Appearance));
+        assert_eq!(MENU[sep + 3], Entry::Item(Page::General));
         assert_eq!(FOOTER, [Page::About]);
         // Every page appears exactly once.
         for p in Page::ALL {
@@ -369,11 +385,13 @@ mod tests {
     #[test]
     fn next_and_previous_wrap() {
         assert_eq!(Page::Overview.step(1), Page::Monitor);
-        assert_eq!(Page::Monitor.step(1), Page::Achievements);
+        assert_eq!(Page::Monitor.step(1), Page::FullSpeed);
+        assert_eq!(Page::FullSpeed.step(1), Page::Achievements);
         assert_eq!(Page::About.step(1), Page::Overview);
         assert_eq!(Page::Overview.step(-1), Page::About);
-        assert_eq!(Page::Ghost.step(1), Page::General);
-        assert_eq!(Page::General.step(-1), Page::Ghost);
+        assert_eq!(Page::Ghost.step(1), Page::Appearance);
+        assert_eq!(Page::Appearance.step(1), Page::General);
+        assert_eq!(Page::General.step(-1), Page::Appearance);
     }
 
     #[test]
