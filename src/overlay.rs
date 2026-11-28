@@ -652,7 +652,9 @@ impl Overlay {
             if r == Metric::TopProc {
                 self.canvas.text(font, &v, vl, y, vc);
             } else {
-                self.canvas.text_right(font, &v, vr, y, vc);
+                // LED / LCD numerals with their unlit "8" ghosts (Lime, Tactile).
+                let vw = self.canvas.measure(font, &v).0;
+                self.canvas.numeral(font, &v, vr - vw, y, vc);
             }
             if let Some(sr) = spark {
                 let data = m.series(r, 30);

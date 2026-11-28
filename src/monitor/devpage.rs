@@ -2232,12 +2232,8 @@ impl Draw<'_> {
         };
         let frac = if b.design_mwh > 0 { b.full_mwh as f32 / b.design_mwh as f32 } else { 0.0 };
         let br = Rect { l, t: y, r: rr, b: y + self.s(30) };
-        cv.fill_round(br, self.sf(6.0), self.track);
-        let w = (br.w() as f32 * frac.clamp(0.0, 1.0)).round() as i32;
         let c = if frac < 0.6 { self.col.warn } else { self.col.good };
-        if w > 0 {
-            cv.fill_round(Rect { r: br.l + w, ..br }, self.sf(6.0), c);
-        }
+        cv.meter(br, frac, c, self.track);
         let t = format!("{:.0}% of new", frac * 100.0);
         text_mid(cv, self.f.cap, &t, br.l + self.s(10), (br.t + br.b) / 2, self.col.fg);
         self.facts(cv, r, y + self.s(40), &m.bat_facts());

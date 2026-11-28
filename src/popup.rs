@@ -62,6 +62,12 @@ pub fn style_window(hwnd: HWND, dark: bool) {
         DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE as u32, &d as *const i32 as _, 4);
         let round: i32 = DWMWCP_ROUND;
         DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE as u32, &round as *const i32 as _, 4);
+        // Title bar and border in the look's base colours (Windows 11; ignored before).
+        let t = crate::look::tokens(dark);
+        for (attr, c) in [(DWMWA_CAPTION_COLOR, t.bg), (DWMWA_TEXT_COLOR, t.fg), (DWMWA_BORDER_COLOR, t.border)] {
+            let v: u32 = c.colorref();
+            DwmSetWindowAttribute(hwnd, attr as u32, &v as *const u32 as _, 4);
+        }
     }
 }
 
@@ -806,7 +812,7 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
         c.ring(cx, cy, rr, th, g.pct / 100.0, col);
         let v = format!("{:.0}%", g.pct);
         let (_, vh) = c.measure(f.mid, &v);
-        c.text_center(f.mid, &v, cx as i32, cy as i32 - vh / 2, a.heat_text(pal.fg, g.pct));
+        c.numeral_center(f.mid, &v, cx as i32, cy as i32 - vh / 2, a.heat_text(pal.fg, g.pct));
         c.text_center(f.caps, g.label, cx as i32, y + sc(85.0), pal.dim);
         let sub = c.ellipsize(f.small, &g.sub, gw - sc(16.0));
         c.text_center(f.small, &sub, cx as i32, y + sc(99.0), g.sub_col);
@@ -926,7 +932,7 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
     let today = a.usage.get(now);
     let month = a.usage.month(yy, mm);
     c.text(f.caps, "TODAY", ix, y + sc(12.0), pal.dim);
-    c.text(f.big, &fmt::bytes(today.total()), ix, y + sc(24.0), pal.fg);
+    c.numeral(f.big, &fmt::bytes(today.total()), ix, y + sc(24.0), pal.fg);
     let mlw = c.measure(f.caps, "MONTH").0;
     let (_, bh) = c.measure(f.bold, "0");
     let (_, chh) = c.measure(f.caps, "M");
@@ -1007,12 +1013,8 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
         let label = format!("{} of {:.0} GB  ({:.0}%)", fmt::bytes(used), a.s.data_cap_gb, pct);
         let lw = c.measure(f.small, &label).0;
         let bar = Rect { l: ix, t: by, r: right - sc(14.0) - lw - sc(10.0), b: by + sc(8.0) };
-        c.fill_round(bar, 4.0 * scale, pal.track);
-        let fw = (bar.w() as f64 * (pct / 100.0).min(1.0)) as i32;
         let col = a.heat(accent(Metric::Down, a.dark), pct as f32);
-        if fw > 0 {
-            c.fill_round(Rect { r: bar.l + fw.max(bar.h()), ..bar }, 4.0 * scale, col);
-        }
+        c.meter(bar, (pct / 100.0).min(1.0) as f32, col, pal.track);
         c.text(f.small, &label, right - sc(14.0) - lw, by - sc(4.0), pal.dim);
     }
     y += uh + gap;
@@ -1087,10 +1089,9 @@ fn draw(a: &App, c: &mut Canvas, f: &Fonts, scale: f32, out: &mut Out) {
             c.text(f.small, &nm, name_x, mid - nh / 2, pal.fg);
             let bh = sc(6.0);
             let track = Rect { l: bar_l, t: mid - bh / 2, r: bar_r, b: mid - bh / 2 + bh };
-            c.fill_round(track, bh as f32 / 2.0, pal.track);
-            if max > 0.0 && track.w() > 0 {
-                let fw = ((v / max).clamp(0.0, 1.0) * track.w() as f64).round() as i32;
-                c.fill_round(Rect { r: track.l + fw.max(bh), ..track }, bh as f32 / 2.0, bar_c);
+            if track.w() > 0 {
+                let frac = if max > 0.0 { (v / max).clamp(0.0, 1.0) as f32 } else { 0.0 };
+                c.meter(track, frac, bar_c, pal.track);
             }
             c.text_right(f.small, text, inner_r, mid - nh / 2, pal.dim);
         }

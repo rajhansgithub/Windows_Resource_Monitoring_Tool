@@ -12,6 +12,11 @@
 //! Also here: the Overview "Next goal" card and the level chip of the nav pane.
 //! Layout is in content coordinates; drawing takes the scroll offset `dy`.
 
+/// The Server Room in the colours of the current look (racks, LEDs, tape labels).
+fn lk() -> crate::look::Tokens {
+    crate::look::live()
+}
+
 use super::core::{self as c, Category, Catalog, Goal, State};
 use crate::insights::view::{Colors, Fonts};
 use crate::render::{measure_dc, Canvas, Rgba};
@@ -31,21 +36,6 @@ pub fn tier_col(t: u8) -> Rgba {
 }
 
 // The room is a physical place: steel racks under cold-aisle light, the same in both themes.
-const FLOOR: Rgba = hx(0x0d1015);
-const FLOOR_LINE: Rgba = hx(0x1b2028);
-const STEEL: Rgba = hx(0x1c1f24);
-const STEEL_EDGE: Rgba = hx(0x2a2f37);
-const UNIT: Rgba = hx(0x262a31);
-const UNIT_HOT: Rgba = hx(0x2f343c);
-const LED_OFF: Rgba = hx(0x3a3f48);
-const INK: Rgba = hx(0xe6e9ee);
-const INK_DIM: Rgba = hx(0x8b93a1);
-const TAPE: Rgba = hx(0xe9e2cf);
-const TAPE_INK: Rgba = hx(0x1c1a14);
-const COLD: Rgba = hx(0x6fb7ff);
-const LINK: Rgba = hx(0x3be08a);
-const AMBER: Rgba = hx(0xffb020);
-const VENT: Rgba = hx(0x0c0e12);
 
 /// What a unit stands for.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -304,7 +294,7 @@ impl Room {
                     let nx = st.next.unwrap_or(1);
                     format!("{}/4 {}", 4 - st.blockers.len(), c::TIER_NAMES[(nx - 1) as usize].to_uppercase())
                 };
-                let col = if st.cert > 0 { tier_col(st.cert) } else { INK_DIM };
+                let col = if st.cert > 0 { tier_col(st.cert) } else { lk().dim };
                 let hint = match (st.next, st.blockers.as_slice()) {
                     (Some(nx), [one]) => Some(format!("{} holds the {} cert", Catalog::get(one).map_or(*one, |b| b.name), c::TIER_NAMES[(nx - 1) as usize])),
                     (Some(nx), b) if b.len() == 2 => Some(format!("2 units from {} cert", c::TIER_NAMES[(nx - 1) as usize])),
@@ -314,7 +304,7 @@ impl Room {
             } else {
                 let got = Catalog::all().iter().filter(|b| !b.is_ladder() && s.earned(b.id)).count();
                 let all = Catalog::all().iter().filter(|b| !b.is_ladder()).count();
-                ("Rack 04 \u{00B7} Records", format!("{got}/{all}"), INK_DIM, None)
+                ("Rack 04 \u{00B7} Records", format!("{got}/{all}"), lk().dim, None)
             };
             self.racks.push(RackL { r: rr, tape, stamp, stamp_col, hint });
             for (j, u) in units.iter().enumerate() {
@@ -605,8 +595,8 @@ impl Room {
         if self.big {
             // the large view: the room's floor, one medal under a cold light
             let fl = sh(self.floor);
-            cv.fill_round(fl, rad, hx(0x0d0f12));
-            cv.fill_rect(Rect { l: fl.l + self.sc(6), t: fl.t, r: fl.r - self.sc(6), b: fl.t + self.sc(2) }, COLD);
+            cv.fill_round(fl, rad, lk().well);
+            cv.fill_rect(Rect { l: fl.l + self.sc(6), t: fl.t, r: fl.r - self.sc(6), b: fl.t + self.sc(2) }, lk().accent);
             self.draw_medal(cv, f, dy, vt, vb, 255);
             self.draw_lines(cv, f, dy, fl.r);
             return;
@@ -642,34 +632,34 @@ impl Room {
         // The room.
         if vis(self.floor) {
             let fl = sh(self.floor);
-            cv.fill_round(fl, rad, FLOOR);
+            cv.fill_round(fl, rad, lk().bg);
             // Raised-floor tiles under the racks, cold aisle light from above.
             let tile = self.sc(30);
             let mut ty = fl.t + tile;
             while ty < fl.b {
-                cv.fill_rect(Rect { l: fl.l + self.sc(2), t: ty, r: fl.r - self.sc(2), b: ty + 1 }, FLOOR_LINE);
+                cv.fill_rect(Rect { l: fl.l + self.sc(2), t: ty, r: fl.r - self.sc(2), b: ty + 1 }, lk().border);
                 ty += tile;
             }
-            cv.fill_round(Rect { l: fl.l + fl.w() / 6, t: fl.t, r: fl.r - fl.w() / 6, b: fl.t + self.sc(3) }, 2.0, COLD.with_a(90));
+            cv.fill_round(Rect { l: fl.l + fl.w() / 6, t: fl.t, r: fl.r - fl.w() / 6, b: fl.t + self.sc(3) }, 2.0, lk().accent.with_a(90));
         }
         for rk in &self.racks {
             if !vis(rk.r) {
                 continue;
             }
             let r = sh(rk.r);
-            cv.fill_round(r, self.sc(3) as f32, STEEL);
-            cv.stroke_round(r, self.sc(3) as f32, STEEL_EDGE);
+            cv.fill_round(r, self.sc(3) as f32, lk().panel);
+            cv.stroke_round(r, self.sc(3) as f32, lk().border2);
             // rails
             for x in [r.l + self.sc(4), r.r - self.sc(6)] {
-                cv.fill_rect(Rect { l: x, t: r.t + self.sc(32), r: x + self.sc(2), b: r.b - self.sc(8) }, VENT);
+                cv.fill_rect(Rect { l: x, t: r.t + self.sc(32), r: x + self.sc(2), b: r.b - self.sc(8) }, lk().well);
             }
             // label-maker tape + certificate stamp
             let tw = cv.measure(f.small, rk.tape).0 + self.sc(12);
             let tape = Rect { l: r.l + self.sc(10), t: r.t + self.sc(9), r: (r.l + self.sc(10) + tw).min(r.r - self.sc(60)), b: r.t + self.sc(27) };
-            cv.fill_round(tape, 2.0, TAPE);
+            cv.fill_round(tape, 2.0, lk().accent_fill);
             let tape_s = cv.ellipsize(f.small, rk.tape, tape.w() - self.sc(12));
             let tsh = cv.measure(f.small, "Ag").1;
-            cv.text(f.small, &tape_s, tape.l + self.sc(6), (tape.t + tape.b) / 2 - tsh / 2, TAPE_INK);
+            cv.text(f.small, &tape_s, tape.l + self.sc(6), (tape.t + tape.b) / 2 - tsh / 2, lk().on_accent);
             let sw = cv.measure(f.tiny, &rk.stamp).0 + self.sc(10);
             let st = Rect { l: r.r - self.sc(10) - sw, t: r.t + self.sc(9), r: r.r - self.sc(10), b: r.t + self.sc(27) };
             cv.stroke_round(st, 2.0, rk.stamp_col);
@@ -680,14 +670,14 @@ impl Room {
                 let vy = r.b - self.sc(10) - (k + 1) * self.sc(9);
                 let mut x = r.l + self.sc(12);
                 while x < r.r - self.sc(12) {
-                    cv.fill_rect(Rect { l: x, t: vy, r: x + self.sc(2), b: vy + self.sc(6) }, VENT);
+                    cv.fill_rect(Rect { l: x, t: vy, r: x + self.sc(2), b: vy + self.sc(6) }, lk().well);
                     x += self.sc(5);
                 }
             }
             if let Some(hint) = &rk.hint {
                 let hy = r.b - self.sc(10) - 2 * self.sc(9) - self.sc(4) - tyh;
                 let s = cv.ellipsize(f.tiny, hint, r.w() - self.sc(24));
-                cv.text(f.tiny, &s, r.l + self.sc(12), hy, AMBER);
+                cv.text(f.tiny, &s, r.l + self.sc(12), hy, lk().warn);
             }
         }
         for (i, u) in self.units.iter().enumerate() {
@@ -699,10 +689,10 @@ impl Room {
             let out = (ease(p) * self.sc(5) as f32) as i32;
             let r = Rect { l: u.r.l - out, t: u.r.t + dy - out / 2, r: u.r.r + out, b: u.r.b + dy + out / 2 };
             if u.unit == Unit::Blank {
-                cv.fill_round(r, 2.0, hx(0x202329));
+                cv.fill_round(r, 2.0, lk().raised2);
                 let mut x = r.l + self.sc(14);
                 while x < r.r - self.sc(14) {
-                    cv.fill_rect(Rect { l: x, t: r.t + self.sc(14), r: x + self.sc(2), b: r.b - self.sc(14) }, VENT);
+                    cv.fill_rect(Rect { l: x, t: r.t + self.sc(14), r: x + self.sc(2), b: r.b - self.sc(14) }, lk().well);
                     x += self.sc(6);
                 }
                 continue;
@@ -710,9 +700,9 @@ impl Room {
             if selected {
                 cv.fill_round(Rect { l: r.l - 2, t: r.t - 2, r: r.r + 2, b: r.b + 4 }, 4.0, Rgba(0, 0, 0, 120));
             }
-            cv.fill_round(r, 2.0, if hover == Some(i) || selected { UNIT_HOT } else { UNIT });
+            cv.fill_round(r, 2.0, if hover == Some(i) || selected { lk().raised2 } else { lk().raised });
             if selected {
-                cv.stroke_round(r, 2.0, COLD);
+                cv.stroke_round(r, 2.0, lk().accent);
             }
             // tier LEDs, a column at the left
             let (lit, of, cols) = u.leds;
@@ -725,11 +715,11 @@ impl Room {
                 // the top LED is the highest tier
                 let idx = of - 1 - k;
                 let on = idx < lit;
-                cv.fill_rect(lr, if on { cols[idx as usize] } else { LED_OFF });
+                cv.fill_rect(lr, if on { cols[idx as usize] } else { lk().track });
             }
             // activity LED, right
             let al = Rect { l: r.r - self.sc(14), t: (r.t + r.b) / 2 - self.sc(3), r: r.r - self.sc(8), b: (r.t + r.b) / 2 + self.sc(3) };
-            cv.fill_round(al, self.sc(3) as f32, if u.live { LINK } else { hx(0x4a4f58) });
+            cv.fill_round(al, self.sc(3) as f32, if u.live { lk().good } else { lk().off });
             // text
             let tx = lx + self.sc(16);
             let maxw = al.l - tx - self.sc(6);
@@ -738,13 +728,13 @@ impl Room {
             let bar_h = if u.bar.is_some() { self.sc(3) + self.sc(4) } else { 0 };
             let ty = (r.t + r.b) / 2 - (th + sh2 + bar_h) / 2;
             let t = cv.ellipsize(f.body, &u.title, maxw);
-            cv.text(f.body, &t, tx, ty, INK);
+            cv.text(f.body, &t, tx, ty, lk().fg);
             let s = cv.ellipsize(f.tiny, &u.sub, maxw);
-            cv.text(f.tiny, &s, tx, ty + th, INK_DIM);
+            cv.text(f.tiny, &s, tx, ty + th, lk().dim);
             if let Some((frac, bc)) = u.bar {
                 let by = ty + th + sh2 + self.sc(4);
                 let br = Rect { l: tx, t: by, r: tx + maxw, b: by + self.sc(3) };
-                cv.fill_rect(br, hx(0x11141a));
+                cv.fill_rect(br, lk().well);
                 let fw = ((maxw as f32) * frac).round() as i32;
                 if fw > 0 {
                     cv.fill_rect(Rect { r: tx + fw, ..br }, bc);
@@ -756,8 +746,8 @@ impl Room {
         if vis(self.tray) {
             let t = sh(self.tray);
             let a = (ease(self.pull) * 255.0) as u8;
-            cv.fill_round(t, rad, hx(0x14171c));
-            cv.fill_rect(Rect { l: t.l + self.sc(6), t: t.t, r: t.r - self.sc(6), b: t.t + self.sc(2) }, COLD.with_a(a));
+            cv.fill_round(t, rad, lk().panel);
+            cv.fill_rect(Rect { l: t.l + self.sc(6), t: t.t, r: t.r - self.sc(6), b: t.t + self.sc(2) }, lk().accent.with_a(a));
             self.draw_medal(cv, f, dy, vt, vb, a);
             self.draw_lines(cv, f, dy, t.r);
         }
@@ -772,7 +762,7 @@ impl Room {
             if let Some((_, _, r0, _, frac, next)) = self.disc {
                 // the way to the next tier, round the coin
                 let (cx, cy) = ((cr.l + cr.r) as f32 / 2.0, (cr.t + cr.b) as f32 / 2.0);
-                cv.ring(cx, cy, r0 as f32, self.sc(3) as f32, 1.0, hx(0x23272e));
+                cv.ring(cx, cy, r0 as f32, self.sc(3) as f32, 1.0, lk().track);
                 cv.ring(cx, cy, r0 as f32, self.sc(3) as f32, frac * (a as f32 / 255.0), tier_col(next.max(1)));
             }
             self.coin.draw(cv, (cr.l + cr.r) / 2, (cr.t + cr.b) / 2, vt, vb)
@@ -780,8 +770,8 @@ impl Room {
         if let (false, Some((cx, cy, r0, k, frac, next))) = (live, self.disc) {
             let (cx, cy, r0) = (cx as f32, (cy + dy) as f32, r0 as f32);
             // the medal: a disc in its metal, a dark well, the tier initial; the ring is the way to the next tier
-            let metal = if k > 0 { tier_col(k) } else { hx(0x3a3f48) };
-            cv.ring(cx, cy, r0, self.sc(4) as f32, 1.0, hx(0x23272e));
+            let metal = if k > 0 { tier_col(k) } else { lk().track };
+            cv.ring(cx, cy, r0, self.sc(4) as f32, 1.0, lk().track);
             cv.ring(cx, cy, r0, self.sc(4) as f32, frac * (a as f32 / 255.0), tier_col(next.max(1)));
             let d = r0 - self.sc(10) as f32;
             cv.fill_round(Rect { l: (cx - d) as i32, t: (cy - d) as i32, r: (cx + d) as i32, b: (cy + d) as i32 }, d, metal);
@@ -789,7 +779,7 @@ impl Room {
             cv.fill_round(Rect { l: (cx - d2) as i32, t: (cy - d2) as i32, r: (cx + d2) as i32, b: (cy + d2) as i32 }, d2, Rgba(12, 14, 18, 235));
             let s = if k > 0 { &c::TIER_NAMES[(k - 1) as usize][..1] } else { "?" };
             let (sw, shh) = cv.measure(f.head, s);
-            cv.text(f.head, s, cx as i32 - sw / 2, cy as i32 - shh / 2, if k > 0 { metal } else { INK_DIM });
+            cv.text(f.head, s, cx as i32 - sw / 2, cy as i32 - shh / 2, if k > 0 { metal } else { lk().dim });
         }
     }
 
@@ -799,12 +789,12 @@ impl Room {
             match ln {
                 TrayLine::Title { x, y, s } => {
                     let s2 = cv.ellipsize(f.head, s, right - self.sc(16) - x);
-                    cv.text(f.head, &s2, *x, y + dy, INK);
+                    cv.text(f.head, &s2, *x, y + dy, lk().fg);
                 }
                 TrayLine::Text { x, y, s, dim, semi } => {
                     let font = if *semi { f.semi } else { f.small };
                     let s2 = cv.ellipsize(font, s, right - self.sc(16) - x);
-                    cv.text(font, &s2, *x, y + dy, if *dim { INK_DIM } else { INK });
+                    cv.text(font, &s2, *x, y + dy, if *dim { lk().dim } else { lk().fg });
                 }
                 TrayLine::Single { x, y, w, got, name, xp, line } => {
                     let y = y + dy;
@@ -812,17 +802,17 @@ impl Room {
                     let d = self.sc(10);
                     let dot = Rect { l: *x, t: y + th / 2 - d / 2, r: x + d, b: y + th / 2 + d / 2 };
                     if *got {
-                        cv.fill_round(dot, d as f32 / 2.0, LINK);
+                        cv.fill_round(dot, d as f32 / 2.0, lk().good);
                     } else {
-                        cv.stroke_round(dot, d as f32 / 2.0, INK_DIM);
+                        cv.stroke_round(dot, d as f32 / 2.0, lk().dim);
                     }
                     let nx = x + d + self.sc(10);
                     let xw = cv.measure(f.small, xp).0;
                     let n = cv.ellipsize(f.body, name, w - d - self.sc(20) - xw);
-                    cv.text(f.body, &n, nx, y, if *got { INK } else { INK_DIM });
-                    cv.text_right(f.small, xp, x + w, y + self.sc(1), if *got { AMBER } else { INK_DIM });
+                    cv.text(f.body, &n, nx, y, if *got { lk().fg } else { lk().dim });
+                    cv.text_right(f.small, xp, x + w, y + self.sc(1), if *got { lk().warn } else { lk().dim });
                     let l2 = cv.ellipsize(f.small, line, w - d - self.sc(10));
-                    cv.text(f.small, &l2, nx, y + th, INK_DIM);
+                    cv.text(f.small, &l2, nx, y + th, lk().dim);
                 }
             }
         }
@@ -830,7 +820,7 @@ impl Room {
 }
 
 fn unit_l(s: &State, u: Unit, r: Rect) -> UnitL {
-    let off = [LED_OFF; 7];
+    let off = [lk().track; 7];
     match u {
         Unit::Blank => UnitL { unit: u, r, title: String::new(), sub: String::new(), leds: (0, 0, off), bar: None, live: false },
         Unit::Ladder(id) => {

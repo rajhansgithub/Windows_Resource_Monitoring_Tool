@@ -69,6 +69,8 @@ impl Look {
     }
 
     /// The Bluetooth page layout this look opens with (0 List, 1 Rack, 2 Hero).
+    /// Used once the Bluetooth page (PR #47) is in.
+    #[allow(dead_code)]
     pub fn bt_layout(self) -> u8 {
         match self {
             Look::Lime => 0,
@@ -107,6 +109,18 @@ pub fn current() -> Look {
 
 pub fn set(l: Look) {
     LOOK.store(l as u8, Relaxed);
+}
+
+static DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// The app's light/dark mode, for code that has no palette handed to it.
+pub fn set_dark(d: bool) {
+    DARK.store(d, Relaxed);
+}
+
+/// Tokens of the current look in the app's current mode.
+pub fn live() -> Tokens {
+    tokens(DARK.load(Relaxed))
 }
 
 const fn hx(v: u32) -> Rgba {

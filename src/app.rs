@@ -482,6 +482,7 @@ pub fn create(hinst: HINSTANCE, after_update: bool) -> Option<()> {
         let pick_look = s.look.is_none();
         crate::look::set(s.look.unwrap_or(crate::look::Look::Lime));
         let dark = effective_dark(s.theme);
+        crate::look::set_dark(dark);
         set_accents(&s);
         let mut a = Box::new(App {
             hwnd,
@@ -1129,6 +1130,7 @@ impl App {
         crate::settings_ui::apply_menu_theme(self.m.s.theme, self.hwnd);
         self.need_locate = true;
         self.m.dark = effective_dark(self.m.s.theme);
+        crate::look::set_dark(self.m.dark);
         crate::achievements::ui::set_dark(self.m.dark);
         self.ins.set_enabled(self.m.s.insights, self.hwnd as isize);
         self.ins.sleep.bag_guard = self.m.s.bag_guard;
